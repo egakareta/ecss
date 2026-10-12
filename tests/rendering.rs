@@ -1,4 +1,7 @@
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::Mutex;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{OnceLock, mpsc};
 
 use eframe::{egui, egui_wgpu, wgpu};
 use trcss::{SelectorExt as _, Stylesheet};
@@ -7,6 +10,7 @@ const WIDTH: u32 = 256;
 const HEIGHT: u32 = 128;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[cfg(not(target_arch = "wasm32"))]
 struct RenderRequest {
     stylesheet: Stylesheet,
     build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
@@ -24,13 +28,16 @@ struct OffscreenRenderer {
     readback: wgpu::Buffer,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 // Keep graphics work on one long-lived thread because native drivers may keep
 // thread-local state that is unsafe to tear down with each test thread.
 static RENDERER_THREAD: OnceLock<mpsc::Sender<RenderRequest>> = OnceLock::new();
 
-#[test]
-fn installed_white_background_renders_every_pixel_white() {
-    let pixels = render_ui_pixels(Stylesheet::default(), |_ui| {});
+#[cfg(target_arch = "wasm32")]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+async fn installed_white_background_renders_every_pixel_white_test() {
+    let pixels = render_ui_pixels(Stylesheet::default(), |_ui| {}).await;
     assert_eq!(pixels.len(), (WIDTH * HEIGHT) as usize);
     let first_non_white = pixels
         .iter()
@@ -45,15 +52,15 @@ fn installed_white_background_renders_every_pixel_white() {
     }
 }
 
-#[test]
-fn selector_background_color_is_visible_in_rendered_widget_pixels() {
+async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     let stylesheet = Stylesheet::parse(".primary { background-color: #f00; }").unwrap();
     let widget_rect = std::sync::Arc::new(Mutex::new(None));
     let rect_from_ui = widget_rect.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         let response = ui.add(egui::Button::new("X").selector(".primary"));
         *rect_from_ui.lock().unwrap() = Some(response.rect);
-    });
+    })
+    .await;
 
     let rect = widget_rect.lock().unwrap().unwrap();
     let x = (rect.min.x + 4.0).floor() as usize;
@@ -61,7 +68,33 @@ fn selector_background_color_is_visible_in_rendered_widget_pixels() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
-fn render_ui_pixels(
+macro_rules! rendering_test {
+    ($name:ident, $test_body:ident) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        fn $name() {
+            pollster::block_on($test_body());
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        #[wasm_bindgen_test::wasm_bindgen_test]
+        async fn $name() {
+            $test_body().await;
+        }
+    };
+}
+
+rendering_test!(
+    installed_white_background_renders_every_pixel_white,
+    installed_white_background_renders_every_pixel_white_test
+);
+rendering_test!(
+    selector_background_color_is_visible_in_rendered_widget_pixels,
+    selector_background_color_is_visible_in_rendered_widget_pixels_test
+);
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn render_ui_pixels(
     stylesheet: Stylesheet,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
@@ -71,10 +104,13 @@ fn render_ui_pixels(
         std::thread::Builder::new()
             .name("trcss-test-renderer".to_owned())
             .spawn(move || {
-                let mut renderer = OffscreenRenderer::new();
+                let mut renderer = pollster::block_on(OffscreenRenderer::new());
                 while let Ok(request) = requests_rx.recv() {
-                    let pixels =
-                        render_ui_frame(&mut renderer, request.stylesheet, request.build_ui);
+                    let pixels = pollster::block_on(render_ui_frame(
+                        &mut renderer,
+                        request.stylesheet,
+                        request.build_ui,
+                    ));
                     let _ = request.pixels_tx.send(pixels);
                 }
             })
@@ -93,7 +129,16 @@ fn render_ui_pixels(
         .expect("the pixel-rendering thread exited before returning an image")
 }
 
-fn render_ui_frame(
+#[cfg(target_arch = "wasm32")]
+async fn render_ui_pixels(
+    stylesheet: Stylesheet,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
+    let mut renderer = OffscreenRenderer::new().await;
+    render_ui_frame(&mut renderer, stylesheet, Box::new(build_ui)).await
+}
+
+async fn render_ui_frame(
     renderer: &mut OffscreenRenderer,
     stylesheet: Stylesheet,
     mut build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
@@ -110,22 +155,31 @@ fn render_ui_frame(
         },
         &mut build_ui,
     );
-    renderer.render(&context, &mut output)
+    renderer.render(&context, &mut output).await
 }
 
 impl OffscreenRenderer {
-    fn new() -> Self {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    async fn new() -> Self {
+        let descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        #[cfg(not(target_arch = "wasm32"))]
+        let instance = wgpu::Instance::new(descriptor);
+        #[cfg(target_arch = "wasm32")]
+        let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
         let adapter_options = wgpu::RequestAdapterOptions {
             force_fallback_adapter: true,
             ..Default::default()
         };
-        let adapter = pollster::block_on(instance.request_adapter(&adapter_options))
-            .or_else(|_| pollster::block_on(instance.request_adapter(&Default::default())))
-            .expect("an available wgpu adapter is required for the pixel-rendering test");
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("could not create a wgpu device for the pixel-rendering test");
+        let adapter = match instance.request_adapter(&adapter_options).await {
+            Ok(adapter) => adapter,
+            Err(_) => instance
+                .request_adapter(&Default::default())
+                .await
+                .expect("an available wgpu adapter is required for the pixel-rendering test"),
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("could not create a wgpu device for the pixel-rendering test");
         let renderer =
             egui_wgpu::Renderer::new(&device, FORMAT, egui_wgpu::RendererOptions::PREDICTABLE);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -162,7 +216,11 @@ impl OffscreenRenderer {
         }
     }
 
-    fn render(&mut self, context: &egui::Context, output: &mut egui::FullOutput) -> Vec<[u8; 4]> {
+    async fn render(
+        &mut self,
+        context: &egui::Context,
+        output: &mut egui::FullOutput,
+    ) -> Vec<[u8; 4]> {
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
                 self.renderer
@@ -237,15 +295,16 @@ impl OffscreenRenderer {
             .submit(user_buffers.into_iter().chain([encoder.finish()]));
 
         let slice = self.readback.slice(..);
-        let (mapped_tx, mapped_rx) = mpsc::channel();
+        let (mapped_tx, mapped_rx) = futures_channel::oneshot::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = mapped_tx.send(result);
         });
+        #[cfg(not(target_arch = "wasm32"))]
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("wgpu failed while rendering the test frame");
         mapped_rx
-            .recv()
+            .await
             .expect("wgpu did not complete the pixel readback")
             .expect("wgpu could not map the rendered pixels");
 
