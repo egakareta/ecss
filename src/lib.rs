@@ -17,7 +17,8 @@ use std::{error::Error, fmt, path::Path, sync::Arc};
 
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
 
-const STYLESHEET_ID: &str = "egui-css.stylesheet";
+const STYLESHEET_ID: &str = "trcss.stylesheet";
+const BACKGROUND_ID: &str = "trcss.background";
 
 /// A parsed stylesheet containing supported class rules.
 #[derive(Clone, Debug, Default)]
@@ -97,22 +98,37 @@ impl Stylesheet {
         Ok(Self { rules })
     }
 
+    fn apply_w3c_defaults(&self, context: &egui::Context) {
+        context.all_styles_mut(apply_w3c_defaults);
+
+        let background_registered = context
+            .data(|data| data.get_temp::<bool>(Id::new(BACKGROUND_ID)))
+            .unwrap_or(false);
+        if !background_registered {
+            context.on_begin_pass(
+                BACKGROUND_ID,
+                Arc::new(|ui| {
+                    ui.painter().rect_filled(
+                        ui.max_rect(),
+                        CornerRadius::same(0),
+                        ui.visuals().panel_fill,
+                    );
+                }),
+            );
+            context.data_mut(|data| {
+                data.insert_temp(Id::new(BACKGROUND_ID), true);
+            });
+        }
+    }
+
     /// Installs this stylesheet on an egui context for selector-wrapped widgets to use.
     pub fn install(&self, context: &egui::Context) {
+        self.apply_w3c_defaults(context);
         let stylesheet = Arc::new(self.clone());
         context.data_mut(|data| {
             data.insert_temp(Id::new(STYLESHEET_ID), stylesheet);
         });
     }
-}
-
-/// Applies a plain, browser-like light appearance to an egui context.
-///
-/// This resets both egui themes, so switching between light and dark mode
-/// keeps the same appearance. It approximates browser user-agent defaults,
-/// egui widgets do not map exactly to HTML elements.
-pub fn w3c_defaults(context: &egui::Context) {
-    context.all_styles_mut(apply_w3c_defaults);
 }
 
 /// Extension trait that adds `.selector(...)` to every egui widget.
