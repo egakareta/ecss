@@ -11,14 +11,6 @@ license = "MIT"
 egui = "0.36"
 
 [dev-dependencies]
-eframe = { version = "0.36", default-features = false, features = [
-  "wgpu_no_default_features",
-  "wayland",
-] }
-wgpu = { version = "30", default-features = false, features = [
-  "dx12",
-  "gles",
-  "metal",
-  "std",
-  "webgpu",
-] }
+eframe = { version = "0.36", default-features = false, features = ["wayland", "wgpu"] }
+pollster = "1"
+wgpu = { version = "30" }
