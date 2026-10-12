@@ -3,7 +3,7 @@
 //! Apply CSS to egui widgets.
 //!
 //! ```no_run
-//! use egui_css::{SelectorExt as _, Stylesheet};
+//! use trcss::{SelectorExt as _, Stylesheet};
 //!
 //! # fn ui(ui: &mut egui::Ui, context: &egui::Context) -> Result<(), Box<dyn std::error::Error>> {
 //! let css = Stylesheet::from_file("theme.css")?;
@@ -104,6 +104,15 @@ impl Stylesheet {
             data.insert_temp(Id::new(STYLESHEET_ID), stylesheet);
         });
     }
+}
+
+/// Applies a plain, browser-like light appearance to an egui context.
+///
+/// This resets both egui themes, so switching between light and dark mode
+/// keeps the same appearance. It approximates browser user-agent defaults,
+/// egui widgets do not map exactly to HTML elements.
+pub fn w3c_defaults(context: &egui::Context) {
+    context.all_styles_mut(apply_w3c_defaults);
 }
 
 /// Extension trait that adds `.selector(...)` to every egui widget.
@@ -407,6 +416,104 @@ fn parse_padding(value: &str) -> Option<egui::Vec2> {
         [vertical, horizontal] => Some(egui::vec2(*horizontal, *vertical)),
         _ => None,
     }
+}
+
+fn apply_w3c_defaults(style: &mut egui::Style) {
+    *style = egui::Style::default();
+
+    let black = Color32::BLACK;
+    let white = Color32::WHITE;
+    let button = Color32::from_gray(239);
+    let button_hovered = Color32::from_gray(225);
+    let button_active = Color32::from_gray(210);
+    let border = Color32::from_gray(118);
+
+    style.spacing.item_spacing = egui::vec2(8.0, 4.0);
+    style.spacing.window_margin = egui::Margin::same(8);
+    style.spacing.menu_margin = egui::Margin::same(4);
+    style.spacing.button_padding = egui::vec2(6.0, 2.0);
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(13.0));
+
+    let visuals = &mut style.visuals;
+    *visuals = egui::Visuals::light();
+    visuals.override_text_color = Some(black);
+    visuals.weak_text_color = Some(black);
+    visuals.weak_text_alpha = 1.0;
+    visuals.hyperlink_color = Color32::from_rgb(0, 0, 238);
+    visuals.faint_bg_color = white;
+    visuals.extreme_bg_color = white;
+    visuals.text_edit_bg_color = Some(white);
+    visuals.code_bg_color = white;
+    visuals.window_fill = white;
+    visuals.window_stroke = egui::Stroke::new(1.0, border);
+    visuals.window_corner_radius = CornerRadius::same(0);
+    visuals.window_shadow = egui::Shadow::NONE;
+    visuals.menu_corner_radius = CornerRadius::same(0);
+    visuals.panel_fill = white;
+    visuals.popup_shadow = egui::Shadow::NONE;
+    visuals.window_highlight_topmost = false;
+
+    set_widget_visuals(
+        &mut visuals.widgets.noninteractive,
+        white,
+        Color32::TRANSPARENT,
+        Color32::TRANSPARENT,
+        black,
+        0,
+    );
+    set_widget_visuals(
+        &mut visuals.widgets.inactive,
+        white,
+        button,
+        border,
+        black,
+        2,
+    );
+    set_widget_visuals(
+        &mut visuals.widgets.hovered,
+        white,
+        button_hovered,
+        Color32::from_gray(80),
+        black,
+        2,
+    );
+    set_widget_visuals(
+        &mut visuals.widgets.active,
+        white,
+        button_active,
+        Color32::from_gray(64),
+        black,
+        2,
+    );
+    set_widget_visuals(&mut visuals.widgets.open, white, button, border, black, 2);
+}
+
+fn set_widget_visuals(
+    visuals: &mut WidgetVisuals,
+    background: Color32,
+    weak_background: Color32,
+    border: Color32,
+    text: Color32,
+    radius: u8,
+) {
+    visuals.bg_fill = background;
+    visuals.weak_bg_fill = weak_background;
+    visuals.bg_stroke = egui::Stroke::new(
+        if border == Color32::TRANSPARENT {
+            0.0
+        } else {
+            1.0
+        },
+        border,
+    );
+    visuals.fg_stroke = egui::Stroke::new(1.0, text);
+    visuals.corner_radius = CornerRadius::same(radius);
+    visuals.expansion = 0.0;
 }
 
 fn apply_declarations(ui: &mut Ui, state: RuleState, declarations: &[Declaration]) {
