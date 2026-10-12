@@ -1,0 +1,24 @@
+[package]
+name = "trcss"
+version = "0.1.0"
+edition = "2024"
+description = "CSS class styling for egui widgets."
+documentation = "https://docs.rs/trcss"
+repository = "https://github.com/egakareta/trcss"
+license = "MIT"
+
+[dependencies]
+egui = "0.36"
+
+[dev-dependencies]
+eframe = { version = "0.36", default-features = false, features = [
+  "wgpu_no_default_features",
+  "wayland",
+] }
+wgpu = { version = "30", default-features = false, features = [
+  "dx12",
+  "gles",
+  "metal",
+  "std",
+  "webgpu",
+] }

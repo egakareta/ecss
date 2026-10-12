@@ -1,0 +1,25 @@
+.primary {
+  color: #fff;
+  background-color: #2d6cdf;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.primary:hover {
+  background-color: #2458b5;
+}
+
+.primary:active {
+  background-color: #19448f;
+}
+
+.secondary {
+  color: #25324a;
+  background-color: #e8edf5;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.secondary:hover {
+  background-color: #d3dcea;
+}
