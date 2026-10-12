@@ -5,6 +5,7 @@
 - Do not add comments that restate requirements, narrate obvious operations, justify parameter choices with vague adjectives, or describe the intended quality of the implementation.
 - Comments are permitted only to explain non-obvious invariants, constraints, mathematical reasoning, or surprising behavior.
 - Do not add explanatory prose unless requested.
+- Unless I say otherwise, ALWAYS assume that my feature request should work cross-platform (native and web).
 
 ## Test Implementation Rules
 
