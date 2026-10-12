@@ -1,11 +1,9 @@
-use std::{error::Error, path::PathBuf};
+use std::error::Error;
 
 use trcss::{SelectorExt as _, Stylesheet};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let stylesheet = Stylesheet::from_file(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/theme.css"),
-    )?;
+    let stylesheet = Stylesheet::parse(include_str!("theme.css"))?;
 
     eframe::run_native(
         "trcss",
