@@ -9,6 +9,9 @@ license = "MIT"
 
 [dependencies]
 egui = "0.36"
+ehttp = { version = "0.7.1", features = ["native-async"] }
+futures-util = "0.3"
+wuff = "0.2.9"
 
 [dev-dependencies]
 eframe = { version = "0.36", default-features = false, features = ["wayland", "wgpu"] }

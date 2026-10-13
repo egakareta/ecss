@@ -16,6 +16,9 @@
 use std::{error::Error, fmt, path::Path, sync::Arc};
 
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
+use fonts::{FontAssets, FontRequest};
+
+mod fonts;
 
 const STYLESHEET_ID: &str = "trcss.stylesheet";
 const BACKGROUND_ID: &str = "trcss.background";
@@ -24,24 +27,46 @@ const BACKGROUND_ID: &str = "trcss.background";
 #[derive(Clone, Debug, Default)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
+    imports: Vec<String>,
+    fonts: FontAssets,
 }
 
 impl Stylesheet {
-    /// Reads and parses a stylesheet from a UTF-8 CSS file.
+    /// Reads and parses a stylesheet from a UTF-8 CSS file without fetching imports.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, CssFileError> {
         let source = std::fs::read_to_string(path).map_err(CssFileError::Read)?;
         Self::parse(&source).map_err(CssFileError::Parse)
     }
 
+    /// Parses a stylesheet and asynchronously loads fonts referenced by `@import`.
+    ///
+    /// Imported stylesheets must contain supported `@font-face` rules. TTF, OTF,
+    /// WOFF, and WOFF2 font files are supported. Network access is required for
+    /// remote imports.
+    pub async fn load(source: &str) -> Result<Self, StylesheetLoadError> {
+        let mut stylesheet = Self::parse(source).map_err(StylesheetLoadError::Parse)?;
+        let imports = stylesheet.imports.clone();
+        let requests = stylesheet.font_requests();
+        stylesheet.fonts = FontAssets::load(&imports, &requests).await?;
+        Ok(stylesheet)
+    }
+
+    /// Reads a UTF-8 CSS file and asynchronously loads fonts referenced by `@import`.
+    pub async fn load_file(path: impl AsRef<Path>) -> Result<Self, StylesheetLoadError> {
+        let source = std::fs::read_to_string(path).map_err(StylesheetLoadError::Read)?;
+        Self::load(&source).await
+    }
+
     /// Parses class rules from CSS text.
     ///
     /// Supported selectors are `.class`, `.class:hover`, and `.class:active`.
-    /// Supported declarations are `color`, `background-color`, `padding`, and
-    /// `border-radius`. Lengths are interpreted as egui points. Unknown
-    /// declarations are ignored.
+    /// Supported declarations are `color`, `background-color`, `padding`,
+    /// `border-radius`, `font-family`, `font-weight`, and `font-style`. Lengths
+    /// are interpreted as egui points. Unknown declarations are ignored.
     pub fn parse(source: &str) -> Result<Self, CssError> {
         let source = remove_comments(source)?;
         let mut rules = Vec::new();
+        let mut imports = Vec::new();
         let mut offset = 0;
 
         while offset < source.len() {
@@ -53,6 +78,17 @@ impl Stylesheet {
             }
 
             let remaining = &source[offset..];
+            if remaining.starts_with("@import") {
+                let Some(end) = find_statement_end(remaining) else {
+                    return Err(CssError::new(&source, offset, "expected `;` after import"));
+                };
+                let import = parse_import_url(&remaining[..end])
+                    .ok_or_else(|| CssError::new(&source, offset, "unsupported import rule"))?;
+                imports.push(import);
+                offset += end + 1;
+                continue;
+            }
+
             let Some(open_brace) = remaining.find('{') else {
                 return Err(CssError::new(
                     &source,
@@ -95,7 +131,53 @@ impl Stylesheet {
             offset += open_brace + 1 + close_relative + 1;
         }
 
-        Ok(Self { rules })
+        Ok(Self {
+            rules,
+            imports,
+            fonts: FontAssets::default(),
+        })
+    }
+
+    fn font_requests(&self) -> Vec<FontRequest> {
+        let mut classes = Vec::new();
+        for rule in self
+            .rules
+            .iter()
+            .filter(|rule| rule.state == RuleState::Base)
+        {
+            if !classes.contains(&rule.class) {
+                classes.push(rule.class.clone());
+            }
+        }
+
+        classes
+            .into_iter()
+            .filter_map(|class| self.font_request_for_class(&class))
+            .collect()
+    }
+
+    fn font_request_for_class(&self, class: &str) -> Option<FontRequest> {
+        let mut families = None;
+        let mut weight = 400;
+        let mut italic = false;
+        for declaration in self
+            .rules
+            .iter()
+            .filter(|rule| rule.class == class && rule.state == RuleState::Base)
+            .flat_map(|rule| &rule.declarations)
+        {
+            match declaration {
+                Declaration::FontFamily(value) => families = Some(value.clone()),
+                Declaration::FontWeight(value) => weight = *value,
+                Declaration::FontStyle(value) => italic = *value,
+                _ => {}
+            }
+        }
+        Some(FontRequest {
+            families: families?,
+            weight,
+            italic,
+        })
     }
 
     fn apply_w3c_defaults(&self, context: &egui::Context) {
@@ -123,6 +205,7 @@ impl Stylesheet {
 
     /// Installs this stylesheet on an egui context for selector-wrapped widgets to use.
     pub fn install(&self, context: &egui::Context) {
+        self.fonts.install(context);
         self.apply_w3c_defaults(context);
         let stylesheet = Arc::new(self.clone());
         context.data_mut(|data| {
@@ -180,6 +263,17 @@ impl<W: Widget> Widget for StyledWidget<W> {
             }
         }
 
+        if let Some(request) = stylesheet.font_request_for_class(class)
+            && let Some(family) =
+                stylesheet
+                    .fonts
+                    .family(ui.ctx(), &request.families, request.weight, request.italic)
+        {
+            for font_id in ui.style_mut().text_styles.values_mut() {
+                font_id.family = family.clone();
+            }
+        }
+
         // Delegating on the same Ui preserves egui's autogenerated widget IDs.
         let response = widget.ui(ui);
         *ui.style_mut() = original_style;
@@ -229,6 +323,44 @@ impl fmt::Display for CssError {
 
 impl Error for CssError {}
 
+/// An error encountered while parsing a stylesheet or loading its imported fonts.
+#[derive(Debug)]
+pub enum StylesheetLoadError {
+    /// A CSS file could not be read as UTF-8 text.
+    Read(std::io::Error),
+    /// The stylesheet contained unsupported or malformed CSS.
+    Parse(CssError),
+    /// An imported font stylesheet or font file could not be fetched or decoded.
+    Font {
+        /// The URL that could not be loaded.
+        url: String,
+        /// A short description of the loading failure.
+        message: String,
+    },
+}
+
+impl fmt::Display for StylesheetLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(error) => write!(formatter, "could not read CSS file: {error}"),
+            Self::Parse(error) => error.fmt(formatter),
+            Self::Font { url, message } => {
+                write!(formatter, "could not load font from {url}: {message}")
+            }
+        }
+    }
+}
+
+impl Error for StylesheetLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read(error) => Some(error),
+            Self::Parse(error) => Some(error),
+            Self::Font { .. } => None,
+        }
+    }
+}
+
 /// An error encountered while reading or parsing a CSS file.
 #[derive(Debug)]
 pub enum CssFileError {
@@ -270,12 +402,15 @@ enum RuleState {
     Active,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Declaration {
     Color(Color32),
     Background(Color32),
     Padding(egui::Vec2),
     BorderRadius(u8),
+    FontFamily(Vec<String>),
+    FontWeight(u16),
+    FontStyle(bool),
 }
 
 fn remove_comments(source: &str) -> Result<String, CssError> {
@@ -296,6 +431,60 @@ fn remove_comments(source: &str) -> Result<String, CssError> {
         offset = end;
     }
     Ok(String::from_utf8(bytes).expect("replacing comment bytes preserves UTF-8"))
+}
+
+fn parse_import_url(rule: &str) -> Option<String> {
+    let value = rule.strip_prefix("@import")?.trim();
+    let value = if let Some(value) = value.strip_prefix("url(") {
+        let end = value.find(')')?;
+        value[..end].trim()
+    } else {
+        value.split_whitespace().next()?
+    };
+    let value = parse_css_string(value)?;
+    (!value.is_empty()).then_some(value)
+}
+
+fn find_statement_end(source: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut parentheses = 0_usize;
+    for (offset, character) in source.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if character == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '(' => parentheses += 1,
+            ')' => parentheses = parentheses.saturating_sub(1),
+            ';' if parentheses == 0 => return Some(offset),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_css_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let quote = value.as_bytes().first().copied()?;
+    if (quote == b'\'' || quote == b'"') && value.as_bytes().last() == Some(&quote) {
+        Some(value[1..value.len() - 1].to_owned())
+    } else if !value.is_empty() {
+        Some(value.to_owned())
+    } else {
+        None
+    }
 }
 
 fn parse_selector(selector: &str) -> Option<(&str, RuleState)> {
@@ -371,6 +560,19 @@ fn parse_declarations(
                     .round()
                     .min(f32::from(u8::MAX)) as u8,
             )),
+            "font-family" => Some(Declaration::FontFamily(
+                parse_font_family(value).ok_or_else(|| {
+                    CssError::new(source, declaration_offset, "unsupported font family")
+                })?,
+            )),
+            "font-weight" => Some(Declaration::FontWeight(
+                parse_font_weight(value).ok_or_else(|| {
+                    CssError::new(source, declaration_offset, "unsupported font weight")
+                })?,
+            )),
+            "font-style" => Some(Declaration::FontStyle(parse_font_style(value).ok_or_else(
+                || CssError::new(source, declaration_offset, "unsupported font style"),
+            )?)),
             _ => None,
         };
         if let Some(parsed) = parsed {
@@ -430,6 +632,34 @@ fn parse_padding(value: &str) -> Option<egui::Vec2> {
     match lengths.as_slice() {
         [all] => Some(egui::Vec2::splat(*all)),
         [vertical, horizontal] => Some(egui::vec2(*horizontal, *vertical)),
+        _ => None,
+    }
+}
+
+fn parse_font_family(value: &str) -> Option<Vec<String>> {
+    let families = value
+        .split(',')
+        .map(parse_css_string)
+        .collect::<Option<Vec<_>>>()?;
+    (!families.is_empty() && families.iter().all(|family| !family.trim().is_empty()))
+        .then_some(families)
+}
+
+fn parse_font_weight(value: &str) -> Option<u16> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        value => value
+            .parse::<u16>()
+            .ok()
+            .filter(|weight| (1..=1000).contains(weight)),
+    }
+}
+
+fn parse_font_style(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(false),
+        "italic" | "oblique" => Some(true),
         _ => None,
     }
 }
@@ -570,13 +800,87 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         Declaration::BorderRadius(radius) => {
             visuals.corner_radius = CornerRadius::same(*radius);
         }
-        Declaration::Padding(_) => {}
+        Declaration::Padding(_)
+        | Declaration::FontFamily(_)
+        | Declaration::FontWeight(_)
+        | Declaration::FontStyle(_) => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn google_font_import_and_requested_font_weight_are_parsed() {
+        let stylesheet = Stylesheet::parse(include_str!("../tests/fixtures/theme.css")).unwrap();
+
+        assert_eq!(
+            stylesheet.imports,
+            [
+                "https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=SUSE+Mono:ital,wght@0,100..800;1,100..800&display=swap"
+            ]
+        );
+        let request = stylesheet.font_request_for_class("outfit-text").unwrap();
+        assert_eq!(request.families, ["Outfit", "sans-serif"]);
+        assert_eq!(request.weight, 500);
+        assert!(!request.italic);
+    }
+
+    #[test]
+    fn selector_applies_loaded_font_and_restores_parent_style() {
+        let context = egui::Context::default();
+        let font_bytes = egui::FontDefinitions::default().font_data["Ubuntu-Light"]
+            .as_ref()
+            .as_ref()
+            .to_vec();
+        let mut stylesheet = Stylesheet::parse(
+            ".outfit-text { font-family: \"Outfit\", sans-serif; font-weight: 500; }",
+        )
+        .unwrap();
+        stylesheet.fonts = FontAssets::with_test_font("Outfit", 500, font_bytes);
+
+        let mut setup_output = context.run_ui(egui::RawInput::default(), |_ui| {});
+        setup_output.textures_delta.clear();
+        stylesheet.install(&context);
+        let mut font_output = context.run_ui(egui::RawInput::default(), |_ui| {});
+        font_output.textures_delta.clear();
+
+        let mut observed_font = None;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let parent_font = ui.style().text_styles[&egui::TextStyle::Body]
+                    .family
+                    .clone();
+                let inspect_font = |ui: &mut Ui| {
+                    observed_font = Some(
+                        ui.style().text_styles[&egui::TextStyle::Body]
+                            .family
+                            .clone(),
+                    );
+                    ui.label("styled text")
+                };
+                ui.add(inspect_font.selector(".outfit-text"));
+                assert_eq!(
+                    ui.style().text_styles[&egui::TextStyle::Body].family,
+                    parent_font
+                );
+            },
+        );
+        output.textures_delta.clear();
+
+        assert_eq!(
+            observed_font,
+            Some(egui::FontFamily::Name("trcss:outfit:500:normal".into()))
+        );
+    }
 
     #[test]
     fn class_styles_apply_to_wrapped_widgets_without_changing_the_parent_ui() {
