@@ -336,19 +336,37 @@ impl<W: Widget> Widget for StyledWidget<W> {
             content_rect.max.y = content_rect.min.y;
         }
 
-        let background_shape = class_box_spacing
-            .has_background
-            .iter()
-            .any(|applies| *applies)
-            .then(|| ui.painter().add(egui::Shape::Noop));
+        let box_shape = (class_box_spacing.has_padding
+            || class_box_spacing
+                .has_background
+                .iter()
+                .any(|applies| *applies))
+        .then(|| ui.painter().add(egui::Shape::Noop));
         let mut content_ui = ui.new_child(egui::UiBuilder::new().max_rect(content_rect));
+        let layer_id = content_ui.layer_id();
+        let shape_start = ui.ctx().graphics(|layers| {
+            layers
+                .get(layer_id)
+                .map_or(egui::layers::ShapeIdx(0), |list| list.next_idx())
+        });
         let response = widget.ui(&mut content_ui);
+        let shape_end = ui.ctx().graphics(|layers| {
+            layers
+                .get(layer_id)
+                .map_or(egui::layers::ShapeIdx(0), |list| list.next_idx())
+        });
         let border_rect = response.rect + class_box_spacing.padding;
         let outer_rect = nonnegative_rect(border_rect + class_box_spacing.margin);
+        let frame_stroke = class_box_spacing
+            .has_padding
+            .then(|| {
+                take_widget_frame_stroke(ui.ctx(), layer_id, shape_start, shape_end, response.rect)
+            })
+            .flatten();
         let response =
             response.union(content_ui.interact(border_rect, response.id, response.sense));
 
-        if let Some(background_shape) = background_shape {
+        if let Some(box_shape) = box_shape {
             let state = response.widget_state();
             let background_applies = class_box_spacing.has_background[match state {
                 egui::widget_style::WidgetState::Hovered => 1,
@@ -356,16 +374,33 @@ impl<W: Widget> Widget for StyledWidget<W> {
                 egui::widget_style::WidgetState::Inactive
                 | egui::widget_style::WidgetState::Noninteractive => 0,
             }] || class_box_spacing.has_background[0];
-            if background_applies {
-                let visuals = content_ui.style().visuals.widgets.state(state);
+            let visuals = content_ui.style().visuals.widgets.state(state);
+            if background_applies || frame_stroke.is_some() {
+                let fill = if background_applies {
+                    visuals.weak_bg_fill
+                } else {
+                    Color32::TRANSPARENT
+                };
                 ui.painter().set(
-                    background_shape,
+                    box_shape,
                     egui::Shape::Rect(egui::epaint::RectShape::filled(
                         border_rect,
                         visuals.corner_radius,
-                        visuals.weak_bg_fill,
+                        fill,
                     )),
                 );
+                if let Some(stroke) = frame_stroke {
+                    ui.painter().set(
+                        box_shape,
+                        egui::Shape::Rect(egui::epaint::RectShape::new(
+                            border_rect,
+                            visuals.corner_radius,
+                            fill,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        )),
+                    );
+                }
             }
         }
 
@@ -600,6 +635,64 @@ fn nonnegative_rect(mut rect: egui::Rect) -> egui::Rect {
         rect.max.y = rect.min.y;
     }
     rect
+}
+
+fn take_widget_frame_stroke(
+    context: &egui::Context,
+    layer_id: egui::LayerId,
+    start: egui::layers::ShapeIdx,
+    end: egui::layers::ShapeIdx,
+    rect: egui::Rect,
+) -> Option<egui::Stroke> {
+    let matching_shape = context.graphics(|layers| {
+        let list = layers.get(layer_id)?;
+        list.all_entries()
+            .enumerate()
+            .skip(start.0)
+            .take(end.0.saturating_sub(start.0))
+            .find_map(|(index, clipped)| {
+                matching_rect_stroke(&clipped.shape, rect)
+                    .map(|stroke| (egui::layers::ShapeIdx(index), stroke))
+            })
+    })?;
+    let (shape_index, stroke) = matching_shape;
+    context.graphics_mut(|layers| {
+        layers.entry(layer_id).mutate_shape(shape_index, |clipped| {
+            clear_matching_rect_stroke(&mut clipped.shape, rect);
+        });
+    });
+    Some(stroke)
+}
+
+fn matching_rect_stroke(shape: &egui::Shape, rect: egui::Rect) -> Option<egui::Stroke> {
+    match shape {
+        egui::Shape::Rect(shape)
+            if shape.rect == rect
+                && shape.stroke.width > 0.0
+                && shape.stroke.color != Color32::TRANSPARENT =>
+        {
+            Some(shape.stroke)
+        }
+        egui::Shape::Vec(shapes) => shapes
+            .iter()
+            .find_map(|shape| matching_rect_stroke(shape, rect)),
+        _ => None,
+    }
+}
+
+fn clear_matching_rect_stroke(shape: &mut egui::Shape, rect: egui::Rect) {
+    match shape {
+        egui::Shape::Rect(shape) if shape.rect == rect => shape.stroke = egui::Stroke::NONE,
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                if matching_rect_stroke(shape, rect).is_some() {
+                    clear_matching_rect_stroke(shape, rect);
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn apply_style_declarations(

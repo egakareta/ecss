@@ -68,6 +68,36 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
+async fn button_frame_stroke_tracks_the_css_padding_box_test() {
+    let stylesheet = Stylesheet::parse(
+        ".primary { background-color: #f00; padding: 8px 12px; border-radius: 6px; }",
+    )
+    .unwrap();
+    let button_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = button_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let response = ui.add(egui::Button::new("X").selector(".primary"));
+        *rect_from_ui.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = button_rect.lock().unwrap().unwrap();
+    let pixel_at = |x: f32, y: f32| {
+        let x = x.floor() as usize;
+        let y = y.floor() as usize;
+        pixels[y * WIDTH as usize + x]
+    };
+
+    assert_eq!(
+        pixel_at(rect.min.x + 0.5, rect.center().y),
+        [118, 118, 118, 255]
+    );
+    assert_eq!(
+        pixel_at(rect.min.x + 12.5, rect.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
 async fn asymmetric_box_model_is_visible_in_rendered_pixels_test() {
     let stylesheet = Stylesheet::parse(
         ".box { padding: 2px 6px 4px 10px; margin: 4px 3px 5px 7px; background-color: #f00; }",
@@ -130,6 +160,7 @@ macro_rules! rendering_test {
 
 rendering_test!(installed_white_background_renders_every_pixel_white);
 rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
+rendering_test!(button_frame_stroke_tracks_the_css_padding_box);
 rendering_test!(asymmetric_box_model_is_visible_in_rendered_pixels);
 
 #[cfg(not(target_arch = "wasm32"))]
