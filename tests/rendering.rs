@@ -69,29 +69,25 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 }
 
 macro_rules! rendering_test {
-    ($name:ident, $test_body:ident) => {
-        #[cfg(not(target_arch = "wasm32"))]
-        #[test]
-        fn $name() {
-            pollster::block_on($test_body());
-        }
+    ($name:ident) => {
+        paste::paste! {
+            #[cfg(not(target_arch = "wasm32"))]
+            #[test]
+            fn $name() {
+                pollster::block_on([<$name _test>]());
+            }
 
-        #[cfg(target_arch = "wasm32")]
-        #[wasm_bindgen_test::wasm_bindgen_test]
-        async fn $name() {
-            $test_body().await;
+            #[cfg(target_arch = "wasm32")]
+            #[wasm_bindgen_test::wasm_bindgen_test]
+            async fn $name() {
+                [<$name _test>]().await;
+            }
         }
     };
 }
 
-rendering_test!(
-    installed_white_background_renders_every_pixel_white,
-    installed_white_background_renders_every_pixel_white_test
-);
-rendering_test!(
-    selector_background_color_is_visible_in_rendered_widget_pixels,
-    selector_background_color_is_visible_in_rendered_widget_pixels_test
-);
+rendering_test!(installed_white_background_renders_every_pixel_white);
+rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn render_ui_pixels(
