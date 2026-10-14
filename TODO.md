@@ -5,22 +5,22 @@
 ## Core CSS, syntax, and cascading
 
 - **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Unsupported.**
-  - CSS properties: `azimuth`, `background`, `background-attachment`, `background-color`, `background-image`, `background-position`,
+  - CSS properties: ~~`azimuth`~~, `background`, `background-attachment`, `background-color`, `background-image`, `background-position`,
     `background-repeat`, `border`, `border-bottom`, `border-bottom-color`, `border-bottom-style`, `border-bottom-width`,
     `border-collapse`, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
-    `clear`, `clip`, `color`, `content`, `counter-increment`, `counter-reset`, `cue`, `cue-after`, `cue-before`,
-    `cursor`, `direction`, `display`, `elevation`, `empty-cells`, `float`, `font`, `font-family`, `font-size`,
+    `clear`, `clip`, `color`, `content`, `counter-increment`, `counter-reset`, ~~`cue`~~, ~~`cue-after`~~, ~~`cue-before`~~,
+    `cursor`, `direction`, `display`, ~~`elevation`~~, `empty-cells`, `float`, `font`, `font-family`, `font-size`,
     `font-style`, `font-variant`, `font-weight`, `height`, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, `margin`, `margin-bottom`, `margin-left`,
     `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
     `outline-color`, `outline-style`, `outline-width`, `overflow`, `padding`, `padding-bottom`, `padding-left`,
-    `padding-right`, `padding-top`, `page-break-after`, `page-break-before`, `page-break-inside`, `pause`,
-    `pause-after`, `pause-before`, `pitch`, `pitch-range`, `play-during`, `position`, `quotes`, `richness`, `right`,
-    `speak`, `speak-header`, `speak-numeral`, `speak-punctuation`, `speech-rate`, `stress`, `table-layout`,
+    `padding-right`, `padding-top`, `page-break-after`, `page-break-before`, `page-break-inside`, ~~`pause`~~,
+    ~~`pause-after`~~, ~~`pause-before`~~, ~~`pitch`~~, ~~`pitch-range`~~, ~~`play-during`~~, `position`, `quotes`, ~~`richness`~~, `right`,
+    ~~`speak`~~, ~~`speak-header`~~, ~~`speak-numeral`~~, ~~`speak-punctuation`~~, ~~`speech-rate`~~, ~~`stress`~~, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`,
-    `visibility`, `voice-family`, `volume`, `white-space`, `widows`, `width`, `word-spacing`, `z-index`.
+    `visibility`, ~~`voice-family`~~, ~~`volume`~~, `white-space`, `widows`, `width`, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Unsupported.**
@@ -279,7 +279,7 @@
     `list-style-type`, `marker-side`.
 - **[CSS Ruby Annotation Layout](https://www.w3.org/TR/css3-ruby/) - Unsupported.**
   - CSS properties: `ruby-align`, `ruby-merge`, `ruby-overhang`, `ruby-position`.
-- **[CSS Speech](https://www.w3.org/TR/css3-speech/) - Unsupported.**
+- **[CSS Speech](https://www.w3.org/TR/css3-speech/) - Not planned.**
   - CSS properties: `cue`, `cue-after`, `cue-before`, `pause`, `pause-after`, `pause-before`, `rest`, `rest-after`, `rest-before`,
     `speak`, `speak-as`, `voice-balance`, `voice-duration`, `voice-family`, `voice-pitch`, `voice-range`, `voice-rate`,
     `voice-stress`, `voice-volume`.
@@ -423,20 +423,20 @@
 - **[CSS Snapshot 2024](https://www.w3.org/TR/css-2024/) - Unsupported.**
 - **[CSS Snapshot 2025](https://www.w3.org/TR/css-2025/) - Unsupported.**
 - **[CSS Snapshot 2026](https://www.w3.org/TR/css-2026/) - Unsupported.**
-- **CSS Aural Style Sheets - Unsupported.**
-- **CSS Extended Box Model - Unsupported.**
-- **[CSS Marquee](https://www.w3.org/TR/css3-marquee/) - Unsupported.**
-- **[CSS Introduction](https://www.w3.org/TR/css3-roadmap/) - Unsupported.**
-- **[CSS Presentation Levels](https://www.w3.org/TR/css3-preslev/) - Unsupported.**
-- **[CSS Reader Media Type](https://www.w3.org/TR/css3-reader/) - Unsupported.**
-- **[Grid Positioning](https://www.w3.org/TR/css3-grid/) - Unsupported.**
-- **[CSS Web Fonts](https://www.w3.org/TR/css3-webfonts/) - Unsupported.**
-- **[Behavioral Extensions to CSS](https://www.w3.org/TR/becss/) - Unsupported.**
-- **[CSS 2D Transformations Module](https://www.w3.org/TR/css3-2d-transforms/) - Unsupported.**
-- **[CSS Mobile Profile](https://www.w3.org/TR/css-mobile/) - Unsupported.**
-- **[CSS Print Profile](https://www.w3.org/TR/css-print/) - Unsupported.**
-- **[CSS TV Profile](https://www.w3.org/TR/css-tv) - Unsupported.**
-- **[CSS Level 1](https://www.w3.org/TR/CSS1/) - Unsupported.**
+- **CSS Aural Style Sheets - Not planned.**
+- **CSS Extended Box Model - Not planned.**
+- **[CSS Marquee](https://www.w3.org/TR/css3-marquee/) - Not planned.**
+- **[CSS Introduction](https://www.w3.org/TR/css3-roadmap/) - Not planned.**
+- **[CSS Presentation Levels](https://www.w3.org/TR/css3-preslev/) - Not planned.**
+- **[CSS Reader Media Type](https://www.w3.org/TR/css3-reader/) - Not planned.**
+- **[Grid Positioning](https://www.w3.org/TR/css3-grid/) - Not planned.**
+- **[CSS Web Fonts](https://www.w3.org/TR/css3-webfonts/) - Not planned.**
+- **[Behavioral Extensions to CSS](https://www.w3.org/TR/becss/) - Not planned.**
+- **[CSS 2D Transformations Module](https://www.w3.org/TR/css3-2d-transforms/) - Not planned.**
+- **[CSS Mobile Profile](https://www.w3.org/TR/css-mobile/) - Not planned.**
+- **[CSS Print Profile](https://www.w3.org/TR/css-print/) - Not planned.**
+- **[CSS TV Profile](https://www.w3.org/TR/css-tv) - Not planned.**
+- **[CSS Level 1](https://www.w3.org/TR/CSS1/) - Not planned.**
 
 ## Additional property-index specifications and modules
 
