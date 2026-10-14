@@ -45,6 +45,9 @@ or contractually specified behavior.
 If a test seems difficult to implement, stop work and ask me to clarify
 if I want to proceed with a complex harness to properly test the behavior.
 
+The main tests you should be writing in this repository are **integration tests**
+that verify pixels, not implementation details.
+
 ## UI / Testing Rules
 
 DO NOT use screenshots, image capture, `view_image`, visual inspection,
