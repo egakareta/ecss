@@ -33,11 +33,98 @@ pub(crate) enum RuleState {
 pub(crate) enum Declaration {
     Color(Color32),
     Background(Color32),
-    Padding(egui::Vec2),
+    Padding(egui::epaint::MarginF32),
+    PaddingSide(Side, f32),
+    Margin(egui::epaint::MarginF32),
+    MarginSide(Side, f32),
     BorderRadius(u8),
     FontFamily(Vec<String>),
     FontWeight(u16),
     FontStyle(bool),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Side {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BoxSpacing {
+    pub(crate) padding: egui::epaint::MarginF32,
+    pub(crate) margin: egui::epaint::MarginF32,
+    pub(crate) has_padding: bool,
+    pub(crate) has_margin: bool,
+    pub(crate) has_background: [bool; 3],
+}
+
+pub(crate) fn box_spacing_for_target(rules: &[Rule], class: Option<&str>) -> BoxSpacing {
+    let mut padding = egui::epaint::MarginF32::ZERO;
+    let mut margin = egui::epaint::MarginF32::ZERO;
+    let mut has_padding = false;
+    let mut has_margin = false;
+    let mut has_background = [false; 3];
+
+    let mut apply_rule = |rule: &Rule| {
+        for declaration in &rule.declarations {
+            match declaration {
+                Declaration::Padding(value) if rule.state == RuleState::Base => {
+                    padding = *value;
+                    has_padding = true;
+                }
+                Declaration::PaddingSide(side, value) if rule.state == RuleState::Base => {
+                    set_side(&mut padding, *side, *value);
+                    has_padding = true;
+                }
+                Declaration::Margin(value) if rule.state == RuleState::Base => {
+                    margin = *value;
+                    has_margin = true;
+                }
+                Declaration::MarginSide(side, value) if rule.state == RuleState::Base => {
+                    set_side(&mut margin, *side, *value);
+                    has_margin = true;
+                }
+                Declaration::Background(_) => {
+                    has_background[match rule.state {
+                        RuleState::Base => 0,
+                        RuleState::Hovered => 1,
+                        RuleState::Active => 2,
+                    }] = true;
+                }
+                _ => {}
+            }
+        }
+    };
+    for rule in rules.iter().filter(|rule| rule.class.is_none()) {
+        apply_rule(rule);
+    }
+    if let Some(class) = class {
+        for rule in rules
+            .iter()
+            .filter(|rule| rule.class.as_deref() == Some(class))
+        {
+            apply_rule(rule);
+        }
+    }
+
+    BoxSpacing {
+        padding,
+        margin,
+        has_padding,
+        has_margin,
+        has_background,
+    }
+}
+
+fn set_side(edges: &mut egui::epaint::MarginF32, side: Side, value: f32) {
+    match side {
+        Side::Top => edges.top = value,
+        Side::Right => edges.right = value,
+        Side::Bottom => edges.bottom = value,
+        Side::Left => edges.left = value,
+    }
 }
 
 enum ParsedRule {
@@ -255,7 +342,49 @@ impl<'i> DeclarationParser<'i> for Declarations {
         } else if name.eq_ignore_ascii_case("background-color") {
             Some(Declaration::Background(parse_color(input)?))
         } else if name.eq_ignore_ascii_case("padding") {
-            Some(Declaration::Padding(parse_padding(input)?))
+            Some(Declaration::Padding(parse_box_sides(input, true)?))
+        } else if name.eq_ignore_ascii_case("padding-top") {
+            Some(Declaration::PaddingSide(
+                Side::Top,
+                parse_side_length(input, true)?,
+            ))
+        } else if name.eq_ignore_ascii_case("padding-right") {
+            Some(Declaration::PaddingSide(
+                Side::Right,
+                parse_side_length(input, true)?,
+            ))
+        } else if name.eq_ignore_ascii_case("padding-bottom") {
+            Some(Declaration::PaddingSide(
+                Side::Bottom,
+                parse_side_length(input, true)?,
+            ))
+        } else if name.eq_ignore_ascii_case("padding-left") {
+            Some(Declaration::PaddingSide(
+                Side::Left,
+                parse_side_length(input, true)?,
+            ))
+        } else if name.eq_ignore_ascii_case("margin") {
+            Some(Declaration::Margin(parse_box_sides(input, false)?))
+        } else if name.eq_ignore_ascii_case("margin-top") {
+            Some(Declaration::MarginSide(
+                Side::Top,
+                parse_side_length(input, false)?,
+            ))
+        } else if name.eq_ignore_ascii_case("margin-right") {
+            Some(Declaration::MarginSide(
+                Side::Right,
+                parse_side_length(input, false)?,
+            ))
+        } else if name.eq_ignore_ascii_case("margin-bottom") {
+            Some(Declaration::MarginSide(
+                Side::Bottom,
+                parse_side_length(input, false)?,
+            ))
+        } else if name.eq_ignore_ascii_case("margin-left") {
+            Some(Declaration::MarginSide(
+                Side::Left,
+                parse_side_length(input, false)?,
+            ))
         } else if name.eq_ignore_ascii_case("border-radius") {
             let radius = parse_length(input, "unsupported border radius")?;
             Some(Declaration::BorderRadius(
@@ -376,25 +505,76 @@ fn parse_length<'i>(
     }
 }
 
-fn parse_padding<'i>(input: &mut CssParser<'i>) -> Result<egui::Vec2, ParseError<&'static str>> {
-    let mut lengths = Vec::with_capacity(2);
+fn parse_box_sides<'i>(
+    input: &mut CssParser<'i>,
+    padding: bool,
+) -> Result<egui::epaint::MarginF32, ParseError<&'static str>> {
+    let message = if padding {
+        "padding must have one to four nonnegative lengths"
+    } else {
+        "margin must have one to four lengths"
+    };
+    let mut lengths = Vec::with_capacity(4);
     while !input.is_exhausted() {
-        if lengths.len() == 2 {
-            return Err(ParseError::custom(
-                "padding must have one or two nonnegative lengths",
-            ));
+        if lengths.len() == 4 {
+            return Err(ParseError::custom(message));
         }
-        lengths.push(parse_length(
-            input,
-            "padding must have one or two nonnegative lengths",
-        )?);
+        lengths.push(parse_side_length_component(input, padding)?);
     }
     match lengths.as_slice() {
-        [all] => Ok(egui::Vec2::splat(*all)),
-        [vertical, horizontal] => Ok(egui::vec2(*horizontal, *vertical)),
-        _ => Err(ParseError::custom(
-            "padding must have one or two nonnegative lengths",
-        )),
+        [all] => Ok(egui::epaint::MarginF32::same(*all)),
+        [vertical, horizontal] => Ok(egui::epaint::MarginF32::symmetric(*horizontal, *vertical)),
+        [top, horizontal, bottom] => Ok(egui::epaint::MarginF32 {
+            top: *top,
+            right: *horizontal,
+            bottom: *bottom,
+            left: *horizontal,
+        }),
+        [top, right, bottom, left] => Ok(egui::epaint::MarginF32 {
+            top: *top,
+            right: *right,
+            bottom: *bottom,
+            left: *left,
+        }),
+        _ => Err(ParseError::custom(message)),
+    }
+}
+
+fn parse_side_length<'i>(
+    input: &mut CssParser<'i>,
+    nonnegative: bool,
+) -> Result<f32, ParseError<&'static str>> {
+    let message = if nonnegative {
+        "padding sides must be nonnegative lengths"
+    } else {
+        "margin sides must be lengths"
+    };
+    let length = parse_side_length_component(input, nonnegative)?;
+    if input.expect_exhausted().is_err() {
+        Err(ParseError::custom(message))
+    } else {
+        Ok(length)
+    }
+}
+
+fn parse_side_length_component<'i>(
+    input: &mut CssParser<'i>,
+    nonnegative: bool,
+) -> Result<f32, ParseError<&'static str>> {
+    let message = if nonnegative {
+        "padding sides must be nonnegative lengths"
+    } else {
+        "margin sides must be lengths"
+    };
+    let length = match input.next()? {
+        Token::Number { value, .. } => *value,
+        Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => *value,
+        _ => return Err(ParseError::custom(message)),
+    };
+    if !length.is_finite() || (nonnegative && length < 0.0) {
+        Err(ParseError::custom(message))
+    } else {
+        Ok(length)
     }
 }
 

@@ -68,6 +68,48 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
+async fn asymmetric_box_model_is_visible_in_rendered_pixels_test() {
+    let stylesheet = Stylesheet::parse(
+        ".box { padding: 2px 6px 4px 10px; margin: 4px 3px 5px 7px; background-color: #f00; }",
+    )
+    .unwrap();
+    let content_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = content_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let rect_from_widget = rect_from_ui.clone();
+        let content = move |ui: &mut egui::Ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(12.0, 8.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::GREEN);
+            *rect_from_widget.lock().unwrap() = Some(rect);
+            response
+        };
+        ui.add(content.selector(".box"));
+    })
+    .await;
+
+    let rect = content_rect.lock().unwrap().unwrap();
+    let pixel_at = |x: f32, y: f32| {
+        let x = x.floor() as usize;
+        let y = y.floor() as usize;
+        pixels[y * WIDTH as usize + x]
+    };
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let white = [255, 255, 255, 255];
+
+    assert_eq!(pixel_at(rect.center().x, rect.center().y), green);
+    assert_eq!(pixel_at(rect.min.x - 5.5, rect.center().y), red);
+    assert_eq!(pixel_at(rect.max.x + 2.5, rect.center().y), red);
+    assert_eq!(pixel_at(rect.center().x, rect.min.y - 1.5), red);
+    assert_eq!(pixel_at(rect.center().x, rect.max.y + 2.5), red);
+
+    assert_eq!(pixel_at(rect.min.x - 10.0 - 3.5, rect.center().y), white);
+    assert_eq!(pixel_at(rect.max.x + 6.0 + 1.5, rect.center().y), white);
+    assert_eq!(pixel_at(rect.center().x, rect.min.y - 2.0 - 2.5), white);
+    assert_eq!(pixel_at(rect.center().x, rect.max.y + 4.0 + 2.5), white);
+}
+
 macro_rules! rendering_test {
     ($name:ident) => {
         paste::paste! {
@@ -88,6 +130,7 @@ macro_rules! rendering_test {
 
 rendering_test!(installed_white_background_renders_every_pixel_white);
 rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
+rendering_test!(asymmetric_box_model_is_visible_in_rendered_pixels);
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn render_ui_pixels(

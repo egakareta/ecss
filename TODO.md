@@ -13,10 +13,10 @@
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, _~~`cue`~~_, _~~`cue-after`~~_, _~~`cue-before`~~_,
     `cursor`, `direction`, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
     ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`, `left`, `letter-spacing`, `line-height`, `list-style`,
-    `list-style-image`, `list-style-position`, `list-style-type`, `margin`, `margin-bottom`, `margin-left`,
-    `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
-    `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~, `padding-bottom`, `padding-left`,
-    `padding-right`, `padding-top`, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
+    `list-style-image`, `list-style-position`, `list-style-type`, ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~,
+    ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
+    `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
+    ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`,
@@ -84,11 +84,11 @@
 - **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Unsupported.**
   - CSS properties: `chains`, `flow`, `grid`, `grid-template`, `grid-template-areas`, `grid-template-columns`, `grid-template-rows`.
 - **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Unsupported.**
-  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, ~~`padding`~~, `padding-bottom`, `padding-left`,
-    `padding-right`, `padding-top`.
+  - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
+    ~~`padding-right`~~, ~~`padding-top`~~.
 - **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Unsupported.**
-  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `margin-trim`, ~~`padding`~~, `padding-bottom`,
-    `padding-left`, `padding-right`, `padding-top`.
+  - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `margin-trim`, ~~`padding`~~, ~~`padding-bottom`~~,
+    ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~.
 - **[CSS Page Floats](https://www.w3.org/TR/css-page-floats-3/) - Unsupported.**
   - CSS properties: `clear`, `float`, `float-defer`, `float-offset`, `float-reference`.
 - **[CSS Line Layout](https://www.w3.org/TR/css3-linebox/) - Unsupported.**
@@ -405,9 +405,9 @@
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
     `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
-    `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`,
+    ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
-    `padding-bottom`, `padding-left`, `padding-right`, `padding-top`, `page-break-after`, `page-break-before`,
+    ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
     `white-space`, `widows`, `width`, `word-spacing`, `z-index`.
@@ -453,9 +453,9 @@ These property-bearing specifications also appear in the W3C generated property 
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
     `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
-    `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`,
+    ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
-    `padding-bottom`, `padding-left`, `padding-right`, `padding-top`, `page-break-after`, `page-break-before`,
+    ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
     `white-space`, `widows`, `width`, `word-spacing`, `z-index`.
