@@ -5,22 +5,22 @@
 ## Core CSS, syntax, and cascading
 
 - **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Unsupported.**
-  - CSS properties: ~~`azimuth`~~, `background`, `background-attachment`, `background-color`, `background-image`, `background-position`,
+  - CSS properties: _~~`azimuth`~~_, `background`, `background-attachment`, ~~`background-color`~~, `background-image`, `background-position`,
     `background-repeat`, `border`, `border-bottom`, `border-bottom-color`, `border-bottom-style`, `border-bottom-width`,
     `border-collapse`, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
-    `clear`, `clip`, `color`, `content`, `counter-increment`, `counter-reset`, ~~`cue`~~, ~~`cue-after`~~, ~~`cue-before`~~,
-    `cursor`, `direction`, `display`, ~~`elevation`~~, `empty-cells`, `float`, `font`, `font-family`, `font-size`,
-    `font-style`, `font-variant`, `font-weight`, `height`, `left`, `letter-spacing`, `line-height`, `list-style`,
+    `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, _~~`cue`~~_, _~~`cue-after`~~_, _~~`cue-before`~~_,
+    `cursor`, `direction`, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
+    ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, `margin`, `margin-bottom`, `margin-left`,
     `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
-    `outline-color`, `outline-style`, `outline-width`, `overflow`, `padding`, `padding-bottom`, `padding-left`,
-    `padding-right`, `padding-top`, `page-break-after`, `page-break-before`, `page-break-inside`, ~~`pause`~~,
-    ~~`pause-after`~~, ~~`pause-before`~~, ~~`pitch`~~, ~~`pitch-range`~~, ~~`play-during`~~, `position`, `quotes`, ~~`richness`~~, `right`,
-    ~~`speak`~~, ~~`speak-header`~~, ~~`speak-numeral`~~, ~~`speak-punctuation`~~, ~~`speech-rate`~~, ~~`stress`~~, `table-layout`,
+    `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~, `padding-bottom`, `padding-left`,
+    `padding-right`, `padding-top`, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
+    _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
+    _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`,
-    `visibility`, ~~`voice-family`~~, ~~`volume`~~, `white-space`, `widows`, `width`, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
+    `visibility`, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, `width`, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Unsupported.**
@@ -84,10 +84,10 @@
 - **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Unsupported.**
   - CSS properties: `chains`, `flow`, `grid`, `grid-template`, `grid-template-areas`, `grid-template-columns`, `grid-template-rows`.
 - **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Unsupported.**
-  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `padding`, `padding-bottom`, `padding-left`,
+  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, ~~`padding`~~, `padding-bottom`, `padding-left`,
     `padding-right`, `padding-top`.
 - **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Unsupported.**
-  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `margin-trim`, `padding`, `padding-bottom`,
+  - CSS properties: `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `margin-trim`, ~~`padding`~~, `padding-bottom`,
     `padding-left`, `padding-right`, `padding-top`.
 - **[CSS Page Floats](https://www.w3.org/TR/css-page-floats-3/) - Unsupported.**
   - CSS properties: `clear`, `float`, `float-defer`, `float-offset`, `float-reference`.
@@ -177,17 +177,17 @@
 ## Color, backgrounds, images, and effects
 
 - **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Unsupported.**
-  - CSS properties: `background`, `background-attachment`, `background-clip`, `background-color`, `background-image`,
+  - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
     `background-origin`, `background-position`, `background-repeat`, `background-size`, `border`, `border-bottom`,
     `border-bottom-color`, `border-bottom-left-radius`, `border-bottom-right-radius`, `border-bottom-style`,
     `border-bottom-width`, `border-color`, `border-image`, `border-image-outset`, `border-image-repeat`,
     `border-image-slice`, `border-image-source`, `border-image-width`, `border-left`, `border-left-color`,
-    `border-left-style`, `border-left-width`, `border-radius`, `border-right`, `border-right-color`,
+    `border-left-style`, `border-left-width`, ~~`border-radius`~~, `border-right`, `border-right-color`,
     `border-right-style`, `border-right-width`, `border-style`, `border-top`, `border-top-color`,
     `border-top-left-radius`, `border-top-right-radius`, `border-top-style`, `border-top-width`, `border-width`,
     `box-shadow`.
 - **CSS Backgrounds Level 4 - Unsupported.**
-  - CSS properties: `background`, `background-attachment`, `background-clip`, `background-color`, `background-image`,
+  - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
     `background-origin`, `background-position`, `background-position-block`, `background-position-inline`,
     `background-position-x`, `background-position-y`, `background-repeat`, `background-repeat-block`,
     `background-repeat-inline`, `background-repeat-x`, `background-repeat-y`, `background-size`, `background-tbd`.
@@ -205,7 +205,7 @@
     `border-inline-start-clip`, `border-inline-start-color`, `border-inline-start-radius`, `border-inline-start-style`,
     `border-inline-start-width`, `border-inline-style`, `border-inline-width`, `border-left`, `border-left-clip`,
     `border-left-color`, `border-left-radius`, `border-left-style`, `border-left-width`, `border-limit`,
-    `border-radius`, `border-right`, `border-right-clip`, `border-right-color`, `border-right-radius`,
+    ~~`border-radius`~~, `border-right`, `border-right-clip`, `border-right-color`, `border-right-radius`,
     `border-right-style`, `border-right-width`, `border-shape`, `border-start-end-radius`, `border-start-start-radius`,
     `border-style`, `border-top`, `border-top-clip`, `border-top-color`, `border-top-left-radius`, `border-top-radius`,
     `border-top-right-radius`, `border-top-style`, `border-top-width`, `border-width`, `box-shadow`, `box-shadow-blur`,
@@ -221,9 +221,9 @@
   - CSS properties: `box-sizing`, `caret-color`, `cursor`, `outline`, `outline-color`, `outline-offset`, `outline-style`,
     `outline-width`, `resize`, `text-overflow`.
 - **[CSS Color](https://www.w3.org/TR/css3-color/) - Unsupported.**
-  - CSS properties: `color`, `opacity`.
+  - CSS properties: ~~`color`~~, `opacity`.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**
-  - CSS properties: `color`, `opacity`.
+  - CSS properties: ~~`color`~~, `opacity`.
 - **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Unsupported.**
   - CSS properties: `image-orientation`, `image-rendering`, `object-fit`, `object-position`.
 - **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Unsupported.**
@@ -268,9 +268,9 @@
 ## Text, fonts, and generated content
 
 - **[CSS Fonts Level 3](https://www.w3.org/TR/css3-fonts/) - Unsupported.**
-  - CSS properties: `font`, `font-family`, `font-feature-settings`, `font-kerning`, `font-size`, `font-size-adjust`, `font-stretch`,
-    `font-style`, `font-synthesis`, `font-variant`, `font-variant-caps`, `font-variant-east-asian`,
-    `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, `font-weight`.
+  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, `font-size`, `font-size-adjust`, `font-stretch`,
+    ~~`font-style`~~, `font-synthesis`, `font-variant`, `font-variant-caps`, `font-variant-east-asian`,
+    `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, ~~`font-weight`~~.
 - **[CSS Generated Content for Paged Media](https://www.w3.org/TR/css3-gcpm/) - Unsupported.**
   - CSS properties: `footnote-display`, `footnote-policy`, `running`, `string-set`.
 - **[CSS Hyperlink Presentation](https://www.w3.org/TR/css3-hyperlinks/) - Unsupported.**
@@ -313,11 +313,11 @@
     `text-wrap`, `text-wrap-mode`, `text-wrap-style`, `white-space`, `white-space-collapse`, `white-space-trim`,
     `word-break`, `word-space-transform`, `word-spacing`, `wrap-after`, `wrap-before`, `wrap-inside`.
 - **[Fonts Level 4](https://www.w3.org/TR/css-fonts-4/) - Unsupported.**
-  - CSS properties: `font`, `font-family`, `font-feature-settings`, `font-kerning`, `font-language-override`, `font-optical-sizing`,
-    `font-palette`, `font-size`, `font-size-adjust`, `font-style`, `font-synthesis`, `font-synthesis-position`,
+  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, `font-language-override`, `font-optical-sizing`,
+    `font-palette`, `font-size`, `font-size-adjust`, ~~`font-style`~~, `font-synthesis`, `font-synthesis-position`,
     `font-synthesis-small-caps`, `font-synthesis-style`, `font-synthesis-weight`, `font-variant`,
     `font-variant-alternates`, `font-variant-caps`, `font-variant-east-asian`, `font-variant-emoji`,
-    `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, `font-variation-settings`, `font-weight`,
+    `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, `font-variation-settings`, ~~`font-weight`~~,
     `font-width`.
 - **[Fonts Level 5](https://www.w3.org/TR/css-fonts-5/) - Unsupported.**
   - CSS properties: `font-size-adjust`.
@@ -397,16 +397,16 @@
 ## Profiles, snapshots, and historical specifications
 
 - **[Preview of CSS 2.2](https://www.w3.org/TR/CSS22/) - Unsupported.**
-  - CSS properties: `background`, `background-attachment`, `background-color`, `background-image`, `background-position`,
+  - CSS properties: `background`, `background-attachment`, ~~`background-color`~~, `background-image`, `background-position`,
     `background-repeat`, `border`, `border-bottom`, `border-bottom-color`, `border-bottom-style`, `border-bottom-width`,
     `border-collapse`, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
-    `clear`, `clip`, `color`, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, `font-family`, `font-size`, `font-style`, `font-variant`, `font-weight`, `height`,
+    `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`,
-    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, `padding`,
+    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     `padding-bottom`, `padding-left`, `padding-right`, `padding-top`, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
@@ -445,16 +445,16 @@ These property-bearing specifications also appear in the W3C generated property 
 ### Core CSS, syntax, and cascading
 
 - **Cascading Style Sheets Level 2 Revision 1 (CSS 2.1) Specification - Unsupported.**
-  - CSS properties: `background`, `background-attachment`, `background-color`, `background-image`, `background-position`,
+  - CSS properties: `background`, `background-attachment`, ~~`background-color`~~, `background-image`, `background-position`,
     `background-repeat`, `border`, `border-bottom`, `border-bottom-color`, `border-bottom-style`, `border-bottom-width`,
     `border-collapse`, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
-    `clear`, `clip`, `color`, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, `font-family`, `font-size`, `font-style`, `font-variant`, `font-weight`, `height`,
+    `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     `margin`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `max-height`, `max-width`, `min-height`,
-    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, `padding`,
+    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     `padding-bottom`, `padding-left`, `padding-right`, `padding-top`, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
@@ -478,7 +478,7 @@ These property-bearing specifications also appear in the W3C generated property 
     `border-inline-start-clip`, `border-inline-start-color`, `border-inline-start-radius`, `border-inline-start-style`,
     `border-inline-start-width`, `border-inline-style`, `border-inline-width`, `border-left`, `border-left-clip`,
     `border-left-color`, `border-left-radius`, `border-left-style`, `border-left-width`, `border-limit`,
-    `border-radius`, `border-right`, `border-right-clip`, `border-right-color`, `border-right-radius`,
+    ~~`border-radius`~~, `border-right`, `border-right-clip`, `border-right-color`, `border-right-radius`,
     `border-right-style`, `border-right-width`, `border-shape`, `border-start-end-radius`, `border-start-start-radius`,
     `border-style`, `border-top`, `border-top-clip`, `border-top-color`, `border-top-left-radius`, `border-top-radius`,
     `border-top-right-radius`, `border-top-style`, `border-top-width`, `border-width`, `box-shadow`, `box-shadow-blur`,
