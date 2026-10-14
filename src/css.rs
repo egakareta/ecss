@@ -37,6 +37,8 @@ pub(crate) enum Declaration {
     PaddingSide(Side, f32),
     Margin(egui::epaint::MarginF32),
     MarginSide(Side, f32),
+    Width(SizeValue),
+    Height(SizeValue),
     BorderRadius(u8),
     FontFamily(Vec<String>),
     FontWeight(u16),
@@ -52,17 +54,39 @@ pub(crate) enum Side {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BoxSpacing {
+pub(crate) enum SizeValue {
+    Auto,
+    Length(f32),
+    Percentage(f32),
+}
+
+impl SizeValue {
+    pub(crate) fn resolve(self, available: f32) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Length(length) => Some(length),
+            Self::Percentage(fraction) if available.is_finite() => Some(available * fraction),
+            Self::Percentage(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BoxStyle {
     pub(crate) padding: egui::epaint::MarginF32,
     pub(crate) margin: egui::epaint::MarginF32,
+    pub(crate) width: Option<SizeValue>,
+    pub(crate) height: Option<SizeValue>,
     pub(crate) has_padding: bool,
     pub(crate) has_margin: bool,
     pub(crate) has_background: [bool; 3],
 }
 
-pub(crate) fn box_spacing_for_target(rules: &[Rule], class: Option<&str>) -> BoxSpacing {
+pub(crate) fn box_style_for_target(rules: &[Rule], class: Option<&str>) -> BoxStyle {
     let mut padding = egui::epaint::MarginF32::ZERO;
     let mut margin = egui::epaint::MarginF32::ZERO;
+    let mut width = None;
+    let mut height = None;
     let mut has_padding = false;
     let mut has_margin = false;
     let mut has_background = [false; 3];
@@ -85,6 +109,10 @@ pub(crate) fn box_spacing_for_target(rules: &[Rule], class: Option<&str>) -> Box
                 Declaration::MarginSide(side, value) if rule.state == RuleState::Base => {
                     set_side(&mut margin, *side, *value);
                     has_margin = true;
+                }
+                Declaration::Width(value) if rule.state == RuleState::Base => width = Some(*value),
+                Declaration::Height(value) if rule.state == RuleState::Base => {
+                    height = Some(*value);
                 }
                 Declaration::Background(_) => {
                     has_background[match rule.state {
@@ -109,9 +137,11 @@ pub(crate) fn box_spacing_for_target(rules: &[Rule], class: Option<&str>) -> Box
         }
     }
 
-    BoxSpacing {
+    BoxStyle {
         padding,
         margin,
+        width,
+        height,
         has_padding,
         has_margin,
         has_background,
@@ -385,6 +415,10 @@ impl<'i> DeclarationParser<'i> for Declarations {
                 Side::Left,
                 parse_side_length(input, false)?,
             ))
+        } else if name.eq_ignore_ascii_case("width") {
+            Some(Declaration::Width(parse_size_value(input)?))
+        } else if name.eq_ignore_ascii_case("height") {
+            Some(Declaration::Height(parse_size_value(input)?))
         } else if name.eq_ignore_ascii_case("border-radius") {
             let radius = parse_length(input, "unsupported border radius")?;
             Some(Declaration::BorderRadius(
@@ -502,6 +536,29 @@ fn parse_length<'i>(
         Ok(length)
     } else {
         Err(ParseError::custom(message))
+    }
+}
+
+fn parse_size_value<'i>(input: &mut CssParser<'i>) -> Result<SizeValue, ParseError<&'static str>> {
+    let value = match input.next()? {
+        Token::Ident(value) if value.eq_ignore_ascii_case("auto") => SizeValue::Auto,
+        Token::Number { value, .. } => SizeValue::Length(*value),
+        Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => {
+            SizeValue::Length(*value)
+        }
+        Token::Percentage { unit_value, .. } => SizeValue::Percentage(*unit_value),
+        _ => return Err(ParseError::custom("unsupported size value")),
+    };
+    let nonnegative = match value {
+        SizeValue::Auto => true,
+        SizeValue::Length(value) | SizeValue::Percentage(value) => {
+            value.is_finite() && value >= 0.0
+        }
+    };
+    if !nonnegative || input.expect_exhausted().is_err() {
+        Err(ParseError::custom("unsupported size value"))
+    } else {
+        Ok(value)
     }
 }
 

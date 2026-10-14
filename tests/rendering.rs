@@ -140,6 +140,61 @@ async fn asymmetric_box_model_is_visible_in_rendered_pixels_test() {
     assert_eq!(pixel_at(rect.center().x, rect.max.y + 4.0 + 2.5), white);
 }
 
+async fn percentage_and_auto_sizes_affect_styled_widget_bounds_test() {
+    let stylesheet = Stylesheet::parse(
+        ".percentage { width: 50%; height: 50%; background-color: #f00; }\
+         .automatic { width: auto; height: auto; }\
+         .fixed { width: 24px; height: 16px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let bounds_from_ui = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let available_rect = ui.available_rect_before_wrap();
+        let inner_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let make_box = || {
+            let inner_rects = inner_rects.clone();
+            move |ui: &mut egui::Ui| {
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(12.0, 8.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::GREEN);
+                inner_rects.lock().unwrap().push(rect);
+                response
+            }
+        };
+
+        let percentage = ui.add(make_box().selector(".percentage"));
+        let automatic = ui.add(make_box().selector(".automatic"));
+        let fixed = ui.add(make_box().selector(".fixed"));
+        *bounds_from_ui.lock().unwrap() = Some((
+            available_rect,
+            percentage.rect,
+            automatic.rect,
+            fixed.rect,
+            inner_rects.lock().unwrap().clone(),
+        ));
+    })
+    .await;
+
+    let (available_rect, percentage, automatic, fixed, inner_rects) =
+        bounds.lock().unwrap().take().unwrap();
+    assert_eq!(percentage.width(), available_rect.width() * 0.5);
+    assert_eq!(percentage.height(), available_rect.height() * 0.5);
+    assert_eq!(automatic.size(), egui::vec2(12.0, 8.0));
+    assert_eq!(fixed.size(), egui::vec2(24.0, 16.0));
+
+    let pixel_at =
+        |x: f32, y: f32| pixels[y.floor() as usize * WIDTH as usize + x.floor() as usize];
+    assert_eq!(
+        pixel_at(inner_rects[0].center().x, inner_rects[0].center().y),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel_at(percentage.max.x - 4.0, percentage.max.y - 4.0),
+        [255, 0, 0, 255]
+    );
+}
+
 macro_rules! rendering_test {
     ($name:ident) => {
         paste::paste! {
@@ -162,6 +217,7 @@ rendering_test!(installed_white_background_renders_every_pixel_white);
 rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
 rendering_test!(button_frame_stroke_tracks_the_css_padding_box);
 rendering_test!(asymmetric_box_model_is_visible_in_rendered_pixels);
+rendering_test!(percentage_and_auto_sizes_affect_styled_widget_bounds);
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn render_ui_pixels(

@@ -12,7 +12,7 @@
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, _~~`cue`~~_, _~~`cue-after`~~_, _~~`cue-before`~~_,
     `cursor`, `direction`, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
-    ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`, `left`, `letter-spacing`, `line-height`, `list-style`,
+    ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~,
     ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
     `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
@@ -20,7 +20,7 @@
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`,
-    `visibility`, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, `width`, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
+    `visibility`, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Unsupported.**
@@ -135,8 +135,8 @@
   - CSS properties: `align-content`, `align-items`, `align-self`, `justify-content`, `justify-items`, `justify-self`, `place-content`,
     `place-items`, `place-self`.
 - **[CSS Intrinsic & Extrinsic Sizing Module Level 3](https://www.w3.org/TR/css3-sizing/) - Unsupported.**
-  - CSS properties: `block-size`, `box-sizing`, `height`, `inline-size`, `max-block-size`, `max-height`, `max-inline-size`, `max-width`,
-    `min-block-size`, `min-height`, `min-inline-size`, `min-width`, `width`.
+  - CSS properties: `block-size`, `box-sizing`, ~~`height`~~, `inline-size`, `max-block-size`, `max-height`, `max-inline-size`, `max-width`,
+    `min-block-size`, `min-height`, `min-inline-size`, `min-width`, ~~`width`~~.
 - **[CSS Box Sizing Module Level 4](https://www.w3.org/TR/css-sizing-4/) - Unsupported.**
   - CSS properties: `aspect-ratio`, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
     `contain-intrinsic-size`, `contain-intrinsic-width`, `frame-sizing`, `max-size`, `min-intrinsic-sizing`, `min-size`,
@@ -403,14 +403,14 @@
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
-    `white-space`, `widows`, `width`, `word-spacing`, `z-index`.
+    `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **[CSS Snapshot 2007](https://www.w3.org/TR/css-beijing/) - Unsupported.**
 - **[CSS Snapshot 2010](https://www.w3.org/TR/css-2010/) - Unsupported.**
 - **[CSS Snapshot 2015](https://www.w3.org/TR/css-2015/) - Unsupported.**
@@ -451,14 +451,14 @@ These property-bearing specifications also appear in the W3C generated property 
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, `height`,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
-    `white-space`, `widows`, `width`, `word-spacing`, `z-index`.
+    `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **CSS Form Control Styling Level 1 - Unsupported.**
   - CSS properties: `field-sizing`, `input-security`, `slider-orientation`.
 

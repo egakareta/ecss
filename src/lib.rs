@@ -94,11 +94,12 @@ impl Stylesheet {
     /// Parses universal and class rules from CSS text and starts background font loading.
     ///
     /// Supported selectors are `*`, `.class`, `.class:hover`, and `.class:active`.
-    /// Supported declarations are `color`, `background-color`, `padding` and its
-    /// physical sides, `margin` and its physical sides, `border-radius`,
-    /// `font-family`, `font-weight`, and `font-style`. Box-model lengths are
-    /// interpreted as egui points and applied per side to selector-wrapped
-    /// widgets. Unknown declarations are ignored.
+    /// Supported declarations are `color`, `background-color`, `width`, `height`,
+    /// `padding` and its physical sides, `margin` and its physical sides,
+    /// `border-radius`, `font-family`, `font-weight`, and `font-style`. Box-model
+    /// lengths are interpreted as egui points. On selector-wrapped widgets,
+    /// widths and heights accept lengths, percentages of the available UI area,
+    /// and `auto` (natural egui sizing). Unknown declarations are ignored.
     pub fn parse(source: &str) -> Result<Self, CssError> {
         let stylesheet = Self::parse_unloaded(source)?;
         stylesheet.start_font_load();
@@ -210,14 +211,14 @@ impl Stylesheet {
                     apply_style_declarations(style, state, &rule.declarations);
                 }
             }
-            let box_spacing = css_box_spacing(&self.rules, None);
-            if box_spacing.has_padding {
+            let box_style = css_box_style(&self.rules, None);
+            if box_style.has_padding {
                 // Unwrapped widgets only expose symmetric per-axis spacing.
-                style.spacing.button_padding = symmetric_spacing(box_spacing.padding);
+                style.spacing.button_padding = symmetric_spacing(box_style.padding);
             }
-            if box_spacing.has_margin {
+            if box_style.has_margin {
                 style.spacing.item_spacing =
-                    egui::vec2(8.0, 4.0) + symmetric_spacing(box_spacing.margin);
+                    egui::vec2(8.0, 4.0) + symmetric_spacing(box_style.margin);
             }
         });
 
@@ -308,11 +309,11 @@ impl<W: Widget> Widget for StyledWidget<W> {
             }
         }
 
-        let class_box_spacing = css_box_spacing(&stylesheet.rules, Some(&class));
-        if class_box_spacing.has_padding {
+        let class_box_style = css_box_style(&stylesheet.rules, Some(&class));
+        if class_box_style.has_padding {
             ui.style_mut().spacing.button_padding = egui::Vec2::ZERO;
         }
-        if class_box_spacing.has_margin {
+        if class_box_style.has_margin {
             ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 4.0);
         }
 
@@ -327,7 +328,7 @@ impl<W: Widget> Widget for StyledWidget<W> {
         }
 
         let available_rect = ui.available_rect_before_wrap();
-        let content_insets = class_box_spacing.padding + class_box_spacing.margin;
+        let content_insets = class_box_style.padding + class_box_style.margin;
         let mut content_rect = available_rect - content_insets;
         if content_rect.max.x < content_rect.min.x {
             content_rect.max.x = content_rect.min.x;
@@ -335,9 +336,23 @@ impl<W: Widget> Widget for StyledWidget<W> {
         if content_rect.max.y < content_rect.min.y {
             content_rect.max.y = content_rect.min.y;
         }
+        let width = class_box_style
+            .width
+            .and_then(|width| width.resolve(available_rect.width()));
+        let height = class_box_style
+            .height
+            .and_then(|height| height.resolve(available_rect.height()));
+        if let Some(width) = width {
+            content_rect.max.x = content_rect.min.x + width;
+        }
+        if let Some(height) = height {
+            content_rect.max.y = content_rect.min.y + height;
+        }
 
-        let box_shape = (class_box_spacing.has_padding
-            || class_box_spacing
+        let box_shape = (class_box_style.has_padding
+            || width.is_some()
+            || height.is_some()
+            || class_box_style
                 .has_background
                 .iter()
                 .any(|applies| *applies))
@@ -355,10 +370,16 @@ impl<W: Widget> Widget for StyledWidget<W> {
                 .get(layer_id)
                 .map_or(egui::layers::ShapeIdx(0), |list| list.next_idx())
         });
-        let border_rect = response.rect + class_box_spacing.padding;
-        let outer_rect = nonnegative_rect(border_rect + class_box_spacing.margin);
-        let frame_stroke = class_box_spacing
-            .has_padding
+        let content_rect = egui::Rect::from_min_size(
+            response.rect.min,
+            egui::vec2(
+                width.unwrap_or(response.rect.width()),
+                height.unwrap_or(response.rect.height()),
+            ),
+        );
+        let border_rect = content_rect + class_box_style.padding;
+        let outer_rect = nonnegative_rect(border_rect + class_box_style.margin);
+        let frame_stroke = (class_box_style.has_padding || width.is_some() || height.is_some())
             .then(|| {
                 take_widget_frame_stroke(ui.ctx(), layer_id, shape_start, shape_end, response.rect)
             })
@@ -368,15 +389,15 @@ impl<W: Widget> Widget for StyledWidget<W> {
 
         if let Some(box_shape) = box_shape {
             let state = response.widget_state();
-            let background_applies = class_box_spacing.has_background[match state {
+            let background_applies = class_box_style.has_background[match state {
                 egui::widget_style::WidgetState::Hovered => 1,
                 egui::widget_style::WidgetState::Active => 2,
                 egui::widget_style::WidgetState::Inactive
                 | egui::widget_style::WidgetState::Noninteractive => 0,
-            }] || class_box_spacing.has_background[0];
+            }] || class_box_style.has_background[0];
             let visuals = content_ui.style().visuals.widgets.state(state);
             if background_applies || frame_stroke.is_some() {
-                let fill = if background_applies {
+                let fill = if background_applies || width.is_some() || height.is_some() {
                     visuals.weak_bg_fill
                 } else {
                     Color32::TRANSPARENT
@@ -616,8 +637,8 @@ fn apply_declarations(ui: &mut Ui, state: RuleState, declarations: &[Declaration
     apply_style_declarations(ui.style_mut(), state, declarations);
 }
 
-fn css_box_spacing(rules: &[Rule], class: Option<&str>) -> css::BoxSpacing {
-    css::box_spacing_for_target(rules, class)
+fn css_box_style(rules: &[Rule], class: Option<&str>) -> css::BoxStyle {
+    css::box_style_for_target(rules, class)
 }
 
 fn symmetric_spacing(edges: egui::epaint::MarginF32) -> egui::Vec2 {
@@ -707,6 +728,8 @@ fn apply_style_declarations(
                 | Declaration::PaddingSide(_, _)
                 | Declaration::Margin(_)
                 | Declaration::MarginSide(_, _)
+                | Declaration::Width(_)
+                | Declaration::Height(_)
         ) {
             continue;
         }
@@ -744,6 +767,8 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         | Declaration::PaddingSide(_, _)
         | Declaration::Margin(_)
         | Declaration::MarginSide(_, _)
+        | Declaration::Width(_)
+        | Declaration::Height(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_) => {}
