@@ -13,41 +13,75 @@
 //! # }
 //! ```
 
-use std::{error::Error, fmt, path::Path, sync::Arc};
+use std::{
+    error::Error,
+    fmt,
+    future::Future,
+    path::Path,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
+use css::{Declaration, Rule, RuleState};
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
 use fonts::{FontAssets, FontRequest};
 
+mod css;
 mod fonts;
 
 const STYLESHEET_ID: &str = "trcss.stylesheet";
 const BACKGROUND_ID: &str = "trcss.background";
 
-/// A parsed stylesheet containing supported class rules.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_background<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let _ = std::thread::Builder::new()
+        .name("trcss-font-loader".to_owned())
+        .spawn(move || pollster::block_on(future))
+        .expect("failed to start font loader");
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_background<F>(future: F)
+where
+    F: Future<Output = ()> + 'static,
+{
+    ehttp::spawn_future(future);
+}
+
+/// A parsed stylesheet containing supported universal and class rules.
 #[derive(Clone, Debug, Default)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
     imports: Vec<String>,
-    fonts: FontAssets,
+    fonts: Arc<RwLock<FontAssets>>,
+    font_revision: Arc<AtomicU64>,
 }
 
 impl Stylesheet {
-    /// Reads and parses a stylesheet from a UTF-8 CSS file without fetching imports.
+    /// Reads and parses a UTF-8 CSS file, then loads imported fonts in the background.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, CssFileError> {
         let source = std::fs::read_to_string(path).map_err(CssFileError::Read)?;
         Self::parse(&source).map_err(CssFileError::Parse)
     }
 
-    /// Parses a stylesheet and asynchronously loads fonts referenced by `@import`.
+    /// Parses CSS synchronously and loads fonts referenced by `@import` in the background.
     ///
     /// Imported stylesheets must contain supported `@font-face` rules. TTF, OTF,
     /// WOFF, and WOFF2 font files are supported. Network access is required for
-    /// remote imports.
+    /// remote imports. Loaded fonts update contexts where this stylesheet is
+    /// installed. Font loading errors are ignored; use [`Stylesheet::load`] to
+    /// wait for fonts and receive loading errors.
     pub async fn load(source: &str) -> Result<Self, StylesheetLoadError> {
-        let mut stylesheet = Self::parse(source).map_err(StylesheetLoadError::Parse)?;
+        let stylesheet = Self::parse_unloaded(source).map_err(StylesheetLoadError::Parse)?;
         let imports = stylesheet.imports.clone();
         let requests = stylesheet.font_requests();
-        stylesheet.fonts = FontAssets::load(&imports, &requests).await?;
+        let fonts = FontAssets::load(&imports, &requests).await?;
+        stylesheet.replace_fonts(fonts);
         Ok(stylesheet)
     }
 
@@ -57,85 +91,52 @@ impl Stylesheet {
         Self::load(&source).await
     }
 
-    /// Parses class rules from CSS text.
+    /// Parses universal and class rules from CSS text and starts background font loading.
     ///
-    /// Supported selectors are `.class`, `.class:hover`, and `.class:active`.
+    /// Supported selectors are `*`, `.class`, `.class:hover`, and `.class:active`.
     /// Supported declarations are `color`, `background-color`, `padding`,
     /// `border-radius`, `font-family`, `font-weight`, and `font-style`. Lengths
     /// are interpreted as egui points. Unknown declarations are ignored.
     pub fn parse(source: &str) -> Result<Self, CssError> {
-        let source = remove_comments(source)?;
-        let mut rules = Vec::new();
-        let mut imports = Vec::new();
-        let mut offset = 0;
+        let stylesheet = Self::parse_unloaded(source)?;
+        stylesheet.start_font_load();
+        Ok(stylesheet)
+    }
 
-        while offset < source.len() {
-            let remaining = &source[offset..];
-            let leading_whitespace = remaining.len() - remaining.trim_start().len();
-            offset += leading_whitespace;
-            if offset == source.len() {
-                break;
-            }
-
-            let remaining = &source[offset..];
-            if remaining.starts_with("@import") {
-                let Some(end) = find_statement_end(remaining) else {
-                    return Err(CssError::new(&source, offset, "expected `;` after import"));
-                };
-                let import = parse_import_url(&remaining[..end])
-                    .ok_or_else(|| CssError::new(&source, offset, "unsupported import rule"))?;
-                imports.push(import);
-                offset += end + 1;
-                continue;
-            }
-
-            let Some(open_brace) = remaining.find('{') else {
-                return Err(CssError::new(
-                    &source,
-                    offset,
-                    "expected `{` after selector",
-                ));
-            };
-            let Some(close_relative) = remaining[open_brace + 1..].find('}') else {
-                return Err(CssError::new(
-                    &source,
-                    offset + open_brace,
-                    "expected `}` to close rule",
-                ));
-            };
-
-            let selector_offset = offset;
-            let selector = remaining[..open_brace].trim();
-            let body_offset = offset + open_brace + 1;
-            let body = &remaining[open_brace + 1..open_brace + 1 + close_relative];
-            if body.contains('{') {
-                return Err(CssError::new(
-                    &source,
-                    body_offset,
-                    "nested rules are unsupported",
-                ));
-            }
-
-            let declarations = parse_declarations(&source, body, body_offset)?;
-            for selector in selector.split(',') {
-                let (class, state) = parse_selector(selector.trim()).ok_or_else(|| {
-                    CssError::new(&source, selector_offset, "unsupported class selector")
-                })?;
-                rules.push(Rule {
-                    class: class.to_owned(),
-                    state,
-                    declarations: declarations.clone(),
-                });
-            }
-
-            offset += open_brace + 1 + close_relative + 1;
-        }
-
+    fn parse_unloaded(source: &str) -> Result<Self, CssError> {
+        let (rules, imports) = css::parse(source)?;
         Ok(Self {
             rules,
             imports,
-            fonts: FontAssets::default(),
+            fonts: Arc::default(),
+            font_revision: Arc::default(),
         })
+    }
+
+    fn start_font_load(&self) {
+        let imports = self.imports.clone();
+        let requests = self.font_requests();
+        if imports.is_empty() || requests.is_empty() {
+            return;
+        }
+
+        let fonts = self.fonts.clone();
+        let font_revision = self.font_revision.clone();
+        spawn_background(async move {
+            if let Ok(loaded_fonts) = FontAssets::load(&imports, &requests).await
+                && let Ok(mut fonts) = fonts.write()
+            {
+                *fonts = loaded_fonts;
+                font_revision.fetch_add(1, Ordering::Release);
+            }
+        });
+    }
+
+    fn replace_fonts(&self, loaded_fonts: FontAssets) {
+        if let Ok(mut fonts) = self.fonts.write() {
+            *fonts = loaded_fonts;
+            self.font_revision.fetch_add(1, Ordering::Release);
+        }
     }
 
     fn font_requests(&self) -> Vec<FontRequest> {
@@ -145,25 +146,40 @@ impl Stylesheet {
             .iter()
             .filter(|rule| rule.state == RuleState::Base)
         {
-            if !classes.contains(&rule.class) {
-                classes.push(rule.class.clone());
+            if let Some(class) = &rule.class
+                && !classes.contains(class)
+            {
+                classes.push(class.clone());
             }
         }
 
-        classes
+        self.font_request_for_target(None)
             .into_iter()
-            .filter_map(|class| self.font_request_for_class(&class))
+            .chain(
+                classes
+                    .into_iter()
+                    .filter_map(|class| self.font_request_for_class(&class)),
+            )
             .collect()
     }
 
     fn font_request_for_class(&self, class: &str) -> Option<FontRequest> {
+        self.font_request_for_target(Some(class))
+    }
+
+    fn font_request_for_target(&self, class: Option<&str>) -> Option<FontRequest> {
         let mut families = None;
         let mut weight = 400;
         let mut italic = false;
-        for declaration in self
+        let global_rules = self
             .rules
             .iter()
-            .filter(|rule| rule.class == class && rule.state == RuleState::Base)
+            .filter(|rule| rule.class.is_none() && rule.state == RuleState::Base);
+        let class_rules = self.rules.iter().filter(|rule| {
+            rule.class.is_some() && rule.class.as_deref() == class && rule.state == RuleState::Base
+        });
+        for declaration in global_rules
+            .chain(class_rules)
             .flat_map(|rule| &rule.declarations)
         {
             match declaration {
@@ -181,7 +197,18 @@ impl Stylesheet {
     }
 
     fn apply_w3c_defaults(&self, context: &egui::Context) {
-        context.all_styles_mut(apply_w3c_defaults);
+        context.all_styles_mut(|style| {
+            apply_w3c_defaults(style);
+            for state in [RuleState::Base, RuleState::Hovered, RuleState::Active] {
+                for rule in self
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.class.is_none() && rule.state == state)
+                {
+                    apply_style_declarations(style, state, &rule.declarations);
+                }
+            }
+        });
 
         let background_registered = context
             .data(|data| data.get_temp::<bool>(Id::new(BACKGROUND_ID)))
@@ -205,12 +232,17 @@ impl Stylesheet {
 
     /// Installs this stylesheet on an egui context for selector-wrapped widgets to use.
     pub fn install(&self, context: &egui::Context) {
-        self.fonts.install(context);
         self.apply_w3c_defaults(context);
         let stylesheet = Arc::new(self.clone());
         context.data_mut(|data| {
             data.insert_temp(Id::new(STYLESHEET_ID), stylesheet);
         });
+        FontAssets::install_shared(
+            self.fonts.clone(),
+            self.font_revision.clone(),
+            self.font_request_for_target(None),
+            context,
+        );
     }
 }
 
@@ -241,7 +273,7 @@ pub struct StyledWidget<W> {
 impl<W: Widget> Widget for StyledWidget<W> {
     fn ui(self, ui: &mut Ui) -> Response {
         let Self { widget, selector } = self;
-        let Some(class) = selector_class(&selector) else {
+        let Some(class) = css::selector_class(&selector) else {
             return widget.ui(ui);
         };
 
@@ -257,17 +289,16 @@ impl<W: Widget> Widget for StyledWidget<W> {
             for rule in stylesheet
                 .rules
                 .iter()
-                .filter(|rule| rule.class == class && rule.state == state)
+                .filter(|rule| rule.class.as_deref() == Some(class.as_str()) && rule.state == state)
             {
                 apply_declarations(ui, state, &rule.declarations);
             }
         }
 
-        if let Some(request) = stylesheet.font_request_for_class(class)
-            && let Some(family) =
-                stylesheet
-                    .fonts
-                    .family(ui.ctx(), &request.families, request.weight, request.italic)
+        if let Some(request) = stylesheet.font_request_for_class(&class)
+            && let Some(family) = stylesheet.fonts.read().ok().and_then(|fonts| {
+                fonts.family(ui.ctx(), &request.families, request.weight, request.italic)
+            })
         {
             for font_id in ui.style_mut().text_styles.values_mut() {
                 font_id.family = family.clone();
@@ -289,13 +320,9 @@ pub struct CssError {
 }
 
 impl CssError {
-    fn new(source: &str, offset: usize, message: &'static str) -> Self {
+    pub(crate) fn at_line(line: u32, message: &'static str) -> Self {
         Self {
-            line: source[..offset]
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count()
-                + 1,
+            line: line as usize + 1,
             message,
         }
     }
@@ -385,282 +412,6 @@ impl Error for CssFileError {
             Self::Read(error) => Some(error),
             Self::Parse(error) => Some(error),
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Rule {
-    class: String,
-    state: RuleState,
-    declarations: Vec<Declaration>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RuleState {
-    Base,
-    Hovered,
-    Active,
-}
-
-#[derive(Clone, Debug)]
-enum Declaration {
-    Color(Color32),
-    Background(Color32),
-    Padding(egui::Vec2),
-    BorderRadius(u8),
-    FontFamily(Vec<String>),
-    FontWeight(u16),
-    FontStyle(bool),
-}
-
-fn remove_comments(source: &str) -> Result<String, CssError> {
-    let mut bytes = source.as_bytes().to_vec();
-    let mut offset = 0;
-    while let Some(start_relative) = bytes[offset..].windows(2).position(|pair| pair == b"/*") {
-        let start = offset + start_relative;
-        let Some(end_relative) = bytes[start + 2..].windows(2).position(|pair| pair == b"*/")
-        else {
-            return Err(CssError::new(source, start, "unterminated comment"));
-        };
-        let end = start + 2 + end_relative + 2;
-        for byte in &mut bytes[start..end] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
-        offset = end;
-    }
-    Ok(String::from_utf8(bytes).expect("replacing comment bytes preserves UTF-8"))
-}
-
-fn parse_import_url(rule: &str) -> Option<String> {
-    let value = rule.strip_prefix("@import")?.trim();
-    let value = if let Some(value) = value.strip_prefix("url(") {
-        let end = value.find(')')?;
-        value[..end].trim()
-    } else {
-        value.split_whitespace().next()?
-    };
-    let value = parse_css_string(value)?;
-    (!value.is_empty()).then_some(value)
-}
-
-fn find_statement_end(source: &str) -> Option<usize> {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut parentheses = 0_usize;
-    for (offset, character) in source.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' {
-            escaped = true;
-            continue;
-        }
-        if let Some(active_quote) = quote {
-            if character == active_quote {
-                quote = None;
-            }
-            continue;
-        }
-        match character {
-            '\'' | '"' => quote = Some(character),
-            '(' => parentheses += 1,
-            ')' => parentheses = parentheses.saturating_sub(1),
-            ';' if parentheses == 0 => return Some(offset),
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_css_string(value: &str) -> Option<String> {
-    let value = value.trim();
-    let quote = value.as_bytes().first().copied()?;
-    if (quote == b'\'' || quote == b'"') && value.as_bytes().last() == Some(&quote) {
-        Some(value[1..value.len() - 1].to_owned())
-    } else if !value.is_empty() {
-        Some(value.to_owned())
-    } else {
-        None
-    }
-}
-
-fn parse_selector(selector: &str) -> Option<(&str, RuleState)> {
-    let selector = selector.strip_prefix('.')?;
-    let (class, state) = match selector.split_once(':') {
-        Some((class, "hover")) => (class, RuleState::Hovered),
-        Some((class, "active")) => (class, RuleState::Active),
-        Some(_) => return None,
-        None => (selector, RuleState::Base),
-    };
-    if class.is_empty()
-        || !class
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
-        return None;
-    }
-    Some((class, state))
-}
-
-fn selector_class(selector: &str) -> Option<&str> {
-    let (class, state) = parse_selector(selector.trim())?;
-    (state == RuleState::Base).then_some(class)
-}
-
-fn parse_declarations(
-    source: &str,
-    body: &str,
-    body_offset: usize,
-) -> Result<Vec<Declaration>, CssError> {
-    let mut declarations = Vec::new();
-    let mut offset = body_offset;
-
-    for raw_declaration in body.split(';') {
-        let declaration = raw_declaration.trim();
-        if declaration.is_empty() {
-            offset += raw_declaration.len() + 1;
-            continue;
-        }
-
-        let declaration_offset =
-            offset + raw_declaration.len() - raw_declaration.trim_start().len();
-        let Some((property, value)) = declaration.split_once(':') else {
-            return Err(CssError::new(
-                source,
-                declaration_offset,
-                "expected `:` in declaration",
-            ));
-        };
-        let property = property.trim();
-        let value = value.trim();
-        let parsed = match property {
-            "color" => Some(Declaration::Color(parse_color(value).ok_or_else(|| {
-                CssError::new(source, declaration_offset, "unsupported color value")
-            })?)),
-            "background-color" => Some(Declaration::Background(parse_color(value).ok_or_else(
-                || CssError::new(source, declaration_offset, "unsupported color value"),
-            )?)),
-            "padding" => Some(Declaration::Padding(parse_padding(value).ok_or_else(
-                || {
-                    CssError::new(
-                        source,
-                        declaration_offset,
-                        "padding must have one or two nonnegative lengths",
-                    )
-                },
-            )?)),
-            "border-radius" => Some(Declaration::BorderRadius(
-                parse_length(value)
-                    .ok_or_else(|| {
-                        CssError::new(source, declaration_offset, "unsupported border radius")
-                    })?
-                    .round()
-                    .min(f32::from(u8::MAX)) as u8,
-            )),
-            "font-family" => Some(Declaration::FontFamily(
-                parse_font_family(value).ok_or_else(|| {
-                    CssError::new(source, declaration_offset, "unsupported font family")
-                })?,
-            )),
-            "font-weight" => Some(Declaration::FontWeight(
-                parse_font_weight(value).ok_or_else(|| {
-                    CssError::new(source, declaration_offset, "unsupported font weight")
-                })?,
-            )),
-            "font-style" => Some(Declaration::FontStyle(parse_font_style(value).ok_or_else(
-                || CssError::new(source, declaration_offset, "unsupported font style"),
-            )?)),
-            _ => None,
-        };
-        if let Some(parsed) = parsed {
-            declarations.push(parsed);
-        }
-        offset += raw_declaration.len() + 1;
-    }
-
-    Ok(declarations)
-}
-
-fn parse_color(value: &str) -> Option<Color32> {
-    if value.eq_ignore_ascii_case("transparent") {
-        return Some(Color32::TRANSPARENT);
-    }
-
-    let hex = value.strip_prefix('#')?;
-    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let nibble = |index: usize| u8::from_str_radix(&hex[index..index + 1], 16).ok();
-    let byte = |index: usize| u8::from_str_radix(&hex[index..index + 2], 16).ok();
-    match hex.len() {
-        3 => Some(Color32::from_rgb(
-            nibble(0)?.saturating_mul(17),
-            nibble(1)?.saturating_mul(17),
-            nibble(2)?.saturating_mul(17),
-        )),
-        4 => Some(Color32::from_rgba_unmultiplied(
-            nibble(0)?.saturating_mul(17),
-            nibble(1)?.saturating_mul(17),
-            nibble(2)?.saturating_mul(17),
-            nibble(3)?.saturating_mul(17),
-        )),
-        6 => Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?)),
-        8 => Some(Color32::from_rgba_unmultiplied(
-            byte(0)?,
-            byte(2)?,
-            byte(4)?,
-            byte(6)?,
-        )),
-        _ => None,
-    }
-}
-
-fn parse_length(value: &str) -> Option<f32> {
-    let value = value.strip_suffix("px").unwrap_or(value).trim();
-    let length = value.parse::<f32>().ok()?;
-    (length.is_finite() && length >= 0.0).then_some(length)
-}
-
-fn parse_padding(value: &str) -> Option<egui::Vec2> {
-    let lengths = value
-        .split_whitespace()
-        .map(parse_length)
-        .collect::<Option<Vec<_>>>()?;
-    match lengths.as_slice() {
-        [all] => Some(egui::Vec2::splat(*all)),
-        [vertical, horizontal] => Some(egui::vec2(*horizontal, *vertical)),
-        _ => None,
-    }
-}
-
-fn parse_font_family(value: &str) -> Option<Vec<String>> {
-    let families = value
-        .split(',')
-        .map(parse_css_string)
-        .collect::<Option<Vec<_>>>()?;
-    (!families.is_empty() && families.iter().all(|family| !family.trim().is_empty()))
-        .then_some(families)
-}
-
-fn parse_font_weight(value: &str) -> Option<u16> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "normal" => Some(400),
-        "bold" => Some(700),
-        value => value
-            .parse::<u16>()
-            .ok()
-            .filter(|weight| (1..=1000).contains(weight)),
-    }
-}
-
-fn parse_font_style(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "normal" => Some(false),
-        "italic" | "oblique" => Some(true),
-        _ => None,
     }
 }
 
@@ -763,19 +514,27 @@ fn set_widget_visuals(
 }
 
 fn apply_declarations(ui: &mut Ui, state: RuleState, declarations: &[Declaration]) {
+    apply_style_declarations(ui.style_mut(), state, declarations);
+}
+
+fn apply_style_declarations(
+    style: &mut egui::Style,
+    state: RuleState,
+    declarations: &[Declaration],
+) {
     for declaration in declarations {
         if let Declaration::Padding(padding) = declaration {
             if state == RuleState::Base {
-                ui.spacing_mut().button_padding = *padding;
+                style.spacing.button_padding = *padding;
             }
             continue;
         }
 
         if matches!(declaration, Declaration::Color(_)) {
-            ui.style_mut().visuals.override_text_color = None;
+            style.visuals.override_text_color = None;
         }
 
-        let visuals = &mut ui.style_mut().visuals.widgets;
+        let visuals = &mut style.visuals.widgets;
         match state {
             RuleState::Base => {
                 apply_visual_declaration(&mut visuals.noninteractive, declaration);
@@ -834,11 +593,11 @@ mod tests {
             .as_ref()
             .as_ref()
             .to_vec();
-        let mut stylesheet = Stylesheet::parse(
+        let stylesheet = Stylesheet::parse(
             ".outfit-text { font-family: \"Outfit\", sans-serif; font-weight: 500; }",
         )
         .unwrap();
-        stylesheet.fonts = FontAssets::with_test_font("Outfit", 500, font_bytes);
+        stylesheet.replace_fonts(FontAssets::with_test_font("Outfit", 500, font_bytes));
 
         let mut setup_output = context.run_ui(egui::RawInput::default(), |_ui| {});
         setup_output.textures_delta.clear();

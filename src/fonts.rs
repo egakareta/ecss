@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -45,6 +48,8 @@ struct FontFace {
 
 const FONT_ASSETS_ID: &str = "trcss.font-assets";
 const FONT_REVISION_ID: &str = "trcss.font-revision";
+const FONT_GENERATION_ID: &str = "trcss.font-generation";
+const FONT_REQUEST_ID: &str = "trcss.font-request";
 const FONT_CALLBACK_REGISTERED_ID: &str = "trcss.font-callback-registered";
 const FONT_INSTALL_CALLBACK_ID: &str = "trcss.font-install";
 
@@ -139,33 +144,46 @@ impl FontAssets {
         weight: u16,
         italic: bool,
     ) -> Option<FontFamily> {
+        let family = self.family_name(candidates, weight, italic)?;
+        context
+            .fonts(|fonts| fonts.definitions().families.contains_key(&family))
+            .then_some(family)
+    }
+
+    pub(crate) fn family_name(
+        &self,
+        candidates: &[String],
+        weight: u16,
+        italic: bool,
+    ) -> Option<FontFamily> {
         for candidate in candidates {
             if let Some(variant) = self.variants.iter().find(|variant| {
                 normalize_family(&variant.family) == normalize_family(candidate)
                     && variant.weight == weight
                     && variant.italic == italic
             }) {
-                let family = FontFamily::Name(font_family_id(variant).into());
-                if context.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
-                    return Some(family);
-                }
+                return Some(FontFamily::Name(font_family_id(variant).into()));
             }
         }
         None
     }
 
-    pub(crate) fn install(&self, context: &egui::Context) {
-        if self.variants.is_empty() {
-            return;
-        }
-
+    pub(crate) fn install_shared(
+        assets: Arc<RwLock<Self>>,
+        revision: Arc<AtomicU64>,
+        global_request: Option<FontRequest>,
+        context: &egui::Context,
+    ) {
         let should_register = context.data_mut(|data| {
-            let revision = data
-                .get_temp::<u64>(Id::new(FONT_REVISION_ID))
+            let generation = data
+                .get_temp::<u64>(Id::new(FONT_GENERATION_ID))
                 .unwrap_or_default()
                 .wrapping_add(1);
+            data.insert_temp(Id::new(FONT_GENERATION_ID), generation);
+            data.insert_temp(Id::new(FONT_ASSETS_ID), assets);
             data.insert_temp(Id::new(FONT_REVISION_ID), revision);
-            data.insert_temp(Id::new(FONT_ASSETS_ID), Arc::new(self.clone()));
+            data.insert_temp(Id::new(FONT_REQUEST_ID), global_request);
+
             let callback_registered = data
                 .get_temp::<bool>(Id::new(FONT_CALLBACK_REGISTERED_ID))
                 .unwrap_or(false);
@@ -178,34 +196,62 @@ impl FontAssets {
         if !should_register {
             return;
         }
-        let installed_revision = Arc::new(Mutex::new(0_u64));
+        let installed = Arc::new(Mutex::new((0_u64, 0_u64)));
         context.on_begin_pass(
             FONT_INSTALL_CALLBACK_ID,
             Arc::new(move |ui| {
                 let context = ui.ctx();
-                let (revision, assets) = context.data(|data| {
+                let (generation, assets, revision, global_request) = context.data(|data| {
                     (
-                        data.get_temp::<u64>(Id::new(FONT_REVISION_ID)),
-                        data.get_temp::<Arc<FontAssets>>(Id::new(FONT_ASSETS_ID)),
+                        data.get_temp::<u64>(Id::new(FONT_GENERATION_ID)),
+                        data.get_temp::<Arc<RwLock<FontAssets>>>(Id::new(FONT_ASSETS_ID)),
+                        data.get_temp::<Arc<AtomicU64>>(Id::new(FONT_REVISION_ID)),
+                        data.get_temp::<Option<FontRequest>>(Id::new(FONT_REQUEST_ID))
+                            .flatten(),
                     )
                 });
-                let (Some(revision), Some(assets)) = (revision, assets) else {
+                let (Some(generation), Some(assets), Some(revision)) =
+                    (generation, assets, revision)
+                else {
                     return;
                 };
-                let Ok(mut installed_revision) = installed_revision.lock() else {
+                let revision = revision.load(Ordering::Acquire);
+                let Ok(mut installed) = installed.lock() else {
                     return;
                 };
-                if *installed_revision == revision {
+                if *installed == (generation, revision) {
                     return;
                 }
 
-                assets.add_to_definitions(context);
-                *installed_revision = revision;
+                let Ok(assets) = assets.read() else {
+                    return;
+                };
+                if !assets.variants.is_empty() {
+                    assets.add_to_definitions(context);
+                    let family = global_request.as_ref().and_then(|request| {
+                        assets.family_name(&request.families, request.weight, request.italic)
+                    });
+                    if let Some(family) = family {
+                        let is_registered = context
+                            .fonts(|fonts| fonts.definitions().families.contains_key(&family));
+                        if !is_registered {
+                            context.request_repaint();
+                            return;
+                        }
+                        context.all_styles_mut(|style| {
+                            for font_id in style.text_styles.values_mut() {
+                                font_id.family = family.clone();
+                            }
+                        });
+                    }
+                }
+                *installed = (generation, revision);
+                context.request_repaint();
             }),
         );
     }
 
-    fn add_to_definitions(&self, context: &egui::Context) {
+    pub(crate) fn add_to_definitions(&self, context: &egui::Context) {
         let mut definitions = context.fonts(|fonts| fonts.definitions().clone());
         let mut fallbacks = definitions
             .families
