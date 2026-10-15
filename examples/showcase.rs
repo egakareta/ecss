@@ -24,22 +24,32 @@ struct Showcase {
 
 impl eframe::App for Showcase {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.heading("CSS-styled egui widgets");
-        ui.label("Hover or press the buttons to see their CSS states.");
-
-        ui.horizontal(|ui| {
-            if ui
-                .add(egui::Button::new("Save changes").selector(".primary"))
-                .clicked()
-            {
-                self.saved = true;
-            }
-
-            ui.add(egui::Button::new("Cancel").selector(".secondary"));
-        });
-
-        if self.saved {
-            ui.label("Changes saved.");
-        }
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("CSS-styled egui widgets").selector(".title"));
+                ui.add(
+                    egui::Label::new("Hover or press the buttons to see their CSS states.")
+                        .selector(".description"),
+                );
+                ui.add(
+                    (|ui: &mut egui::Ui| {
+                        if ui
+                            .add(egui::Button::new("Save changes").selector(".primary"))
+                            .clicked()
+                        {
+                            self.saved = true;
+                        }
+                        ui.add(egui::Button::new("Cancel").selector(".secondary"));
+                        ui.response()
+                    })
+                    .selector(".actions"),
+                );
+                if self.saved {
+                    ui.add(egui::Label::new("Changes saved.").selector(".status"));
+                }
+                ui.response()
+            })
+            .selector(".page"),
+        );
     }
 }

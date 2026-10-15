@@ -4,14 +4,14 @@
 
 ## Core CSS, syntax, and cascading
 
-- **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Unsupported.**
+- **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Partial.**
   - CSS properties: _~~`azimuth`~~_, `background`, `background-attachment`, ~~`background-color`~~, `background-image`, `background-position`,
     `background-repeat`, `border`, `border-bottom`, `border-bottom-color`, `border-bottom-style`, `border-bottom-width`,
-    `border-collapse`, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
-    `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
-    `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
+    ~~`border-collapse`~~, `border-color`, `border-left`, `border-left-color`, `border-left-style`, `border-left-width`,
+    `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, ~~`border-spacing`~~, `border-style`,
+    `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, ~~`caption-side`~~,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, _~~`cue`~~_, _~~`cue-after`~~_, _~~`cue-before`~~_,
-    `cursor`, `direction`, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
+    `cursor`, ~~`direction`~~, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
     ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~,
     ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
@@ -19,7 +19,7 @@
     ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
-    `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`,
+    `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
     `visibility`, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
   - CSS properties: `all`.
@@ -30,11 +30,11 @@
 - **[CSS Cascading and Inheritance Level 6](https://www.w3.org/TR/css-cascade-6/) - Unsupported.**
 - **[CSS Generated and Replaced Content](https://www.w3.org/TR/css3-content/) - Unsupported.**
   - CSS properties: `bookmark-label`, `bookmark-level`, `bookmark-state`, `content`, `quotes`, `string-set`.
-- **CSS Math - Unsupported.**
+- **CSS Math - Partial.**
 - **[CSS style Attribute Syntax](https://www.w3.org/TR/css-style-attr/) - Unsupported.**
 - **[CSS Syntax](https://www.w3.org/TR/css3-syntax/) - Unsupported.**
-- **[CSS Values and Units Level 3](https://www.w3.org/TR/css3-values/) - Unsupported.**
-- **[CSS Values and Units Level 4](https://www.w3.org/TR/css-values-4/) - Unsupported.**
+- **[CSS Values and Units Level 3](https://www.w3.org/TR/css3-values/) - Partial.**
+- **[CSS Values and Units Level 4](https://www.w3.org/TR/css-values-4/) - Partial.**
 - **[CSS Values and Units Level 5](https://www.w3.org/TR/css-values-5/) - Unsupported.**
   - CSS properties: `interpolate-size`.
 - **[CSS Counter Styles Level 3](https://www.w3.org/TR/css-counter-styles-3/) - Unsupported.**
@@ -43,18 +43,18 @@
 - **[CSS Will Change Module Level 1](https://www.w3.org/TR/css-will-change-1/) - Unsupported.**
   - CSS properties: `will-change`.
 - **[CSS Pseudo-Elements Module Level 4](https://www.w3.org/TR/css-pseudo-4/) - Unsupported.**
-- **[CSS Logical Properties and Values Level 1](https://www.w3.org/TR/css-logical-1/) - Unsupported.**
-  - CSS properties: `block-size`, `border-block`, `border-block-color`, `border-block-end`, `border-block-end-color`,
-    `border-block-end-style`, `border-block-end-width`, `border-block-start`, `border-block-start-color`,
-    `border-block-start-style`, `border-block-start-width`, `border-block-style`, `border-block-width`,
-    `border-end-end-radius`, `border-end-start-radius`, `border-inline`, `border-inline-color`, `border-inline-end`,
-    `border-inline-end-color`, `border-inline-end-style`, `border-inline-end-width`, `border-inline-start`,
-    `border-inline-start-color`, `border-inline-start-style`, `border-inline-start-width`, `border-inline-style`,
-    `border-inline-width`, `border-start-end-radius`, `border-start-start-radius`, `inline-size`, `inset`,
-    `inset-block`, `inset-block-end`, `inset-block-start`, `inset-inline`, `inset-inline-end`, `inset-inline-start`,
-    `margin-block`, `margin-block-end`, `margin-block-start`, `margin-inline`, `margin-inline-end`,
-    `margin-inline-start`, `max-block-size`, `max-inline-size`, `min-block-size`, `min-inline-size`, `padding-block`,
-    `padding-block-end`, `padding-block-start`, `padding-inline`, `padding-inline-end`, `padding-inline-start`.
+- **[CSS Logical Properties and Values Level 1](https://www.w3.org/TR/css-logical-1/) - Partial.**
+  - CSS properties: ~~`block-size`~~, ~~`border-block`~~, ~~`border-block-color`~~, ~~`border-block-end`~~, ~~`border-block-end-color`~~,
+    ~~`border-block-end-style`~~, ~~`border-block-end-width`~~, ~~`border-block-start`~~, ~~`border-block-start-color`~~,
+    ~~`border-block-start-style`~~, ~~`border-block-start-width`~~, ~~`border-block-style`~~, ~~`border-block-width`~~,
+    `border-end-end-radius`, `border-end-start-radius`, ~~`border-inline`~~, ~~`border-inline-color`~~, ~~`border-inline-end`~~,
+    ~~`border-inline-end-color`~~, ~~`border-inline-end-style`~~, ~~`border-inline-end-width`~~, ~~`border-inline-start`~~,
+    ~~`border-inline-start-color`~~, ~~`border-inline-start-style`~~, ~~`border-inline-start-width`~~, ~~`border-inline-style`~~,
+    ~~`border-inline-width`~~, `border-start-end-radius`, `border-start-start-radius`, ~~`inline-size`~~, ~~`inset`~~,
+    ~~`inset-block`~~, ~~`inset-block-end`~~, ~~`inset-block-start`~~, ~~`inset-inline`~~, ~~`inset-inline-end`~~, ~~`inset-inline-start`~~,
+    ~~`margin-block`~~, ~~`margin-block-end`~~, ~~`margin-block-start`~~, ~~`margin-inline`~~, ~~`margin-inline-end`~~,
+    ~~`margin-inline-start`~~, ~~`max-block-size`~~, ~~`max-inline-size`~~, ~~`min-block-size`~~, ~~`min-inline-size`~~, ~~`padding-block`~~,
+    ~~`padding-block-end`~~, ~~`padding-block-start`~~, ~~`padding-inline`~~, ~~`padding-inline-end`~~, ~~`padding-inline-start`~~.
 - **[CSS Functions and Mixins](https://www.w3.org/TR/css-mixins-1/) - Unsupported.**
 - **[CSS Environment Variables Level 1](https://www.w3.org/TR/css-env-1/) - Unsupported.**
 - **[CSS Linked Parameters Level 1](https://www.w3.org/TR/css-link-params-1/) - Unsupported.**
@@ -83,83 +83,83 @@
 
 - **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Unsupported.**
   - CSS properties: `chains`, `flow`, `grid`, `grid-template`, `grid-template-areas`, `grid-template-columns`, `grid-template-rows`.
-- **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Unsupported.**
+- **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
     ~~`padding-right`~~, ~~`padding-top`~~.
-- **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Unsupported.**
+- **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `margin-trim`, ~~`padding`~~, ~~`padding-bottom`~~,
     ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~.
 - **[CSS Page Floats](https://www.w3.org/TR/css-page-floats-3/) - Unsupported.**
   - CSS properties: `clear`, `float`, `float-defer`, `float-offset`, `float-reference`.
-- **[CSS Line Layout](https://www.w3.org/TR/css3-linebox/) - Unsupported.**
-- **[CSS Multi-column Layout](https://www.w3.org/TR/css3-multicol/) - Unsupported.**
-  - CSS properties: `column-count`, `column-fill`, `column-rule`, `column-rule-color`, `column-rule-style`, `column-rule-width`,
-    `column-span`, `column-width`, `columns`.
-- **[CSS Multi-column Layout Level 2](https://www.w3.org/TR/css-multicol-2/) - Unsupported.**
-  - CSS properties: `column-count`, `column-fill`, `column-height`, `column-rule`, `column-rule-color`, `column-rule-style`,
-    `column-rule-width`, `column-span`, `column-width`, `column-wrap`, `columns`.
+- **[CSS Line Layout](https://www.w3.org/TR/css3-linebox/) - Partial.**
+- **[CSS Multi-column Layout](https://www.w3.org/TR/css3-multicol/) - Partial.**
+  - CSS properties: ~~`column-count`~~, ~~`column-fill`~~, ~~`column-rule`~~, ~~`column-rule-color`~~, ~~`column-rule-style`~~, ~~`column-rule-width`~~,
+    ~~`column-span`~~, ~~`column-width`~~, ~~`columns`~~.
+- **[CSS Multi-column Layout Level 2](https://www.w3.org/TR/css-multicol-2/) - Partial.**
+  - CSS properties: ~~`column-count`~~, ~~`column-fill`~~, `column-height`, ~~`column-rule`~~, ~~`column-rule-color`~~, ~~`column-rule-style`~~,
+    ~~`column-rule-width`~~, ~~`column-span`~~, ~~`column-width`~~, `column-wrap`, ~~`columns`~~.
 - **[CSS Paged Media](https://www.w3.org/TR/css3-page/) - Unsupported.**
   - CSS properties: `page`.
-- **[CSS Positioned Layout Level 3](https://www.w3.org/TR/css3-positioning/) - Unsupported.**
-  - CSS properties: `bottom`, `inset`, `inset-block`, `inset-block-end`, `inset-block-start`, `inset-inline`, `inset-inline-end`,
-    `inset-inline-start`, `left`, `position`, `right`, `top`.
+- **[CSS Positioned Layout Level 3](https://www.w3.org/TR/css3-positioning/) - Partial.**
+  - CSS properties: ~~`bottom`~~, ~~`inset`~~, ~~`inset-block`~~, ~~`inset-block-end`~~, ~~`inset-block-start`~~, ~~`inset-inline`~~, ~~`inset-inline-end`~~,
+    ~~`inset-inline-start`~~, ~~`left`~~, ~~`position`~~, ~~`right`~~, ~~`top`~~.
 - **[CSS Positioned Layout Level 4](https://www.w3.org/TR/css-position-4/) - Unsupported.**
   - CSS properties: `overlay`.
-- **[Grid Layout](https://www.w3.org/TR/css-grid-1/) - Unsupported.**
-  - CSS properties: `grid`, `grid-area`, `grid-auto-columns`, `grid-auto-flow`, `grid-auto-rows`, `grid-column`, `grid-column-end`,
-    `grid-column-start`, `grid-row`, `grid-row-end`, `grid-row-start`, `grid-template`, `grid-template-areas`,
-    `grid-template-columns`, `grid-template-rows`.
-- **[Grid Layout Level 2](https://www.w3.org/TR/css-grid-2/) - Unsupported.**
-  - CSS properties: `grid`, `grid-area`, `grid-auto-columns`, `grid-auto-flow`, `grid-auto-rows`, `grid-column`, `grid-column-end`,
-    `grid-column-start`, `grid-row`, `grid-row-end`, `grid-row-start`, `grid-template`, `grid-template-areas`,
-    `grid-template-columns`, `grid-template-rows`.
+- **[Grid Layout](https://www.w3.org/TR/css-grid-1/) - Partial.**
+  - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
+    ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
+    ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
+- **[Grid Layout Level 2](https://www.w3.org/TR/css-grid-2/) - Partial.**
+  - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
+    ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
+    ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
 - **[Grid Layout Level 3](https://www.w3.org/TR/css-grid-3/) - Unsupported.**
   - CSS properties: `fit-tolerance`, `flow-tolerance`, `item-cross`, `item-direction`, `item-flow`, `item-pack`, `item-track`,
     `item-wrap`.
 - **[Regions](https://www.w3.org/TR/css3-regions/) - Unsupported.**
   - CSS properties: `break-after`, `break-before`, `break-inside`, `flow-from`, `flow-into`, `region-fragment`.
-- **CSS Tables Module - Unsupported.**
-  - CSS properties: `border-collapse`, `border-spacing`, `caption-side`, `empty-cells`, `table-layout`.
-- **[CSS Flexible Box Layout Level 1](https://www.w3.org/TR/css3-flexbox/) - Unsupported.**
-  - CSS properties: `align-content`, `align-items`, `align-self`, `flex`, `flex-basis`, `flex-direction`, `flex-flow`, `flex-grow`,
-    `flex-shrink`, `flex-wrap`, `justify-content`.
-- **[CSS Fragmentation Module Level 3](https://www.w3.org/TR/css3-break/) - Unsupported.**
-  - CSS properties: `box-decoration-break`, `break-after`, `break-before`, `break-inside`, `orphans`, `widows`.
-- **[CSS Fragmentation Module Level 4](https://www.w3.org/TR/css-break-4/) - Unsupported.**
-  - CSS properties: `box-decoration-break`, `break-after`, `break-before`, `break-inside`, `margin-break`, `orphans`, `widows`.
+- **CSS Tables Module - Partial.**
+  - CSS properties: ~~`border-collapse`~~, ~~`border-spacing`~~, ~~`caption-side`~~, ~~`empty-cells`~~, ~~`table-layout`~~.
+- **[CSS Flexible Box Layout Level 1](https://www.w3.org/TR/css3-flexbox/) - Partial.**
+  - CSS properties: ~~`align-content`~~, ~~`align-items`~~, ~~`align-self`~~, ~~`flex`~~, ~~`flex-basis`~~, ~~`flex-direction`~~, ~~`flex-flow`~~, ~~`flex-grow`~~,
+    ~~`flex-shrink`~~, ~~`flex-wrap`~~, ~~`justify-content`~~.
+- **[CSS Fragmentation Module Level 3](https://www.w3.org/TR/css3-break/) - Partial.**
+  - CSS properties: ~~`box-decoration-break`~~, ~~`break-after`~~, ~~`break-before`~~, ~~`break-inside`~~, ~~`orphans`~~, ~~`widows`~~.
+- **[CSS Fragmentation Module Level 4](https://www.w3.org/TR/css-break-4/) - Partial.**
+  - CSS properties: ~~`box-decoration-break`~~, ~~`break-after`~~, ~~`break-before`~~, ~~`break-inside`~~, `margin-break`, ~~`orphans`~~, ~~`widows`~~.
 - **[CSS Exclusions](https://www.w3.org/TR/css3-exclusions/) - Unsupported.**
   - CSS properties: `wrap-flow`, `wrap-through`.
 - **[CSS Shapes](https://www.w3.org/TR/css-shapes-1/) - Unsupported.**
   - CSS properties: `shape-image-threshold`, `shape-margin`, `shape-outside`.
-- **[CSS Box Alignment Module Level 3](https://www.w3.org/TR/css3-align/) - Unsupported.**
-  - CSS properties: `align-content`, `align-items`, `align-self`, `justify-content`, `justify-items`, `justify-self`, `place-content`,
-    `place-items`, `place-self`.
-- **[CSS Intrinsic & Extrinsic Sizing Module Level 3](https://www.w3.org/TR/css3-sizing/) - Unsupported.**
-  - CSS properties: `block-size`, `box-sizing`, ~~`height`~~, `inline-size`, `max-block-size`, `max-height`, `max-inline-size`, `max-width`,
-    `min-block-size`, `min-height`, `min-inline-size`, `min-width`, ~~`width`~~.
-- **[CSS Box Sizing Module Level 4](https://www.w3.org/TR/css-sizing-4/) - Unsupported.**
-  - CSS properties: `aspect-ratio`, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
+- **[CSS Box Alignment Module Level 3](https://www.w3.org/TR/css3-align/) - Partial.**
+  - CSS properties: ~~`align-content`~~, ~~`align-items`~~, ~~`align-self`~~, ~~`justify-content`~~, ~~`justify-items`~~, ~~`justify-self`~~, ~~`place-content`~~,
+    ~~`place-items`~~, ~~`place-self`~~.
+- **[CSS Intrinsic & Extrinsic Sizing Module Level 3](https://www.w3.org/TR/css3-sizing/) - Partial.**
+  - CSS properties: ~~`block-size`~~, ~~`box-sizing`~~, ~~`height`~~, ~~`inline-size`~~, ~~`max-block-size`~~, ~~`max-height`~~, ~~`max-inline-size`~~, ~~`max-width`~~,
+    ~~`min-block-size`~~, ~~`min-height`~~, ~~`min-inline-size`~~, ~~`min-width`~~, ~~`width`~~.
+- **[CSS Box Sizing Module Level 4](https://www.w3.org/TR/css-sizing-4/) - Partial.**
+  - CSS properties: ~~`aspect-ratio`~~, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
     `contain-intrinsic-size`, `contain-intrinsic-width`, `frame-sizing`, `max-size`, `min-intrinsic-sizing`, `min-size`,
     `size`.
-- **[CSS Overflow Module Level 3](https://www.w3.org/TR/css-overflow-3/) - Unsupported.**
-  - CSS properties: `overflow`, `overflow-block`, `overflow-clip-margin`, `overflow-inline`, `overflow-x`, `overflow-y`,
-    `scroll-behavior`, `scrollbar-gutter`, `text-overflow`.
+- **[CSS Overflow Module Level 3](https://www.w3.org/TR/css-overflow-3/) - Partial.**
+  - CSS properties: ~~`overflow`~~, ~~`overflow-block`~~, ~~`overflow-clip-margin`~~, ~~`overflow-inline`~~, ~~`overflow-x`~~, ~~`overflow-y`~~,
+    `scroll-behavior`, ~~`scrollbar-gutter`~~, `text-overflow`.
 - **[CSS Overflow Module Level 4](https://www.w3.org/TR/css-overflow-4/) - Unsupported.**
-  - CSS properties: `-webkit-line-clamp`, `block-ellipsis`, `continue`, `line-clamp`, `max-lines`, `overflow-clip-margin`,
-    `overflow-clip-margin-block`, `overflow-clip-margin-block-end`, `overflow-clip-margin-block-start`,
-    `overflow-clip-margin-bottom`, `overflow-clip-margin-inline`, `overflow-clip-margin-inline-end`,
-    `overflow-clip-margin-inline-start`, `overflow-clip-margin-left`, `overflow-clip-margin-right`,
-    `overflow-clip-margin-top`, `text-overflow`.
+  - CSS properties: `-webkit-line-clamp`, `block-ellipsis`, `continue`, `line-clamp`, `max-lines`,
+    ~~`overflow-clip-margin`~~, ~~`overflow-clip-margin-block`~~, ~~`overflow-clip-margin-block-end`~~, ~~`overflow-clip-margin-block-start`~~,
+    ~~`overflow-clip-margin-bottom`~~, ~~`overflow-clip-margin-inline`~~, ~~`overflow-clip-margin-inline-end`~~,
+    ~~`overflow-clip-margin-inline-start`~~, ~~`overflow-clip-margin-left`~~, ~~`overflow-clip-margin-right`~~,
+    ~~`overflow-clip-margin-top`~~, `text-overflow`.
 - **[CSS Overflow Module Level 5](https://www.w3.org/TR/css-overflow-5/) - Unsupported.**
   - CSS properties: `scroll-axis-lock`, `scroll-marker-group`, `scroll-target-group`.
-- **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Unsupported.**
-  - CSS properties: `display`, `order`, `visibility`.
-- **[CSS Display Level 4](https://www.w3.org/TR/css-display-4/) - Unsupported.**
-  - CSS properties: `display`, `order`, `reading-flow`, `reading-order`, `visibility`.
-- **[CSS Inline Layout Module Level 3](https://www.w3.org/TR/css-inline-3/) - Unsupported.**
+- **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Partial.**
+  - CSS properties: ~~`display`~~, ~~`order`~~, `visibility`.
+- **[CSS Display Level 4](https://www.w3.org/TR/css-display-4/) - Partial.**
+  - CSS properties: ~~`display`~~, ~~`order`~~, `reading-flow`, `reading-order`, `visibility`.
+- **[CSS Inline Layout Module Level 3](https://www.w3.org/TR/css-inline-3/) - Partial.**
   - CSS properties: `alignment-baseline`, `baseline-shift`, `baseline-source`, `dominant-baseline`, `initial-letter`,
-    `initial-letter-align`, `initial-letter-wrap`, `inline-sizing`, `line-fit-edge`, `line-height`, `text-box`,
-    `text-box-edge`, `text-box-trim`, `vertical-align`.
+    `initial-letter-align`, `initial-letter-wrap`, `inline-sizing`, `line-fit-edge`, ~~`line-height`~~, `text-box`,
+    `text-box-edge`, `text-box-trim`, ~~`vertical-align`~~.
 - **[CSS Layout API Level 1](https://www.w3.org/TR/css-layout-api-1/) - Unsupported.**
 - **[CSS Rhythmic Sizing Level 1](https://www.w3.org/TR/css-rhythm-1/) - Unsupported.**
   - CSS properties: `block-step`, `block-step-align`, `block-step-insert`, `block-step-round`, `block-step-size`, `line-height-step`.
@@ -176,15 +176,15 @@
 
 ## Color, backgrounds, images, and effects
 
-- **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Unsupported.**
+- **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Partial.**
   - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
-    `background-origin`, `background-position`, `background-repeat`, `background-size`, `border`, `border-bottom`,
-    `border-bottom-color`, `border-bottom-left-radius`, `border-bottom-right-radius`, `border-bottom-style`,
-    `border-bottom-width`, `border-color`, `border-image`, `border-image-outset`, `border-image-repeat`,
-    `border-image-slice`, `border-image-source`, `border-image-width`, `border-left`, `border-left-color`,
-    `border-left-style`, `border-left-width`, ~~`border-radius`~~, `border-right`, `border-right-color`,
-    `border-right-style`, `border-right-width`, `border-style`, `border-top`, `border-top-color`,
-    `border-top-left-radius`, `border-top-right-radius`, `border-top-style`, `border-top-width`, `border-width`,
+    `background-origin`, `background-position`, `background-repeat`, `background-size`, ~~`border`~~, ~~`border-bottom`~~,
+    ~~`border-bottom-color`~~, `border-bottom-left-radius`, `border-bottom-right-radius`, ~~`border-bottom-style`~~,
+    ~~`border-bottom-width`~~, ~~`border-color`~~, `border-image`, `border-image-outset`, `border-image-repeat`,
+    `border-image-slice`, `border-image-source`, `border-image-width`, ~~`border-left`~~, ~~`border-left-color`~~,
+    ~~`border-left-style`~~, ~~`border-left-width`~~, ~~`border-radius`~~, ~~`border-right`~~, ~~`border-right-color`~~,
+    ~~`border-right-style`~~, ~~`border-right-width`~~, ~~`border-style`~~, ~~`border-top`~~, ~~`border-top-color`~~,
+    `border-top-left-radius`, `border-top-right-radius`, ~~`border-top-style`~~, ~~`border-top-width`~~, ~~`border-width`~~,
     `box-shadow`.
 - **CSS Backgrounds Level 4 - Unsupported.**
   - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
@@ -287,12 +287,12 @@
   - CSS properties: `hanging-punctuation`, `hyphens`, `letter-spacing`, `line-break`, `overflow-wrap`, `tab-size`, `text-align`,
     `text-align-all`, `text-align-last`, `text-indent`, `text-justify`, `text-transform`, `white-space`, `word-break`,
     `word-spacing`.
-- **[CSS Writing Modes](https://www.w3.org/TR/css3-writing-modes/) - Unsupported.**
-  - CSS properties: `direction`, `glyph-orientation-vertical`, `text-combine-upright`, `text-orientation`, `unicode-bidi`,
-    `writing-mode`.
-- **[CSS Writing Modes Level 4](https://www.w3.org/TR/css-writing-modes-4/) - Unsupported.**
-  - CSS properties: `direction`, `glyph-orientation-vertical`, `text-combine-upright`, `text-orientation`, `unicode-bidi`,
-    `writing-mode`.
+- **[CSS Writing Modes](https://www.w3.org/TR/css3-writing-modes/) - Partial.**
+  - CSS properties: ~~`direction`~~, `glyph-orientation-vertical`, `text-combine-upright`, ~~`text-orientation`~~, `unicode-bidi`,
+    ~~`writing-mode`~~.
+- **[CSS Writing Modes Level 4](https://www.w3.org/TR/css-writing-modes-4/) - Partial.**
+  - CSS properties: ~~`direction`~~, `glyph-orientation-vertical`, `text-combine-upright`, ~~`text-orientation`~~, `unicode-bidi`,
+    ~~`writing-mode`~~.
 - **[CSS Line Grid](https://www.w3.org/TR/css-line-grid-1/) - Unsupported.**
   - CSS properties: `box-snap`, `line-grid`, `line-snap`.
 - **[CSS Text Decoration Module Level 3](https://www.w3.org/TR/css-text-decor-3/) - Unsupported.**

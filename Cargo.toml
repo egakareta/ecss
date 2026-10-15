@@ -14,6 +14,19 @@ ehttp = { version = "0.7.1", features = ["native-async"] }
 futures-util = "0.3"
 precomputed-hash = "0.1"
 selectors = "0.41.0"
+taffy = { version = "0.15", default-features = false, features = [
+  "std",
+  "taffy_tree",
+  "block_layout",
+  "flexbox",
+  "grid",
+  "content_size",
+  "float_layout",
+  "parse",
+  "calc",
+  "detailed_layout_info",
+] }
+unicode-linebreak = "0.1.5"
 wuff = "0.2.9"
 
 [dev-dependencies]

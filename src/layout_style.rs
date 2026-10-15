@@ -1,0 +1,2131 @@
+use cssparser::{Parser, Token};
+use egui::{Color32, Vec2};
+use taffy::{Overflow, prelude::*};
+
+#[derive(Clone, Debug)]
+pub(crate) struct Declaration {
+    pub(crate) name: String,
+    value: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BoxStyle {
+    pub layout: Style,
+    pub format: crate::formatting::Formatting,
+    pub display_set: bool,
+    pub inline: bool,
+    pub contents: bool,
+    pub positioned: bool,
+    pub fixed: bool,
+    pub hidden: bool,
+    pub collapsed: bool,
+    pub margin_trim: [bool; 4],
+    pub intrinsic_min: Size<Option<IntrinsicSizing>>,
+    pub intrinsic_max: Size<Option<IntrinsicSizing>>,
+    pub scrollbar_gutter: ScrollbarGutter,
+    pub overflow_clip_box: OverflowClipBox,
+    pub overflow_clip_margin: [f32; 4],
+    pub order: i32,
+    pub z_index: Option<i32>,
+    pub padding_set: bool,
+    pub border_set: bool,
+    pub border_colors: [Option<Color32>; 4],
+    pub border_styles: [BorderStyle; 4],
+    pub border_widths: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum BorderStyle {
+    #[default]
+    None,
+    Hidden,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OverflowClipBox {
+    Content,
+    #[default]
+    Padding,
+    Border,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScrollbarGutter {
+    #[default]
+    Auto,
+    Stable,
+    StableBothEdges,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntrinsicSizing {
+    MinContent,
+    MaxContent,
+}
+
+impl Default for BoxStyle {
+    fn default() -> Self {
+        Self {
+            format: Default::default(),
+            layout: Style {
+                display: Display::Block,
+                box_sizing: BoxSizing::ContentBox,
+                ..Style::default()
+            },
+            display_set: false,
+            inline: false,
+            contents: false,
+            positioned: false,
+            fixed: false,
+            hidden: false,
+            collapsed: false,
+            margin_trim: [false; 4],
+            intrinsic_min: Size {
+                width: None,
+                height: None,
+            },
+            intrinsic_max: Size {
+                width: None,
+                height: None,
+            },
+            scrollbar_gutter: ScrollbarGutter::Auto,
+            overflow_clip_box: OverflowClipBox::default(),
+            overflow_clip_margin: [0.0; 4],
+            order: 0,
+            z_index: None,
+            padding_set: false,
+            border_set: false,
+            border_colors: [None; 4],
+            border_styles: [BorderStyle::None; 4],
+            border_widths: [3.0; 4],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Units<'a> {
+    pub math: &'a crate::math::Arena,
+    pub font: f32,
+    pub root_font: f32,
+    pub viewport: Vec2,
+}
+
+pub(crate) fn parse(
+    name: &str,
+    input: &mut Parser<'_>,
+) -> Result<Option<Declaration>, &'static str> {
+    let name = name.to_ascii_lowercase();
+    if !supported(&name) {
+        return Ok(None);
+    }
+    let start = input.position();
+    while input.next().is_ok() {}
+    let value = input.slice_from(start).trim().to_owned();
+    let declaration = Declaration { name, value };
+    let arena = crate::math::Arena::default();
+    if declaration.value.eq_ignore_ascii_case("revert-layer") {
+        return Err("cascade layers are unsupported");
+    }
+    if !["inherit", "initial", "unset", "revert"]
+        .iter()
+        .any(|keyword| declaration.value.eq_ignore_ascii_case(keyword))
+    {
+        declaration.apply(
+            &mut BoxStyle::default(),
+            Units {
+                math: &arena,
+                font: 16.0,
+                root_font: 16.0,
+                viewport: Vec2::splat(1000.0),
+            },
+        )?;
+    }
+    Ok(Some(declaration))
+}
+
+fn supported(name: &str) -> bool {
+    crate::formatting::supported(name)
+        || matches!(
+            name,
+            "display"
+                | "box-sizing"
+                | "width"
+                | "height"
+                | "min-width"
+                | "min-height"
+                | "max-width"
+                | "max-height"
+                | "inline-size"
+                | "block-size"
+                | "min-inline-size"
+                | "min-block-size"
+                | "max-inline-size"
+                | "max-block-size"
+                | "aspect-ratio"
+                | "position"
+                | "top"
+                | "right"
+                | "bottom"
+                | "left"
+                | "inset"
+                | "inset-inline"
+                | "inset-block"
+                | "inset-inline-start"
+                | "inset-inline-end"
+                | "inset-block-start"
+                | "inset-block-end"
+                | "margin"
+                | "margin-top"
+                | "margin-right"
+                | "margin-bottom"
+                | "margin-left"
+                | "margin-trim"
+                | "margin-inline"
+                | "margin-block"
+                | "margin-inline-start"
+                | "margin-inline-end"
+                | "margin-block-start"
+                | "margin-block-end"
+                | "padding"
+                | "padding-top"
+                | "padding-right"
+                | "padding-bottom"
+                | "padding-left"
+                | "padding-inline"
+                | "padding-block"
+                | "padding-inline-start"
+                | "padding-inline-end"
+                | "padding-block-start"
+                | "padding-block-end"
+                | "border"
+                | "border-top"
+                | "border-right"
+                | "border-bottom"
+                | "border-left"
+                | "border-width"
+                | "border-style"
+                | "border-color"
+                | "border-top-width"
+                | "border-right-width"
+                | "border-bottom-width"
+                | "border-left-width"
+                | "border-top-style"
+                | "border-right-style"
+                | "border-bottom-style"
+                | "border-left-style"
+                | "border-top-color"
+                | "border-right-color"
+                | "border-bottom-color"
+                | "border-left-color"
+                | "border-inline"
+                | "border-block"
+                | "border-inline-width"
+                | "border-block-width"
+                | "border-inline-style"
+                | "border-block-style"
+                | "border-inline-color"
+                | "border-block-color"
+                | "border-inline-start"
+                | "border-inline-end"
+                | "border-block-start"
+                | "border-block-end"
+                | "border-inline-start-width"
+                | "border-inline-end-width"
+                | "border-block-start-width"
+                | "border-block-end-width"
+                | "border-inline-start-style"
+                | "border-inline-end-style"
+                | "border-block-start-style"
+                | "border-block-end-style"
+                | "border-inline-start-color"
+                | "border-inline-end-color"
+                | "border-block-start-color"
+                | "border-block-end-color"
+                | "overflow"
+                | "overflow-x"
+                | "overflow-y"
+                | "overflow-block"
+                | "overflow-inline"
+                | "overflow-clip-margin"
+                | "overflow-clip-margin-block"
+                | "overflow-clip-margin-inline"
+                | "overflow-clip-margin-top"
+                | "overflow-clip-margin-right"
+                | "overflow-clip-margin-bottom"
+                | "overflow-clip-margin-left"
+                | "overflow-clip-margin-block-start"
+                | "overflow-clip-margin-block-end"
+                | "overflow-clip-margin-inline-start"
+                | "overflow-clip-margin-inline-end"
+                | "scrollbar-gutter"
+                | "visibility"
+                | "order"
+                | "z-index"
+                | "gap"
+                | "row-gap"
+                | "column-gap"
+                | "flex"
+                | "flex-grow"
+                | "flex-shrink"
+                | "flex-basis"
+                | "flex-direction"
+                | "flex-wrap"
+                | "flex-flow"
+                | "align-items"
+                | "align-self"
+                | "align-content"
+                | "justify-items"
+                | "justify-self"
+                | "justify-content"
+                | "place-items"
+                | "place-self"
+                | "place-content"
+                | "grid"
+                | "grid-template-columns"
+                | "grid-template-rows"
+                | "grid-auto-columns"
+                | "grid-auto-rows"
+                | "grid-auto-flow"
+                | "grid-column"
+                | "grid-row"
+                | "grid-column-start"
+                | "grid-column-end"
+                | "grid-row-start"
+                | "grid-row-end"
+                | "grid-area"
+                | "grid-template"
+                | "grid-template-areas"
+                | "float"
+                | "clear"
+                | "direction"
+        )
+}
+
+impl Declaration {
+    pub(crate) fn apply_with_parent(
+        &self,
+        output: &mut BoxStyle,
+        parent: &BoxStyle,
+        units: Units,
+    ) -> Result<(), &'static str> {
+        let keyword = self.value.trim();
+        let keyword = keyword.to_ascii_lowercase();
+        if self.name == "text-align" && keyword == "match-parent" {
+            output.format.text_align = match parent.format.text_align.as_str() {
+                "start" if parent.layout.direction == taffy::Direction::Ltr => "left",
+                "start" => "right",
+                "end" if parent.layout.direction == taffy::Direction::Ltr => "right",
+                "end" => "left",
+                value => value,
+            }
+            .into();
+            return Ok(());
+        }
+        if keyword == "inherit" || keyword == "unset" && inherited(&self.name) {
+            copy_property(&self.name, output, parent);
+            return Ok(());
+        }
+        if matches!(keyword.as_str(), "initial" | "unset" | "revert") {
+            copy_property(&self.name, output, &BoxStyle::default());
+            return Ok(());
+        }
+        if keyword == "revert-layer" {
+            return Err("cascade layers are unsupported");
+        }
+        self.apply(output, units)
+    }
+
+    pub(crate) fn apply(&self, output: &mut BoxStyle, units: Units) -> Result<(), &'static str> {
+        let value = self.value.trim();
+        let name = self.name.as_str();
+        if ["inherit", "initial", "unset", "revert", "revert-layer"]
+            .iter()
+            .any(|keyword| value.eq_ignore_ascii_case(keyword))
+        {
+            return Err("CSS-wide value requires its computed parent style");
+        }
+        if crate::formatting::apply(name, value, output, units)? {
+            return Ok(());
+        }
+        let parts = components(value)?;
+        let s = &mut output.layout;
+        match name {
+            "direction" => s.direction = value.parse().map_err(|_| "invalid direction")?,
+            "float" => s.float = value.parse().map_err(|_| "invalid float")?,
+            "clear" => s.clear = value.parse().map_err(|_| "invalid clear")?,
+            "display" => {
+                output.format.display = crate::formatting::DisplayKind::Normal;
+                if let Some((kind, inline)) = crate::formatting::display(value) {
+                    output.format.display = kind;
+                    output.inline = inline;
+                    output.display_set = true;
+                    output.contents = false;
+                    s.display = Display::Block;
+                    return Ok(());
+                }
+
+                output.display_set = true;
+                output.inline = matches!(
+                    value,
+                    "inline-block"
+                        | "inline-flex"
+                        | "inline-grid"
+                        | "inline flow-root"
+                        | "inline flex"
+                        | "inline grid"
+                );
+                output.contents = value == "contents";
+                s.display = match value {
+                    "block" | "block flow" | "contents" => Display::Block,
+                    "flow-root" | "inline-block" | "block flow-root" | "inline flow-root" => {
+                        Display::FlowRoot
+                    }
+                    "flex" | "inline-flex" | "block flex" | "inline flex" => Display::Flex,
+                    "grid" | "inline-grid" | "block grid" | "inline grid" => Display::Grid,
+                    "none" => Display::None,
+                    _ => return Err("unsupported display value"),
+                };
+            }
+            "box-sizing" => {
+                s.box_sizing = match value {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => return Err("invalid box-sizing"),
+                }
+            }
+            "width" | "inline-size" => s.size.width = dimension(value, units)?,
+            "height" | "block-size" => s.size.height = dimension(value, units)?,
+            "min-width" | "min-inline-size" => {
+                s.min_size.width = limit(value, units)?;
+                output.intrinsic_min.width = intrinsic_sizing(value);
+            }
+            "min-height" | "min-block-size" => {
+                s.min_size.height = limit(value, units)?;
+                output.intrinsic_min.height = intrinsic_sizing(value);
+            }
+            "max-width" | "max-inline-size" => {
+                s.max_size.width = if value == "none" {
+                    auto()
+                } else {
+                    limit(value, units)?
+                };
+                output.intrinsic_max.width = intrinsic_sizing(value);
+            }
+            "max-height" | "max-block-size" => {
+                s.max_size.height = if value == "none" {
+                    auto()
+                } else {
+                    limit(value, units)?
+                };
+                output.intrinsic_max.height = intrinsic_sizing(value);
+            }
+            "aspect-ratio" => {
+                s.aspect_ratio = if value == "auto" {
+                    None
+                } else {
+                    let (a, b) = value.split_once('/').unwrap_or((value, "1"));
+                    let ratio = number(a.trim(), units)? / number(b.trim(), units)?;
+                    if !ratio.is_finite() || ratio <= 0.0 {
+                        return Err("invalid aspect-ratio");
+                    }
+                    Some(ratio)
+                };
+            }
+            "position" => {
+                output.positioned = value != "static";
+                output.fixed = value == "fixed";
+                s.position = match value {
+                    "static" => Position::Static,
+                    "relative" => Position::Relative,
+                    "sticky" => Position::Sticky,
+                    "absolute" | "fixed" => Position::Absolute,
+                    _ => return Err("unsupported position value"),
+                };
+            }
+            "margin" | "padding" | "inset" => {
+                let edges = quad(&parts)?;
+                for (index, value) in edges.iter().enumerate() {
+                    set_edge(output, name, index, value, units)?;
+                }
+            }
+            "margin-trim" => {
+                apply_margin_trim(&mut output.margin_trim, &parts)?;
+            }
+            "top" | "right" | "bottom" | "left" => {
+                set_edge(output, "inset", side(name).unwrap(), value, units)?
+            }
+            _ if name.starts_with("margin-")
+                || name.starts_with("padding-")
+                || name.starts_with("inset-") =>
+            {
+                let (group, suffix) = name.split_once('-').unwrap();
+                if suffix == "inline" || suffix == "block" {
+                    if parts.is_empty() || parts.len() > 2 {
+                        return Err("expected one or two edge values");
+                    }
+                    let indices = if suffix == "inline" {
+                        [
+                            logical_side(
+                                "inline-start",
+                                output.layout.direction,
+                                output.format.writing,
+                            )
+                            .unwrap(),
+                            logical_side(
+                                "inline-end",
+                                output.layout.direction,
+                                output.format.writing,
+                            )
+                            .unwrap(),
+                        ]
+                    } else {
+                        [
+                            logical_side(
+                                "block-start",
+                                output.layout.direction,
+                                output.format.writing,
+                            )
+                            .unwrap(),
+                            logical_side(
+                                "block-end",
+                                output.layout.direction,
+                                output.format.writing,
+                            )
+                            .unwrap(),
+                        ]
+                    };
+                    set_edge(output, group, indices[0], &parts[0], units)?;
+                    set_edge(
+                        output,
+                        group,
+                        indices[1],
+                        parts.get(1).unwrap_or(&parts[0]),
+                        units,
+                    )?;
+                } else {
+                    set_edge(
+                        output,
+                        group,
+                        logical_side(suffix, output.layout.direction, output.format.writing)
+                            .ok_or("invalid side")?,
+                        value,
+                        units,
+                    )?;
+                }
+            }
+            _ if name.starts_with("border-inline") || name.starts_with("border-block") => {
+                let physical =
+                    physical_borders(name, output.layout.direction, output.format.writing);
+                let pair = physical.len() == 2
+                    && matches!(name.rsplit('-').next(), Some("width" | "style" | "color"));
+                if pair && (parts.is_empty() || parts.len() > 2) {
+                    return Err("expected one or two border values");
+                }
+                for (index, physical) in physical.iter().enumerate() {
+                    if pair {
+                        apply_border(
+                            output,
+                            physical,
+                            std::slice::from_ref(parts.get(index).unwrap_or(&parts[0])),
+                            units,
+                        )?;
+                    } else {
+                        apply_border(output, physical, &parts, units)?;
+                    }
+                }
+            }
+            _ if name.starts_with("border") => apply_border(output, name, &parts, units)?,
+            "overflow" => {
+                if parts.is_empty() || parts.len() > 2 {
+                    return Err("invalid overflow");
+                }
+                s.overflow.x = overflow(&parts[0])?;
+                s.overflow.y = overflow(parts.get(1).unwrap_or(&parts[0]))?;
+            }
+            "overflow-x" => s.overflow.x = overflow(value)?,
+            "overflow-y" => s.overflow.y = overflow(value)?,
+            "overflow-block" => {
+                let value = overflow(value)?;
+                if output.format.writing.vertical() {
+                    s.overflow.x = value;
+                } else {
+                    s.overflow.y = value;
+                }
+            }
+            "overflow-inline" => {
+                let value = overflow(value)?;
+                if output.format.writing.vertical() {
+                    s.overflow.y = value;
+                } else {
+                    s.overflow.x = value;
+                }
+            }
+            "overflow-clip-margin" => apply_clip_margin(
+                &mut output.overflow_clip_box,
+                &mut output.overflow_clip_margin,
+                &parts,
+                units,
+            )?,
+            "scrollbar-gutter" => {
+                output.scrollbar_gutter = match parts.as_slice() {
+                    [value] if value == "auto" => ScrollbarGutter::Auto,
+                    [value] if value == "stable" => ScrollbarGutter::Stable,
+                    [stable, both_edges] if stable == "stable" && both_edges == "both-edges" => {
+                        ScrollbarGutter::StableBothEdges
+                    }
+                    _ => return Err("invalid scrollbar-gutter"),
+                };
+            }
+            "overflow-clip-margin-block" | "overflow-clip-margin-inline" => {
+                if parts.is_empty() || parts.len() > 2 {
+                    return Err("invalid overflow-clip-margin");
+                }
+                let inline = name.ends_with("inline");
+                let start = logical_side(
+                    if inline {
+                        "inline-start"
+                    } else {
+                        "block-start"
+                    },
+                    s.direction,
+                    output.format.writing,
+                )
+                .unwrap();
+                let end = logical_side(
+                    if inline { "inline-end" } else { "block-end" },
+                    s.direction,
+                    output.format.writing,
+                )
+                .unwrap();
+                output.overflow_clip_margin[start] = clip_margin_length(&parts[0], units)?;
+                output.overflow_clip_margin[end] =
+                    clip_margin_length(parts.get(1).unwrap_or(&parts[0]), units)?;
+            }
+            _ if name.starts_with("overflow-clip-margin-") => {
+                let side_name = name.trim_start_matches("overflow-clip-margin-");
+                let edge = logical_side(side_name, s.direction, output.format.writing)
+                    .or_else(|| side(side_name))
+                    .ok_or("invalid overflow-clip-margin side")?;
+                output.overflow_clip_margin[edge] = clip_margin_length(value, units)?;
+            }
+            "visibility" => match value {
+                "visible" => {
+                    output.hidden = false;
+                    output.collapsed = false;
+                }
+                "hidden" => {
+                    output.hidden = true;
+                    output.collapsed = false;
+                }
+                "collapse" => {
+                    output.hidden = true;
+                    output.collapsed = true;
+                }
+                _ => return Err("invalid visibility"),
+            },
+            "order" => output.order = value.parse().map_err(|_| "invalid order")?,
+            "z-index" => {
+                output.z_index = if value.eq_ignore_ascii_case("auto") {
+                    None
+                } else {
+                    Some(value.parse().map_err(|_| "invalid z-index")?)
+                }
+            }
+            "gap" => {
+                output.format.normal_gaps = [value == "normal"; 2];
+                if parts.is_empty() || parts.len() > 2 {
+                    return Err("invalid gap");
+                }
+                s.gap.height = gap(&parts[0], units)?;
+                s.gap.width = gap(parts.get(1).unwrap_or(&parts[0]), units)?;
+            }
+            "row-gap" => {
+                output.format.normal_gaps[1] = value == "normal";
+                s.gap.height = gap(value, units)?;
+            }
+            "column-gap" => {
+                output.format.normal_gaps[0] = value == "normal";
+                s.gap.width = gap(value, units)?;
+            }
+            "flex-grow" => s.flex_grow = number(value, units)?,
+            "flex-shrink" => s.flex_shrink = number(value, units)?,
+            "flex-basis" => s.flex_basis = dimension(value, units)?,
+            "flex-direction" => s.flex_direction = direction(value)?,
+            "flex-wrap" => s.flex_wrap = wrap(value)?,
+            "flex-flow" => {
+                s.flex_direction = FlexDirection::Row;
+                s.flex_wrap = FlexWrap::NoWrap;
+                let mut has_direction = false;
+                let mut has_wrap = false;
+                for part in &parts {
+                    if let Ok(d) = direction(part) {
+                        if has_direction {
+                            return Err("duplicate flex direction");
+                        }
+                        s.flex_direction = d;
+                        has_direction = true;
+                    } else {
+                        if has_wrap {
+                            return Err("duplicate flex wrap");
+                        }
+                        s.flex_wrap = wrap(part)?;
+                        has_wrap = true;
+                    }
+                }
+                if parts.is_empty() {
+                    return Err("invalid flex-flow");
+                }
+            }
+            "flex" => apply_flex(s, value, &parts, units)?,
+            "align-items" => s.align_items = alignment(value)?.unwrap_or_default(),
+            "align-self" => s.align_self = alignment(value)?,
+            "justify-items" => s.justify_items = alignment(value)?.unwrap_or_default(),
+            "justify-self" => s.justify_self = alignment(value)?,
+            "align-content" => s.align_content = distribution(value)?.unwrap_or_default(),
+            "justify-content" => s.justify_content = distribution(value)?.unwrap_or_default(),
+            "place-items" | "place-self" | "place-content" => {
+                if parts.is_empty() || parts.len() > 2 {
+                    return Err("invalid alignment shorthand");
+                }
+                let a = &parts[0];
+                let b = parts.get(1).unwrap_or(a);
+                match name {
+                    "place-items" => {
+                        s.align_items = alignment(a)?.unwrap_or_default();
+                        s.justify_items = alignment(b)?.unwrap_or_default();
+                    }
+                    "place-self" => {
+                        s.align_self = alignment(a)?;
+                        s.justify_self = alignment(b)?;
+                    }
+                    _ => {
+                        s.align_content = distribution(a)?.unwrap_or_default();
+                        s.justify_content = distribution(b)?.unwrap_or_default();
+                    }
+                }
+            }
+            "grid-template-columns" | "grid-template-rows" => {
+                let axis = usize::from(name == "grid-template-rows");
+                output.format.subgrid[axis] = parts
+                    .first()
+                    .is_some_and(|part| part.eq_ignore_ascii_case("subgrid"));
+                output.format.subgrid_names[axis].clear();
+                if output.format.subgrid[axis] {
+                    for part in &parts[1..] {
+                        let inner = part
+                            .strip_prefix('[')
+                            .and_then(|v| v.strip_suffix(']'))
+                            .ok_or("expected subgrid line names")?;
+                        let mut parser = Parser::new(inner);
+                        let mut names = Vec::new();
+                        while !parser.is_exhausted() {
+                            names.push(
+                                parser
+                                    .expect_ident_cloned()
+                                    .map_err(|_| "invalid subgrid line name")?
+                                    .to_string(),
+                            );
+                        }
+                        output.format.subgrid_names[axis].push(names);
+                    }
+                    return Ok(());
+                }
+                let (tracks, names) = named_tracks(value, units)?;
+                if name == "grid-template-columns" {
+                    s.grid_template_columns = tracks;
+                    s.grid_template_column_names = names;
+                } else {
+                    s.grid_template_rows = tracks;
+                    s.grid_template_row_names = names;
+                }
+            }
+            "grid" => apply_grid_shorthand(value, s, &mut output.format, units)?,
+            "grid-template" => apply_grid_template(value, s, &mut output.format, units)?,
+            "grid-template-areas" => s.grid_template_areas = areas(value)?,
+            "grid-auto-columns" => {
+                s.grid_auto_columns = parts
+                    .iter()
+                    .map(|v| track(v, units))
+                    .collect::<Result<_, _>>()?
+            }
+            "grid-auto-rows" => {
+                s.grid_auto_rows = parts
+                    .iter()
+                    .map(|v| track(v, units))
+                    .collect::<Result<_, _>>()?
+            }
+            "grid-auto-flow" => {
+                s.grid_auto_flow = match value {
+                    "row" => GridAutoFlow::Row,
+                    "column" => GridAutoFlow::Column,
+                    "dense" | "row dense" | "dense row" => GridAutoFlow::RowDense,
+                    "column dense" | "dense column" => GridAutoFlow::ColumnDense,
+                    _ => return Err("invalid grid-auto-flow"),
+                }
+            }
+            "grid-column" => s.grid_column = placement_pair(value)?,
+            "grid-row" => s.grid_row = placement_pair(value)?,
+            "grid-column-start" => s.grid_column.start = placement(value)?,
+            "grid-column-end" => s.grid_column.end = placement(value)?,
+            "grid-row-start" => s.grid_row.start = placement(value)?,
+            "grid-row-end" => s.grid_row.end = placement(value)?,
+            "grid-area" => {
+                let values: Vec<_> = value.split('/').map(str::trim).collect();
+                if values.is_empty() || values.len() > 4 {
+                    return Err("invalid grid-area");
+                }
+                s.grid_row.start = placement(values[0])?;
+                let default = if matches!(s.grid_row.start, GridPlacement::NamedLine(_, _)) {
+                    values[0]
+                } else {
+                    "auto"
+                };
+                s.grid_column.start = placement(values.get(1).copied().unwrap_or(default))?;
+                s.grid_row.end = placement(values.get(2).copied().unwrap_or(default))?;
+                s.grid_column.end = placement(values.get(3).copied().unwrap_or(default))?;
+            }
+            _ => return Err("unsupported layout property"),
+        }
+        Ok(())
+    }
+}
+
+fn inherited(name: &str) -> bool {
+    matches!(
+        name,
+        "direction"
+            | "visibility"
+            | "writing-mode"
+            | "text-orientation"
+            | "line-height"
+            | "text-align"
+            | "text-overflow"
+            | "white-space"
+            | "border-collapse"
+            | "border-spacing"
+            | "caption-side"
+            | "empty-cells"
+            | "orphans"
+            | "widows"
+    )
+}
+
+fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if crate::formatting::supported(name) {
+        copy_format_property(name, &mut out.format, &source.format);
+        return;
+    }
+    if name == "overflow-clip-margin" {
+        out.overflow_clip_box = source.overflow_clip_box;
+        out.overflow_clip_margin = source.overflow_clip_margin;
+        return;
+    }
+    if name == "margin-trim" {
+        out.margin_trim = source.margin_trim;
+        return;
+    }
+    if name == "scrollbar-gutter" {
+        out.scrollbar_gutter = source.scrollbar_gutter;
+        return;
+    }
+    if let Some(side_name) = name.strip_prefix("overflow-clip-margin-") {
+        let copy_side = |side_name: &str, out: &mut BoxStyle, source: &BoxStyle| {
+            let target = logical_side(side_name, out.layout.direction, out.format.writing)
+                .or_else(|| side(side_name))
+                .unwrap();
+            let source_edge =
+                logical_side(side_name, source.layout.direction, source.format.writing)
+                    .or_else(|| side(side_name))
+                    .unwrap();
+            out.overflow_clip_margin[target] = source.overflow_clip_margin[source_edge];
+        };
+        match side_name {
+            "block" | "inline" => {
+                let pair = if side_name == "inline" {
+                    ["inline-start", "inline-end"]
+                } else {
+                    ["block-start", "block-end"]
+                };
+                for side_name in pair {
+                    copy_side(side_name, out, source);
+                }
+            }
+            _ => copy_side(side_name, out, source),
+        }
+        return;
+    }
+    if name.ends_with("inline-size") || name.ends_with("block-size") {
+        let inline = name.ends_with("inline-size");
+        fn copy<T: Copy>(
+            source: Size<T>,
+            to: &mut Size<T>,
+            source_width: bool,
+            target_width: bool,
+        ) {
+            let value = if source_width {
+                source.width
+            } else {
+                source.height
+            };
+            if target_width {
+                to.width = value;
+            } else {
+                to.height = value;
+            }
+        }
+        let a = inline != source.format.writing.vertical();
+        let b = inline != out.format.writing.vertical();
+        if name.starts_with("min-") {
+            copy(source.layout.min_size, &mut out.layout.min_size, a, b);
+            copy(source.intrinsic_min, &mut out.intrinsic_min, a, b);
+        } else if name.starts_with("max-") {
+            copy(source.layout.max_size, &mut out.layout.max_size, a, b);
+            copy(source.intrinsic_max, &mut out.intrinsic_max, a, b);
+        } else {
+            copy(source.layout.size, &mut out.layout.size, a, b);
+        }
+        return;
+    }
+    if let Some((group, logical)) = name.split_once('-')
+        && matches!(group, "margin" | "padding" | "inset")
+        && (logical.starts_with("inline") || logical.starts_with("block"))
+    {
+        let sides = match logical {
+            "inline" => vec!["inline-start", "inline-end"],
+            "block" => vec!["block-start", "block-end"],
+            _ => vec![logical],
+        };
+        for side in sides {
+            let to = logical_side(side, out.layout.direction, out.format.writing).unwrap();
+            let from = logical_side(side, source.layout.direction, source.format.writing).unwrap();
+            match group {
+                "margin" => {
+                    *edge_mut(&mut out.layout.margin, to) =
+                        *edge_mut(&mut source.layout.margin.clone(), from)
+                }
+                "inset" => {
+                    *edge_mut(&mut out.layout.inset, to) =
+                        *edge_mut(&mut source.layout.inset.clone(), from)
+                }
+                _ => {
+                    *edge_mut(&mut out.layout.padding, to) =
+                        *edge_mut(&mut source.layout.padding.clone(), from);
+                    out.padding_set = true;
+                }
+            }
+        }
+        return;
+    }
+
+    if name.starts_with("border-inline") || name.starts_with("border-block") {
+        for physical in physical_borders(name, out.layout.direction, out.format.writing) {
+            copy_property(&physical, out, source);
+        }
+        return;
+    }
+    let to = &mut out.layout;
+    let from = &source.layout;
+    match name {
+        "display" => {
+            to.display = from.display;
+            out.display_set = true;
+            out.inline = source.inline;
+            out.contents = source.contents;
+            out.format.display = source.format.display;
+        }
+        "box-sizing" => to.box_sizing = from.box_sizing,
+        "direction" => to.direction = from.direction,
+        "float" => to.float = from.float,
+        "clear" => to.clear = from.clear,
+        "position" => {
+            to.position = from.position;
+            out.positioned = source.positioned;
+            out.fixed = source.fixed;
+        }
+        "width" | "inline-size" => to.size.width = from.size.width,
+        "height" | "block-size" => to.size.height = from.size.height,
+        "min-width" | "min-inline-size" => {
+            to.min_size.width = from.min_size.width;
+            out.intrinsic_min.width = source.intrinsic_min.width;
+        }
+        "min-height" | "min-block-size" => {
+            to.min_size.height = from.min_size.height;
+            out.intrinsic_min.height = source.intrinsic_min.height;
+        }
+        "max-width" | "max-inline-size" => {
+            to.max_size.width = from.max_size.width;
+            out.intrinsic_max.width = source.intrinsic_max.width;
+        }
+        "max-height" | "max-block-size" => {
+            to.max_size.height = from.max_size.height;
+            out.intrinsic_max.height = source.intrinsic_max.height;
+        }
+        "aspect-ratio" => to.aspect_ratio = from.aspect_ratio,
+        "visibility" => {
+            out.hidden = source.hidden;
+            out.collapsed = source.collapsed;
+        }
+        "order" => out.order = source.order,
+        "z-index" => out.z_index = source.z_index,
+        "overflow" => to.overflow = from.overflow,
+        "overflow-x" => to.overflow.x = from.overflow.x,
+        "overflow-y" => to.overflow.y = from.overflow.y,
+        "overflow-block" => {
+            let source_axis = usize::from(!source.format.writing.vertical());
+            let target_axis = usize::from(!out.format.writing.vertical());
+            let value = if source_axis == 0 {
+                source.layout.overflow.x
+            } else {
+                source.layout.overflow.y
+            };
+            if target_axis == 0 {
+                to.overflow.x = value;
+            } else {
+                to.overflow.y = value;
+            }
+        }
+        "overflow-inline" => {
+            let source_axis = usize::from(source.format.writing.vertical());
+            let target_axis = usize::from(out.format.writing.vertical());
+            let value = if source_axis == 0 {
+                source.layout.overflow.x
+            } else {
+                source.layout.overflow.y
+            };
+            if target_axis == 0 {
+                to.overflow.x = value;
+            } else {
+                to.overflow.y = value;
+            }
+        }
+        "gap" => to.gap = from.gap,
+        "row-gap" => to.gap.height = from.gap.height,
+        "column-gap" => to.gap.width = from.gap.width,
+        "flex-direction" => to.flex_direction = from.flex_direction,
+        "flex-wrap" => to.flex_wrap = from.flex_wrap,
+        "flex-flow" => {
+            to.flex_direction = from.flex_direction;
+            to.flex_wrap = from.flex_wrap;
+        }
+        "flex-grow" => to.flex_grow = from.flex_grow,
+        "flex-shrink" => to.flex_shrink = from.flex_shrink,
+        "flex-basis" => to.flex_basis = from.flex_basis,
+        "flex" => {
+            to.flex_grow = from.flex_grow;
+            to.flex_shrink = from.flex_shrink;
+            to.flex_basis = from.flex_basis;
+        }
+        "align-items" => to.align_items = from.align_items,
+        "justify-items" => to.justify_items = from.justify_items,
+        "align-self" => to.align_self = from.align_self,
+        "justify-self" => to.justify_self = from.justify_self,
+        "align-content" => to.align_content = from.align_content,
+        "justify-content" => to.justify_content = from.justify_content,
+        "place-items" => {
+            to.align_items = from.align_items;
+            to.justify_items = from.justify_items;
+        }
+        "place-self" => {
+            to.align_self = from.align_self;
+            to.justify_self = from.justify_self;
+        }
+        "place-content" => {
+            to.align_content = from.align_content;
+            to.justify_content = from.justify_content;
+        }
+        "grid-template-columns" => {
+            out.format.subgrid[0] = source.format.subgrid[0];
+            out.format.subgrid_names[0] = source.format.subgrid_names[0].clone();
+            to.grid_template_columns = from.grid_template_columns.clone();
+            to.grid_template_column_names = from.grid_template_column_names.clone();
+        }
+        "grid-template-rows" => {
+            out.format.subgrid[1] = source.format.subgrid[1];
+            out.format.subgrid_names[1] = source.format.subgrid_names[1].clone();
+            to.grid_template_rows = from.grid_template_rows.clone();
+            to.grid_template_row_names = from.grid_template_row_names.clone();
+        }
+        "grid-template" => {
+            out.format.subgrid = source.format.subgrid;
+            out.format.subgrid_names = source.format.subgrid_names.clone();
+            to.grid_template_rows = from.grid_template_rows.clone();
+            to.grid_template_columns = from.grid_template_columns.clone();
+            to.grid_template_row_names = from.grid_template_row_names.clone();
+            to.grid_template_column_names = from.grid_template_column_names.clone();
+            to.grid_template_areas = from.grid_template_areas.clone();
+        }
+        "grid" => {
+            out.format.subgrid = source.format.subgrid;
+            out.format.subgrid_names = source.format.subgrid_names.clone();
+            to.grid_template_rows = from.grid_template_rows.clone();
+            to.grid_template_columns = from.grid_template_columns.clone();
+            to.grid_template_row_names = from.grid_template_row_names.clone();
+            to.grid_template_column_names = from.grid_template_column_names.clone();
+            to.grid_template_areas = from.grid_template_areas.clone();
+            to.grid_auto_rows = from.grid_auto_rows.clone();
+            to.grid_auto_columns = from.grid_auto_columns.clone();
+            to.grid_auto_flow = from.grid_auto_flow;
+        }
+        "grid-template-areas" => to.grid_template_areas = from.grid_template_areas.clone(),
+        "grid-auto-columns" => to.grid_auto_columns = from.grid_auto_columns.clone(),
+        "grid-auto-rows" => to.grid_auto_rows = from.grid_auto_rows.clone(),
+        "grid-auto-flow" => to.grid_auto_flow = from.grid_auto_flow,
+        "grid-column" => to.grid_column = from.grid_column.clone(),
+        "grid-row" => to.grid_row = from.grid_row.clone(),
+        "grid-column-start" => to.grid_column.start = from.grid_column.start.clone(),
+        "grid-column-end" => to.grid_column.end = from.grid_column.end.clone(),
+        "grid-row-start" => to.grid_row.start = from.grid_row.start.clone(),
+        "grid-row-end" => to.grid_row.end = from.grid_row.end.clone(),
+        "grid-area" => {
+            to.grid_column = from.grid_column.clone();
+            to.grid_row = from.grid_row.clone();
+        }
+        _ if name.starts_with("border") => {
+            out.border_set = true;
+            let parts: Vec<_> = name.split('-').skip(1).collect();
+            for i in 0..4 {
+                if parts
+                    .first()
+                    .is_some_and(|part| side(part).is_some_and(|s| s != i))
+                {
+                    continue;
+                }
+                let property = parts.last().copied().unwrap_or("");
+                if property == "width" || !matches!(property, "color" | "style") {
+                    out.border_widths[i] = source.border_widths[i];
+                }
+                if property == "style" || !matches!(property, "color" | "width") {
+                    out.border_styles[i] = source.border_styles[i];
+                }
+                if property == "color" || !matches!(property, "style" | "width") {
+                    out.border_colors[i] = source.border_colors[i];
+                }
+            }
+        }
+        _ => {
+            let (group, suffix) = name.split_once('-').unwrap_or((name, ""));
+            for i in 0..4 {
+                let included = match suffix {
+                    "" => true,
+                    "inline" => i == 1 || i == 3,
+                    "block" => i == 0 || i == 2,
+                    _ => logical_side(suffix, to.direction, out.format.writing) == Some(i),
+                };
+                if !included {
+                    continue;
+                }
+                match group {
+                    "margin" => {
+                        *edge_mut(&mut to.margin, i) = *edge_mut(&mut from.margin.clone(), i)
+                    }
+                    "padding" => {
+                        *edge_mut(&mut to.padding, i) = *edge_mut(&mut from.padding.clone(), i);
+                        out.padding_set = true;
+                    }
+                    "inset" => *edge_mut(&mut to.inset, i) = *edge_mut(&mut from.inset.clone(), i),
+                    _ => {
+                        if let Some(i) = side(name) {
+                            *edge_mut(&mut to.inset, i) = *edge_mut(&mut from.inset.clone(), i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BoxStyle {
+    pub(crate) fn finish(&mut self) {
+        let widths = std::array::from_fn::<_, 4, _>(|i| {
+            if matches!(
+                self.border_styles[i],
+                BorderStyle::None | BorderStyle::Hidden
+            ) {
+                0.0
+            } else {
+                self.border_widths[i]
+            }
+        });
+        self.layout.border = taffy::Rect {
+            top: length(widths[0]),
+            right: length(widths[1]),
+            bottom: length(widths[2]),
+            left: length(widths[3]),
+        };
+        if !self.positioned {
+            self.layout.inset = taffy::Rect::auto();
+        }
+        let x = self.layout.overflow.x;
+        let y = self.layout.overflow.y;
+        let scroll = |v| !matches!(v, Overflow::Visible | Overflow::Clip);
+        let computed = |v| match v {
+            Overflow::Visible => Overflow::Scroll,
+            Overflow::Clip => Overflow::Hidden,
+            _ => v,
+        };
+        if scroll(y) {
+            self.layout.overflow.x = computed(x);
+        }
+        if scroll(x) {
+            self.layout.overflow.y = computed(y);
+        }
+    }
+}
+
+pub(crate) fn components(value: &str) -> Result<Vec<String>, &'static str> {
+    let mut input = Parser::new(value);
+    let mut parts = Vec::new();
+    while !input.is_exhausted() {
+        input.skip_whitespace();
+        let start = input.position();
+        let token = input.next().map_err(|_| "invalid layout value")?.clone();
+        if matches!(
+            token,
+            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock
+        ) {
+            input
+                .parse_nested_block::<_, (), ()>(|p| {
+                    while p.next().is_ok() {}
+                    Ok(())
+                })
+                .map_err(|_| "invalid layout function")?;
+        }
+        parts.push(input.slice_from(start).trim().to_owned());
+    }
+    Ok(parts)
+}
+
+fn number(value: &str, units: Units) -> Result<f32, &'static str> {
+    let n = if let Some(n) = crate::math::number(value, units)? {
+        n.max(0.0)
+    } else {
+        value.parse::<f32>().map_err(|_| "invalid number")?
+    };
+    if n.is_finite() && n >= 0.0 {
+        Ok(n)
+    } else {
+        Err("expected nonnegative finite number")
+    }
+}
+
+pub(crate) fn length_value(
+    value: &str,
+    units: Units,
+    negative: bool,
+) -> Result<(f32, bool), &'static str> {
+    let mut input = Parser::new(value);
+    let (value, percentage) = match input.next().map_err(|_| "expected length")? {
+        Token::Number { value, .. } if *value == 0.0 => (*value, false),
+        Token::Percentage { unit_value, .. } => (*unit_value, true),
+        Token::Dimension { value, unit, .. } => {
+            let factor = match unit.to_ascii_lowercase().as_str() {
+                "px" => 1.0,
+                "pt" => 96.0 / 72.0,
+                "pc" => 16.0,
+                "in" => 96.0,
+                "cm" => 96.0 / 2.54,
+                "mm" => 96.0 / 25.4,
+                "q" => 96.0 / 101.6,
+                "em" => units.font,
+                "rem" => units.root_font,
+                "vw" | "svw" | "lvw" | "dvw" => units.viewport.x / 100.0,
+                "vh" | "svh" | "lvh" | "dvh" => units.viewport.y / 100.0,
+                "vmin" => units.viewport.min_elem() / 100.0,
+                "vmax" => units.viewport.max_elem() / 100.0,
+                _ => return Err("unsupported length unit"),
+            };
+            (*value * factor, false)
+        }
+        _ => return Err("expected CSS length or percentage"),
+    };
+    if input.expect_exhausted().is_err() || !value.is_finite() || (!negative && value < 0.0) {
+        return Err("invalid length");
+    }
+    Ok((value, percentage))
+}
+
+pub(crate) fn dimension(value: &str, units: Units) -> Result<Dimension, &'static str> {
+    match value {
+        "min-content" => return Ok(Dimension::min_content()),
+        "max-content" => return Ok(Dimension::max_content()),
+        "fit-content" => return Ok(Dimension::fit_content()),
+        "stretch" => return Ok(Dimension::stretch()),
+        "content" => return Ok(Dimension::content()),
+        _ => {}
+    }
+    if let Some(inner) = value
+        .strip_prefix("fit-content(")
+        .and_then(|v| v.strip_suffix(')'))
+    {
+        if let Some(handle) = crate::math::length(inner.trim(), units, false, true)? {
+            return Ok(Dimension::fit_content_calc(handle));
+        }
+        let (v, p) = length_value(inner.trim(), units, false)?;
+        return Ok(if p {
+            Dimension::fit_content_percent(v)
+        } else {
+            Dimension::fit_content_px(v)
+        });
+    }
+    if value == "auto" {
+        return Ok(auto());
+    }
+    if let Some(handle) = crate::math::length(value, units, false, true)? {
+        return Ok(taffy::LengthPercentage::calc(handle).into());
+    }
+    let (v, p) = length_value(value, units, false)?;
+    Ok(if p { percent(v) } else { length(v) })
+}
+
+fn gap(value: &str, units: Units) -> Result<LengthPercentage, &'static str> {
+    if value == "normal" {
+        return Ok(length(0.0_f32));
+    }
+    if let Some(handle) = crate::math::length(value, units, false, true)? {
+        return Ok(taffy::LengthPercentage::calc(handle));
+    }
+    let (v, p) = length_value(value, units, false)?;
+    Ok(if p { percent(v) } else { length(v) })
+}
+
+fn clip_margin_length(value: &str, units: Units) -> Result<f32, &'static str> {
+    if let Some(handle) = crate::math::length(value, units, false, false)? {
+        return Ok(crate::math::resolve(handle, 0.0));
+    }
+    let (value, percentage) = length_value(value, units, false)?;
+    if percentage {
+        return Err("percentage overflow-clip-margin is invalid");
+    }
+    Ok(value)
+}
+
+fn apply_clip_margin(
+    clip_box: &mut OverflowClipBox,
+    margins: &mut [f32; 4],
+    parts: &[String],
+    units: Units,
+) -> Result<(), &'static str> {
+    let (visual_box, value) = match parts {
+        [value] => (OverflowClipBox::Padding, value.as_str()),
+        [visual_box, value] => (
+            match visual_box.as_str() {
+                "content-box" => OverflowClipBox::Content,
+                "padding-box" => OverflowClipBox::Padding,
+                "border-box" => OverflowClipBox::Border,
+                _ => return Err("invalid overflow-clip-margin visual box"),
+            },
+            value.as_str(),
+        ),
+        _ => return Err("invalid overflow-clip-margin"),
+    };
+    let value = clip_margin_length(value, units)?;
+    *clip_box = visual_box;
+    *margins = [value; 4];
+    Ok(())
+}
+
+fn apply_margin_trim(trim: &mut [bool; 4], parts: &[String]) -> Result<(), &'static str> {
+    if parts.is_empty() {
+        return Err("invalid margin-trim");
+    }
+    if parts.len() == 1 && parts[0] == "none" {
+        *trim = [false; 4];
+        return Ok(());
+    }
+    if parts.iter().any(|part| part == "none") {
+        return Err("invalid margin-trim");
+    }
+    if parts.len() > 1
+        && parts
+            .iter()
+            .any(|part| matches!(part.as_str(), "all" | "in-flow"))
+    {
+        return Err("invalid margin-trim");
+    }
+    *trim = [false; 4];
+    for part in parts {
+        match part.as_str() {
+            "all" | "in-flow" => *trim = [true; 4],
+            "block" => set_trim(trim, &[0, 1])?,
+            "inline" => set_trim(trim, &[2, 3])?,
+            "block-start" => set_trim(trim, &[0])?,
+            "block-end" => set_trim(trim, &[1])?,
+            "inline-start" => set_trim(trim, &[2])?,
+            "inline-end" => set_trim(trim, &[3])?,
+            _ => return Err("invalid margin-trim"),
+        }
+    }
+    Ok(())
+}
+
+fn set_trim(trim: &mut [bool; 4], sides: &[usize]) -> Result<(), &'static str> {
+    if sides.iter().any(|side| trim[*side]) {
+        return Err("duplicate margin-trim side");
+    }
+    for side in sides {
+        trim[*side] = true;
+    }
+    Ok(())
+}
+
+fn quad(parts: &[String]) -> Result<[&str; 4], &'static str> {
+    match parts {
+        [a] => Ok([a, a, a, a]),
+        [a, b] => Ok([a, b, a, b]),
+        [a, b, c] => Ok([a, b, c, b]),
+        [a, b, c, d] => Ok([a, b, c, d]),
+        _ => Err("expected one to four values"),
+    }
+}
+
+fn side(value: &str) -> Option<usize> {
+    match value {
+        "top" | "block-start" => Some(0),
+        "right" | "inline-end" => Some(1),
+        "bottom" | "block-end" => Some(2),
+        "left" | "inline-start" => Some(3),
+        _ => None,
+    }
+}
+
+fn edge_mut<T>(rect: &mut taffy::Rect<T>, side: usize) -> &mut T {
+    match side {
+        0 => &mut rect.top,
+        1 => &mut rect.right,
+        2 => &mut rect.bottom,
+        _ => &mut rect.left,
+    }
+}
+
+fn set_edge(
+    style: &mut BoxStyle,
+    group: &str,
+    side: usize,
+    value: &str,
+    units: Units,
+) -> Result<(), &'static str> {
+    if group == "padding" {
+        *edge_mut(&mut style.layout.padding, side) = gap(value, units)?;
+        style.padding_set = true;
+    } else {
+        let length = if value == "auto" {
+            auto()
+        } else if let Some(handle) = crate::math::length(value, units, true, true)? {
+            LengthPercentageAuto::calc(handle)
+        } else {
+            let (v, p) = length_value(value, units, true)?;
+            if p { percent(v) } else { length(v) }
+        };
+        *edge_mut(
+            if group == "margin" {
+                &mut style.layout.margin
+            } else {
+                &mut style.layout.inset
+            },
+            side,
+        ) = length;
+    }
+    Ok(())
+}
+
+fn overflow(value: &str) -> Result<Overflow, &'static str> {
+    match value {
+        "visible" => Ok(Overflow::Visible),
+        "hidden" => Ok(Overflow::Hidden),
+        "clip" => Ok(Overflow::Clip),
+        "scroll" => Ok(Overflow::Scroll),
+        "auto" => Ok(Overflow::Scroll),
+        _ => Err("invalid overflow"),
+    }
+}
+fn direction(value: &str) -> Result<FlexDirection, &'static str> {
+    match value {
+        "row" => Ok(FlexDirection::Row),
+        "row-reverse" => Ok(FlexDirection::RowReverse),
+        "column" => Ok(FlexDirection::Column),
+        "column-reverse" => Ok(FlexDirection::ColumnReverse),
+        _ => Err("invalid flex-direction"),
+    }
+}
+fn wrap(value: &str) -> Result<FlexWrap, &'static str> {
+    match value {
+        "nowrap" => Ok(FlexWrap::NoWrap),
+        "wrap" => Ok(FlexWrap::Wrap),
+        "wrap-reverse" => Ok(FlexWrap::WrapReverse),
+        _ => Err("invalid flex-wrap"),
+    }
+}
+fn alignment(value: &str) -> Result<Option<AlignItems>, &'static str> {
+    if value == "auto" {
+        return Ok(None);
+    }
+    value.parse().map(Some).map_err(|_| "invalid alignment")
+}
+fn distribution(value: &str) -> Result<Option<AlignContent>, &'static str> {
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| "invalid content alignment")
+}
+
+fn apply_flex(
+    s: &mut Style,
+    value: &str,
+    parts: &[String],
+    units: Units,
+) -> Result<(), &'static str> {
+    match value {
+        "none" => {
+            s.flex_grow = 0.0;
+            s.flex_shrink = 0.0;
+            s.flex_basis = auto();
+        }
+        "auto" => {
+            s.flex_grow = 1.0;
+            s.flex_shrink = 1.0;
+            s.flex_basis = auto();
+        }
+        "initial" => {
+            s.flex_grow = 0.0;
+            s.flex_shrink = 1.0;
+            s.flex_basis = auto();
+        }
+        _ => {
+            s.flex_grow = 1.0;
+            s.flex_shrink = 1.0;
+            s.flex_basis = percent(0.0_f32);
+            match parts {
+                [a] => {
+                    if let Ok(n) = number(a, units) {
+                        s.flex_grow = n;
+                    } else {
+                        s.flex_basis = dimension(a, units)?;
+                    }
+                }
+                [a, b] => {
+                    s.flex_grow = number(a, units)?;
+                    if let Ok(n) = number(b, units) {
+                        s.flex_shrink = n;
+                    } else {
+                        s.flex_basis = dimension(b, units)?;
+                    }
+                }
+                [a, b, c] => {
+                    s.flex_grow = number(a, units)?;
+                    s.flex_shrink = number(b, units)?;
+                    s.flex_basis = dimension(c, units)?;
+                }
+                _ => return Err("invalid flex"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn track(value: &str, units: Units) -> Result<TrackSizingFunction, &'static str> {
+    match value {
+        "auto" => return Ok(auto()),
+        "min-content" => return Ok(min_content()),
+        "max-content" => return Ok(max_content()),
+        _ => {}
+    }
+    if let Some(n) = value.strip_suffix("fr") {
+        return Ok(fr(number(n, units)?));
+    }
+    if let Some(inner) = value
+        .strip_prefix("minmax(")
+        .and_then(|v| v.strip_suffix(')'))
+    {
+        let (a, b) = inner.split_once(',').ok_or("invalid minmax")?;
+        if a.trim().ends_with("fr") {
+            return Err("flexible minimum track");
+        }
+        return Ok(minmax(
+            track(a.trim(), units)?.min,
+            track(b.trim(), units)?.max,
+        ));
+    }
+    if let Some(inner) = value
+        .strip_prefix("fit-content(")
+        .and_then(|v| v.strip_suffix(')'))
+    {
+        return Ok(fit_content(gap(inner.trim(), units)?));
+    }
+    if let Some(handle) = crate::math::length(value, units, false, true)? {
+        return Ok(taffy::LengthPercentage::calc(handle).into());
+    }
+    let (v, p) = length_value(value, units, false)?;
+    Ok(if p { percent(v) } else { length(v) })
+}
+
+fn tracks(value: &str, units: Units) -> Result<Vec<GridTemplateComponent<String>>, &'static str> {
+    if value == "none" {
+        return Ok(Vec::new());
+    }
+    components(value)?
+        .iter()
+        .map(|v| {
+            if let Some(inner) = v.strip_prefix("repeat(").and_then(|v| v.strip_suffix(')')) {
+                let (count, values) = inner.split_once(',').ok_or("invalid repeat")?;
+                let tracks: Vec<_> = components(values)?
+                    .iter()
+                    .map(|v| track(v, units))
+                    .collect::<Result<_, _>>()?;
+                if tracks.is_empty() {
+                    return Err("empty repeat");
+                }
+                match count.trim() {
+                    "auto-fill" => Ok(repeat(taffy::RepetitionCount::AutoFill, tracks)),
+                    "auto-fit" => Ok(repeat(taffy::RepetitionCount::AutoFit, tracks)),
+                    n => {
+                        let count: u16 = n.parse().map_err(|_| "invalid repeat count")?;
+                        if count == 0 {
+                            return Err("zero repeat count");
+                        }
+                        Ok(repeat(count, tracks))
+                    }
+                }
+            } else {
+                Ok(GridTemplateComponent::Single(track(v, units)?))
+            }
+        })
+        .collect()
+}
+
+fn placement(value: &str) -> Result<GridPlacement<String>, &'static str> {
+    value.parse().map_err(|_| "invalid grid placement")
+}
+fn placement_pair(value: &str) -> Result<taffy::Line<GridPlacement<String>>, &'static str> {
+    let (a, b) = value.split_once('/').unwrap_or((value, "auto"));
+    Ok(taffy::Line {
+        start: placement(a.trim())?,
+        end: placement(b.trim())?,
+    })
+}
+
+pub(crate) fn border_style(value: &str) -> Result<BorderStyle, &'static str> {
+    Ok(match value {
+        "none" => BorderStyle::None,
+        "hidden" => BorderStyle::Hidden,
+        "solid" => BorderStyle::Solid,
+        "dashed" => BorderStyle::Dashed,
+        "dotted" => BorderStyle::Dotted,
+        "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
+        _ => return Err("invalid border style"),
+    })
+}
+pub(crate) fn border_width(value: &str, units: Units) -> Result<f32, &'static str> {
+    if let Some(handle) = crate::math::length(value, units, false, false)? {
+        return Ok(crate::math::resolve(handle, 0.0));
+    }
+    match value {
+        "thin" => Ok(1.0),
+        "medium" => Ok(3.0),
+        "thick" => Ok(5.0),
+        _ => {
+            let (v, p) = length_value(value, units, false)?;
+            if p {
+                Err("percentage border width")
+            } else {
+                Ok(v)
+            }
+        }
+    }
+}
+pub(crate) fn border_color(value: &str) -> Result<Option<Color32>, &'static str> {
+    if value == "currentcolor" || value == "currentColor" {
+        return Ok(None);
+    }
+    crate::css::parse_color(&mut Parser::new(value))
+        .map(Some)
+        .map_err(|_| "invalid border color")
+}
+fn apply_border(
+    s: &mut BoxStyle,
+    name: &str,
+    parts: &[String],
+    units: Units,
+) -> Result<(), &'static str> {
+    s.border_set = true;
+    let suffix = name.strip_prefix("border-").unwrap_or("");
+    if matches!(suffix, "width" | "style" | "color") {
+        for (i, v) in quad(parts)?.iter().enumerate() {
+            match suffix {
+                "width" => s.border_widths[i] = border_width(v, units)?,
+                "style" => s.border_styles[i] = border_style(v)?,
+                _ => s.border_colors[i] = border_color(v)?,
+            }
+        }
+    } else if let Some((edge, property)) = suffix.split_once('-') {
+        let i = side(edge).ok_or("invalid border side")?;
+        if parts.len() != 1 {
+            return Err("invalid border value");
+        }
+        match property {
+            "width" => s.border_widths[i] = border_width(&parts[0], units)?,
+            "style" => s.border_styles[i] = border_style(&parts[0])?,
+            "color" => s.border_colors[i] = border_color(&parts[0])?,
+            _ => return Err("invalid border property"),
+        }
+    } else {
+        let mut width = None;
+        let mut style = None;
+        let mut color = None;
+        for value in parts {
+            if let Ok(v) = border_style(value) {
+                if style.replace(v).is_some() {
+                    return Err("duplicate border style");
+                }
+            } else if let Ok(v) = border_width(value, units) {
+                if width.replace(v).is_some() {
+                    return Err("duplicate border width");
+                }
+            } else if color.replace(border_color(value)?).is_some() {
+                return Err("duplicate border color");
+            }
+        }
+        if parts.is_empty() {
+            return Err("empty border");
+        }
+        for i in 0..4 {
+            if suffix.is_empty() || side(suffix) == Some(i) {
+                s.border_widths[i] = width.unwrap_or(3.0);
+                s.border_styles[i] = style.unwrap_or_default();
+                s.border_colors[i] = color.unwrap_or(None);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn limit(value: &str, units: Units) -> Result<LengthPercentageAuto, &'static str> {
+    if intrinsic_sizing(value).is_some() {
+        return Ok(auto());
+    }
+    if value == "auto" {
+        return Ok(auto());
+    }
+    if let Some(handle) = crate::math::length(value, units, false, true)? {
+        return Ok(taffy::LengthPercentage::calc(handle).into());
+    }
+    let (v, p) = length_value(value, units, false)?;
+    Ok(if p { percent(v) } else { length(v) })
+}
+
+pub(crate) fn intrinsic_sizing(value: &str) -> Option<IntrinsicSizing> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "min-content" => Some(IntrinsicSizing::MinContent),
+        "max-content" => Some(IntrinsicSizing::MaxContent),
+        _ => None,
+    }
+}
+
+type NamedTracks = (Vec<GridTemplateComponent<String>>, Vec<Vec<String>>);
+fn named_tracks(value: &str, units: Units) -> Result<NamedTracks, &'static str> {
+    if value.contains('[') {
+        let parsed: taffy::GridTemplateTracks<String, GridTemplateComponent<String>> =
+            value.parse().map_err(|_| "invalid named grid tracks")?;
+        Ok((parsed.tracks, parsed.line_names))
+    } else {
+        Ok((tracks(value, units)?, Vec::new()))
+    }
+}
+
+fn apply_grid_shorthand(
+    value: &str,
+    style: &mut Style,
+    format: &mut crate::formatting::Formatting,
+    units: Units,
+) -> Result<(), &'static str> {
+    apply_grid_template("none", style, format, units)?;
+    style.grid_auto_rows.clear();
+    style.grid_auto_columns.clear();
+    style.grid_auto_flow = GridAutoFlow::Row;
+    if value == "none" {
+        return Ok(());
+    }
+    let parts = components(value)?;
+    let slash = parts.iter().position(|part| part == "/");
+    if slash.is_some_and(|index| parts[index + 1..].contains(&"/".to_owned())) {
+        return Err("invalid grid slash");
+    }
+    let Some(slash) = slash else {
+        return apply_grid_template(value, style, format, units);
+    };
+    let first = &parts[..slash];
+    let second = &parts[slash + 1..];
+    if first.is_empty() || second.is_empty() {
+        return Err("invalid grid shorthand");
+    }
+    let first_flow = first
+        .iter()
+        .filter(|part| part.as_str() == "auto-flow")
+        .count();
+    let second_flow = second
+        .iter()
+        .filter(|part| part.as_str() == "auto-flow")
+        .count();
+    if first_flow + second_flow > 1 {
+        return Err("duplicate auto-flow");
+    }
+    if first_flow == 0 && second_flow == 0 {
+        return apply_grid_template(value, style, format, units);
+    }
+    let parse_auto_tracks =
+        |values: &[String]| -> Result<(Vec<TrackSizingFunction>, bool), &'static str> {
+            let mut dense = false;
+            let mut tracks = Vec::new();
+            let mut flow_seen = false;
+            for value in values {
+                match value.as_str() {
+                    "auto-flow" if !flow_seen => flow_seen = true,
+                    "dense" if !dense => dense = true,
+                    "auto-flow" | "dense" => return Err("duplicate grid auto-flow keyword"),
+                    _ => tracks.push(value.clone()),
+                }
+            }
+            if !flow_seen {
+                return Err("missing auto-flow");
+            }
+            if tracks.is_empty() {
+                tracks.push("auto".to_owned());
+            }
+            Ok((
+                tracks
+                    .iter()
+                    .map(|track_value| track(track_value, units))
+                    .collect::<Result<_, _>>()?,
+                dense,
+            ))
+        };
+    if first_flow == 1 {
+        set_grid_template_axis(&second.join(" "), 0, style, format, units)?;
+        let (tracks, dense) = parse_auto_tracks(first)?;
+        style.grid_auto_rows = tracks;
+        style.grid_auto_flow = if dense {
+            GridAutoFlow::RowDense
+        } else {
+            GridAutoFlow::Row
+        };
+    } else {
+        set_grid_template_axis(&first.join(" "), 1, style, format, units)?;
+        let (tracks, dense) = parse_auto_tracks(second)?;
+        style.grid_auto_columns = tracks;
+        style.grid_auto_flow = if dense {
+            GridAutoFlow::ColumnDense
+        } else {
+            GridAutoFlow::Column
+        };
+    }
+    Ok(())
+}
+
+fn apply_grid_template(
+    value: &str,
+    style: &mut Style,
+    format: &mut crate::formatting::Formatting,
+    units: Units,
+) -> Result<(), &'static str> {
+    style.grid_template_rows.clear();
+    style.grid_template_columns.clear();
+    style.grid_template_row_names.clear();
+    style.grid_template_column_names.clear();
+    style.grid_template_areas = None;
+    format.subgrid = [false; 2];
+    format.subgrid_names = Default::default();
+    if value == "none" {
+        return Ok(());
+    }
+
+    let parts = components(value)?;
+    let slash = parts.iter().position(|part| part == "/");
+    if slash.is_some_and(|index| parts[index + 1..].contains(&"/".to_owned())) {
+        return Err("invalid grid-template slash");
+    }
+    let rows = &parts[..slash.unwrap_or(parts.len())];
+    let columns = slash.map(|index| &parts[index + 1..]);
+    if rows.is_empty() || columns.is_some_and(|columns| columns.is_empty()) {
+        return Err("invalid grid-template");
+    }
+    let area_rows: Vec<_> = rows
+        .iter()
+        .filter(|part| quoted_string(part).is_some())
+        .cloned()
+        .collect();
+    let (row_tracks, row_names) = if !area_rows.is_empty() {
+        let area_value = area_rows.join(" ");
+        style.grid_template_areas = areas(&area_value)?;
+        let mut row_parts = Vec::new();
+        let mut skip_track = None;
+        for (index, part) in rows.iter().enumerate() {
+            if skip_track == Some(index) {
+                continue;
+            }
+            if quoted_string(part).is_some() {
+                let next = index + 1;
+                if rows
+                    .get(next)
+                    .is_some_and(|next| !next.starts_with('[') && quoted_string(next).is_none())
+                {
+                    row_parts.push(rows[next].clone());
+                    skip_track = Some(next);
+                } else {
+                    row_parts.push("auto".to_owned());
+                }
+            } else {
+                row_parts.push(part.clone());
+            }
+        }
+        let rows_value = row_parts.join(" ");
+        set_grid_template_axis(&rows_value, 1, style, format, units)?;
+        (
+            style.grid_template_rows.clone(),
+            style.grid_template_row_names.clone(),
+        )
+    } else if columns.is_some() {
+        let rows_value = rows.join(" ");
+        set_grid_template_axis(&rows_value, 1, style, format, units)?;
+        (
+            style.grid_template_rows.clone(),
+            style.grid_template_row_names.clone(),
+        )
+    } else {
+        return Err("grid-template requires a slash or area strings");
+    };
+    style.grid_template_rows = row_tracks;
+    style.grid_template_row_names = row_names;
+
+    if let Some(columns) = columns {
+        set_grid_template_axis(&columns.join(" "), 0, style, format, units)?;
+    }
+    Ok(())
+}
+
+fn set_grid_template_axis(
+    value: &str,
+    axis: usize,
+    style: &mut Style,
+    format: &mut crate::formatting::Formatting,
+    units: Units,
+) -> Result<(), &'static str> {
+    let parts = components(value)?;
+    if parts.first().is_some_and(|part| part == "subgrid") {
+        format.subgrid[axis] = true;
+        let mut names = Vec::new();
+        for part in &parts[1..] {
+            let inner = part
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .ok_or("expected subgrid line names")?;
+            let mut parser = Parser::new(inner);
+            let mut line_names = Vec::new();
+            while !parser.is_exhausted() {
+                line_names.push(
+                    parser
+                        .expect_ident_cloned()
+                        .map_err(|_| "invalid subgrid line name")?
+                        .to_string(),
+                );
+            }
+            names.push(line_names);
+        }
+        format.subgrid_names[axis] = names;
+        return Ok(());
+    }
+    let (tracks, names) = named_tracks(value, units)?;
+    if axis == 0 {
+        style.grid_template_columns = tracks;
+        style.grid_template_column_names = names;
+    } else {
+        style.grid_template_rows = tracks;
+        style.grid_template_row_names = names;
+    }
+    Ok(())
+}
+
+fn quoted_string(value: &str) -> Option<String> {
+    let mut parser = Parser::new(value);
+    let string = parser.expect_string().ok()?.to_string();
+    parser.expect_exhausted().ok()?;
+    Some(string)
+}
+
+fn areas(value: &str) -> Result<Option<taffy::GridTemplateAreas<String>>, &'static str> {
+    if value == "none" {
+        return Ok(None);
+    }
+    let mut parser = Parser::new(value);
+    let mut rows = Vec::new();
+    while !parser.is_exhausted() {
+        let row = parser
+            .expect_string()
+            .map_err(|_| "expected grid area row")?;
+        let cells: Vec<String> = row.split_whitespace().map(str::to_owned).collect();
+        if cells.is_empty() || cells.len() > u16::MAX as usize {
+            return Err("invalid grid area row");
+        }
+        rows.push(cells);
+    }
+    if rows.is_empty() || rows.len() > u16::MAX as usize {
+        return Err("invalid grid template areas");
+    }
+    let columns = rows[0].len();
+    let mut areas: std::collections::BTreeMap<String, (usize, usize, usize, usize)> =
+        Default::default();
+    for (y, row) in rows.iter().enumerate() {
+        if row.len() != columns {
+            return Err("unequal grid template rows");
+        }
+        for (x, name) in row.iter().enumerate() {
+            if name.chars().all(|c| c == '.') {
+                continue;
+            }
+            let area = areas.entry(name.clone()).or_insert((x, y, x + 1, y + 1));
+            area.0 = area.0.min(x);
+            area.1 = area.1.min(y);
+            area.2 = area.2.max(x + 1);
+            area.3 = area.3.max(y + 1);
+        }
+    }
+    let mut result = Vec::new();
+    for (name, (left, top, right, bottom)) in areas {
+        if rows[top..bottom]
+            .iter()
+            .any(|row| row[left..right].iter().any(|cell| *cell != name))
+        {
+            return Err("nonrectangular grid area");
+        }
+        result.push(taffy::GridTemplateArea {
+            name,
+            column_start: left as u16 + 1,
+            column_end: right as u16 + 1,
+            row_start: top as u16 + 1,
+            row_end: bottom as u16 + 1,
+        });
+    }
+    Ok(Some(taffy::GridTemplateAreas {
+        areas: result,
+        row_count: rows.len() as u16,
+        column_count: columns as u16,
+    }))
+}
+
+pub(crate) fn logical_side(
+    value: &str,
+    direction: taffy::Direction,
+    writing: crate::formatting::Writing,
+) -> Option<usize> {
+    if writing.vertical() {
+        return match value {
+            "inline-start" => Some(if direction == taffy::Direction::Rtl {
+                2
+            } else {
+                0
+            }),
+            "inline-end" => Some(if direction == taffy::Direction::Rtl {
+                0
+            } else {
+                2
+            }),
+            "block-start" => Some(if writing.reverse() { 1 } else { 3 }),
+            "block-end" => Some(if writing.reverse() { 3 } else { 1 }),
+            _ => side(value),
+        };
+    }
+    if direction == taffy::Direction::Rtl {
+        match value {
+            "inline-start" => return Some(1),
+            "inline-end" => return Some(3),
+            _ => {}
+        }
+    }
+    side(value)
+}
+
+fn physical_borders(
+    name: &str,
+    direction: taffy::Direction,
+    writing: crate::formatting::Writing,
+) -> Vec<String> {
+    let parts: Vec<_> = name.split('-').skip(1).collect();
+    let inline = parts[0] == "inline";
+    let names = ["top", "right", "bottom", "left"];
+    let start = if inline {
+        "inline-start"
+    } else {
+        "block-start"
+    };
+    let end = if inline { "inline-end" } else { "block-end" };
+    let edges = [
+        names[logical_side(start, direction, writing).unwrap()],
+        names[logical_side(end, direction, writing).unwrap()],
+    ];
+    let (indices, suffix): (&[usize], &[&str]) = match parts.get(1) {
+        Some(&"start") => (&[0], &parts[2..]),
+        Some(&"end") => (&[1], &parts[2..]),
+        _ => (&[0, 1], &parts[1..]),
+    };
+    indices
+        .iter()
+        .map(|i| {
+            let mut property = format!("border-{}", edges[*i]);
+            if !suffix.is_empty() {
+                property.push('-');
+                property.push_str(&suffix.join("-"));
+            }
+            property
+        })
+        .collect()
+}
+
+fn copy_format_property(
+    name: &str,
+    to: &mut crate::formatting::Formatting,
+    from: &crate::formatting::Formatting,
+) {
+    match name {
+        "writing-mode" => to.writing = from.writing,
+        "text-orientation" => to.text_orientation = from.text_orientation.clone(),
+        "column-count" => to.column_count = from.column_count,
+        "column-width" => to.column_width = from.column_width,
+        "columns" => {
+            to.column_count = from.column_count;
+            to.column_width = from.column_width;
+        }
+        "column-fill" => to.column_balance = from.column_balance,
+        "column-span" => to.column_span = from.column_span,
+        "column-rule" => to.column_rule = from.column_rule,
+        "column-rule-width" => to.column_rule.width = from.column_rule.width,
+        "column-rule-color" => to.column_rule.color = from.column_rule.color,
+        "column-rule-style" => to.column_rule.style = from.column_rule.style,
+        "break-before" | "page-break-before" => to.before = from.before,
+        "break-after" | "page-break-after" => to.after = from.after,
+        "break-inside" | "page-break-inside" => to.inside = from.inside,
+        "orphans" => to.orphans = from.orphans,
+        "widows" => to.widows = from.widows,
+        "box-decoration-break" => to.clone_decoration = from.clone_decoration,
+        "table-layout" => to.table_fixed = from.table_fixed,
+        "border-collapse" => to.collapse = from.collapse,
+        "border-spacing" => to.spacing = from.spacing,
+        "caption-side" => to.caption_bottom = from.caption_bottom,
+        "empty-cells" => to.hide_empty = from.hide_empty,
+        "vertical-align" => to.vertical_align = from.vertical_align.clone(),
+        "line-height" => to.line_height = from.line_height,
+        "text-align" => to.text_align = from.text_align.clone(),
+        "text-overflow" => to.text_overflow = from.text_overflow.clone(),
+        "white-space" => to.white_space = from.white_space.clone(),
+        _ => {}
+    }
+}
