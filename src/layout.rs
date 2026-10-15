@@ -14,7 +14,7 @@ use crate::{
     layout_style::{BorderStyle, BoxStyle, Units},
 };
 
-const ACTIVE: &str = "trcss.layout.active";
+const ACTIVE: &str = "ecss.layout.active";
 
 #[derive(Clone, Debug, PartialEq)]
 struct Geometry {
@@ -122,7 +122,7 @@ pub(crate) fn show(
     stylesheet: &Stylesheet,
     class: &str,
 ) -> Response {
-    let id = ui.next_auto_id().with("trcss.layout");
+    let id = ui.next_auto_id().with("ecss.layout");
     let active = ui.ctx().data(|d| d.get_temp::<u64>(Id::new(ACTIVE)));
     let active = active.and_then(|key| FRAMES.with(|frames| frames.borrow().get(&key).cloned()));
     let root = active.is_none();
