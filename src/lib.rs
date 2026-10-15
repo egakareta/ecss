@@ -650,18 +650,23 @@ mod tests {
             .as_ref()
             .to_vec();
         let stylesheet = Stylesheet::parse(
-            ".outfit-text { font-family: \"Outfit\", sans-serif; font-weight: 500; }",
+            ".outfit-text { width: 250px; font-size: 48px; font-family: \"Outfit\", sans-serif; font-weight: 500; font-kerning: normal; white-space: nowrap; }\
+             .outfit-none { width: 250px; font-size: 48px; font-family: \"Outfit\", sans-serif; font-weight: 500; font-kerning: none; white-space: nowrap; }",
         )
         .unwrap();
-        stylesheet.replace_fonts(FontAssets::with_test_font("Outfit", 500, font_bytes));
 
         let mut setup_output = context.run_ui(egui::RawInput::default(), |_ui| {});
         setup_output.textures_delta.clear();
         stylesheet.install(&context);
         let mut font_output = context.run_ui(egui::RawInput::default(), |_ui| {});
         font_output.textures_delta.clear();
+        stylesheet.replace_fonts(FontAssets::with_test_font("Outfit", 500, font_bytes));
+        let mut font_output = context.run_ui(egui::RawInput::default(), |_ui| {});
+        font_output.textures_delta.clear();
 
         let mut observed_font = None;
+        let normal_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+        let none_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -680,9 +685,17 @@ mod tests {
                             .family
                             .clone(),
                     );
-                    ui.label("styled text")
+                    let response = ui.label("AVAVAVAV");
+                    normal_bounds.set(response.rect);
+                    response
                 };
                 ui.add(inspect_font.selector(".outfit-text"));
+                let inspect_disabled_font = |ui: &mut Ui| {
+                    let response = ui.label("AVAVAVAV");
+                    none_bounds.set(response.rect);
+                    response
+                };
+                ui.add(inspect_disabled_font.selector(".outfit-none"));
                 assert_eq!(
                     ui.style().text_styles[&egui::TextStyle::Body].family,
                     parent_font
@@ -695,6 +708,7 @@ mod tests {
             observed_font,
             Some(egui::FontFamily::Name("ecss:outfit:500:normal".into()))
         );
+        assert!(none_bounds.get().width() > normal_bounds.get().width());
     }
 
     #[test]

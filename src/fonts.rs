@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex, RwLock,
@@ -52,6 +53,28 @@ const FONT_GENERATION_ID: &str = "ecss.font-generation";
 const FONT_REQUEST_ID: &str = "ecss.font-request";
 const FONT_CALLBACK_REGISTERED_ID: &str = "ecss.font-callback-registered";
 const FONT_INSTALL_CALLBACK_ID: &str = "ecss.font-install";
+const FONT_DEFINITIONS_ID: &str = "ecss.font-definitions";
+const KERNING_DISABLED_SUFFIX: &str = ":ecss-font-kerning-none";
+
+#[derive(Clone, Debug)]
+struct FontDefinitionsFingerprint {
+    font_data: Vec<(String, Arc<egui::FontData>)>,
+    families: Vec<(FontFamily, Vec<String>)>,
+}
+
+impl PartialEq for FontDefinitionsFingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        self.font_data.len() == other.font_data.len()
+            && self.font_data.iter().zip(&other.font_data).all(
+                |((name, data), (other_name, other_data))| {
+                    name == other_name && Arc::ptr_eq(data, other_data)
+                },
+            )
+            && self.families == other.families
+    }
+}
+
+impl Eq for FontDefinitionsFingerprint {}
 
 impl FontAssets {
     #[cfg(test)]
@@ -168,6 +191,23 @@ impl FontAssets {
         None
     }
 
+    pub(crate) fn family_for_kerning(
+        context: &egui::Context,
+        family: &FontFamily,
+        disabled: bool,
+    ) -> FontFamily {
+        let family = normal_kerning_family(family);
+        if !disabled {
+            return family;
+        }
+
+        let disabled_family = disabled_kerning_family(&family);
+        context
+            .fonts(|fonts| fonts.definitions().families.contains_key(&disabled_family))
+            .then_some(disabled_family)
+            .unwrap_or(family)
+    }
+
     pub(crate) fn install_shared(
         assets: Arc<RwLock<Self>>,
         revision: Arc<AtomicU64>,
@@ -201,15 +241,21 @@ impl FontAssets {
             FONT_INSTALL_CALLBACK_ID,
             Arc::new(move |ui| {
                 let context = ui.ctx();
-                let (generation, assets, revision, global_request) = context.data(|data| {
-                    (
-                        data.get_temp::<u64>(Id::new(FONT_GENERATION_ID)),
-                        data.get_temp::<Arc<RwLock<FontAssets>>>(Id::new(FONT_ASSETS_ID)),
-                        data.get_temp::<Arc<AtomicU64>>(Id::new(FONT_REVISION_ID)),
-                        data.get_temp::<Option<FontRequest>>(Id::new(FONT_REQUEST_ID))
-                            .flatten(),
-                    )
-                });
+                let current_definitions =
+                    context.fonts(|fonts| font_definitions_fingerprint(fonts.definitions()));
+                let (generation, assets, revision, global_request, installed_definitions) = context
+                    .data(|data| {
+                        (
+                            data.get_temp::<u64>(Id::new(FONT_GENERATION_ID)),
+                            data.get_temp::<Arc<RwLock<FontAssets>>>(Id::new(FONT_ASSETS_ID)),
+                            data.get_temp::<Arc<AtomicU64>>(Id::new(FONT_REVISION_ID)),
+                            data.get_temp::<Option<FontRequest>>(Id::new(FONT_REQUEST_ID))
+                                .flatten(),
+                            data.get_temp::<FontDefinitionsFingerprint>(Id::new(
+                                FONT_DEFINITIONS_ID,
+                            )),
+                        )
+                    });
                 let (Some(generation), Some(assets), Some(revision)) =
                     (generation, assets, revision)
                 else {
@@ -219,15 +265,26 @@ impl FontAssets {
                 let Ok(mut installed) = installed.lock() else {
                     return;
                 };
-                if *installed == (generation, revision) {
+                let copies_present = context.fonts(|fonts| {
+                    let definitions = fonts.definitions();
+                    definitions
+                        .font_data
+                        .keys()
+                        .any(|name| name.ends_with(KERNING_DISABLED_SUFFIX))
+                        && definitions.families.keys().any(is_kerning_disabled_family)
+                });
+                if *installed == (generation, revision)
+                    && installed_definitions.as_ref() == Some(&current_definitions)
+                    && copies_present
+                {
                     return;
                 }
 
                 let Ok(assets) = assets.read() else {
                     return;
                 };
+                assets.add_to_definitions(context);
                 if !assets.variants.is_empty() {
-                    assets.add_to_definitions(context);
                     let family = global_request.as_ref().and_then(|request| {
                         assets.family_name(&request.families, request.weight, request.italic)
                     });
@@ -296,8 +353,339 @@ impl FontAssets {
                 .insert(FontFamily::Name(alias.into()), names);
         }
 
+        let fingerprint = font_definitions_fingerprint(&definitions);
+        add_kerning_disabled_copies(&mut definitions);
+
         context.set_fonts(definitions);
+        context.data_mut(|data| {
+            data.insert_temp(Id::new(FONT_DEFINITIONS_ID), fingerprint);
+        });
     }
+}
+
+fn font_definitions_fingerprint(definitions: &egui::FontDefinitions) -> FontDefinitionsFingerprint {
+    FontDefinitionsFingerprint {
+        font_data: definitions
+            .font_data
+            .iter()
+            .filter(|(name, _)| !name.ends_with(KERNING_DISABLED_SUFFIX))
+            .map(|(name, data)| (name.clone(), data.clone()))
+            .collect(),
+        families: definitions
+            .families
+            .iter()
+            .filter(|(family, _)| !is_kerning_disabled_family(family))
+            .map(|(family, names)| (family.clone(), names.clone()))
+            .collect(),
+    }
+}
+
+fn add_kerning_disabled_copies(definitions: &mut egui::FontDefinitions) {
+    let font_data = definitions
+        .font_data
+        .iter()
+        .filter(|(name, _)| !name.ends_with(KERNING_DISABLED_SUFFIX))
+        .map(|(name, data)| (name.clone(), data.clone()))
+        .collect::<Vec<_>>();
+    for (name, data) in font_data {
+        let mut disabled = (*data).clone();
+        disabled.font = Cow::Owned(disable_font_kerning(&data.font, data.index));
+        definitions
+            .font_data
+            .insert(disabled_kerning_font_name(&name), Arc::new(disabled));
+    }
+
+    let families = definitions
+        .families
+        .iter()
+        .filter(|(family, _)| !is_kerning_disabled_family(family))
+        .map(|(family, names)| (family.clone(), names.clone()))
+        .collect::<Vec<_>>();
+    for (family, names) in families {
+        let disabled_names = names
+            .into_iter()
+            .map(|name| {
+                let disabled_name = disabled_kerning_font_name(&name);
+                if definitions.font_data.contains_key(&disabled_name) {
+                    disabled_name
+                } else {
+                    name
+                }
+            })
+            .collect();
+        definitions
+            .families
+            .insert(disabled_kerning_family(&family), disabled_names);
+    }
+}
+
+fn disabled_kerning_font_name(name: &str) -> String {
+    format!("{name}{KERNING_DISABLED_SUFFIX}")
+}
+
+fn disabled_kerning_family(family: &FontFamily) -> FontFamily {
+    FontFamily::Name(format!("{}{KERNING_DISABLED_SUFFIX}", family).into())
+}
+
+fn is_kerning_disabled_family(family: &FontFamily) -> bool {
+    matches!(family, FontFamily::Name(name) if name.ends_with(KERNING_DISABLED_SUFFIX))
+}
+
+fn normal_kerning_family(family: &FontFamily) -> FontFamily {
+    let FontFamily::Name(name) = family else {
+        return family.clone();
+    };
+    let Some(name) = name.strip_suffix(KERNING_DISABLED_SUFFIX) else {
+        return family.clone();
+    };
+    match name {
+        "Proportional" => FontFamily::Proportional,
+        "Monospace" => FontFamily::Monospace,
+        _ => FontFamily::Name(name.into()),
+    }
+}
+
+fn disable_font_kerning(bytes: &[u8], face_index: u32) -> Vec<u8> {
+    let mut font = bytes.to_vec();
+    let Some((directory, collection)) = sfnt_directory(&font, face_index) else {
+        return font;
+    };
+    let Some(signature_end) = directory.checked_add(4) else {
+        return font;
+    };
+    let Some(signature) = font.get(directory..signature_end) else {
+        return font;
+    };
+    if !matches!(signature, b"\0\x01\0\0" | b"OTTO" | b"true" | b"typ1") {
+        return font;
+    }
+    let Some(count_offset) = directory.checked_add(4) else {
+        return font;
+    };
+    let Some(table_count) = read_u16(&font, count_offset).map(usize::from) else {
+        return font;
+    };
+    let Some(records_start) = directory.checked_add(12) else {
+        return font;
+    };
+    let Some(records_end) = records_start.checked_add(table_count * 16) else {
+        return font;
+    };
+    if records_end > font.len() {
+        return font;
+    }
+
+    let mut gpos = None;
+    let mut head = None;
+    let mut removed_records = Vec::new();
+    for index in 0..table_count {
+        let record = records_start + index * 16;
+        let tag = &font[record..record + 4];
+        let Some(offset) = read_u32(&font, record + 8).map(|offset| offset as usize) else {
+            return bytes.to_vec();
+        };
+        let Some(length) = read_u32(&font, record + 12).map(|length| length as usize) else {
+            return bytes.to_vec();
+        };
+        let Some(end) = offset.checked_add(length) else {
+            return bytes.to_vec();
+        };
+        if end > font.len() {
+            return bytes.to_vec();
+        }
+        match tag {
+            b"GPOS" => gpos = Some((offset, length)),
+            b"head" => head = Some(offset),
+            b"kern" | b"kerx" => removed_records.push(index),
+            _ => {}
+        }
+    }
+
+    let mut changed = false;
+    if let Some((offset, length)) = gpos {
+        changed |= disable_gpos_kerning(&mut font, offset, length);
+    }
+
+    if !removed_records.is_empty() {
+        let mut next_record = 0;
+        for index in 0..table_count {
+            if removed_records.contains(&index) {
+                continue;
+            }
+            if next_record != index {
+                font.copy_within(
+                    records_start + index * 16..records_start + (index + 1) * 16,
+                    records_start + next_record * 16,
+                );
+            }
+            next_record += 1;
+        }
+        font[records_start + next_record * 16..records_end].fill(0);
+        let new_count = next_record as u16;
+        font[directory + 4..directory + 6].copy_from_slice(&new_count.to_be_bytes());
+        let entry_selector = if next_record == 0 {
+            0
+        } else {
+            (usize::BITS - 1 - next_record.leading_zeros()) as u16
+        };
+        let search_range = if next_record == 0 {
+            0
+        } else {
+            (1_u16 << entry_selector) * 16
+        };
+        let range_shift = new_count * 16 - search_range;
+        font[directory + 6..directory + 8].copy_from_slice(&search_range.to_be_bytes());
+        font[directory + 8..directory + 10].copy_from_slice(&entry_selector.to_be_bytes());
+        font[directory + 10..directory + 12].copy_from_slice(&range_shift.to_be_bytes());
+        changed = true;
+    }
+
+    if changed {
+        update_font_checksums(&mut font, directory, collection, head);
+    }
+    font
+}
+
+fn sfnt_directory(bytes: &[u8], face_index: u32) -> Option<(usize, bool)> {
+    if bytes.get(..4)? == b"ttcf" {
+        let count = read_u32(bytes, 8)?;
+        if face_index >= count {
+            return None;
+        }
+        let offset = (face_index as usize).checked_mul(4)?.checked_add(12)?;
+        Some((read_u32(bytes, offset)? as usize, true))
+    } else if face_index == 0 {
+        Some((0, false))
+    } else {
+        None
+    }
+}
+
+fn disable_gpos_kerning(font: &mut [u8], offset: usize, length: usize) -> bool {
+    if length < 10 {
+        return false;
+    }
+    let Some(feature_offset) = read_u16(font, offset + 6).map(usize::from) else {
+        return false;
+    };
+    if feature_offset == 0 || feature_offset + 2 > length {
+        return false;
+    }
+    let feature_list = offset + feature_offset;
+    let Some(count) = read_u16(font, feature_list).map(usize::from) else {
+        return false;
+    };
+    let records_start = feature_list + 2;
+    if records_start
+        .checked_add(count * 6)
+        .is_none_or(|end| end > offset + length)
+    {
+        return false;
+    }
+
+    let mut tags = (0..count)
+        .map(|index| {
+            let start = records_start + index * 6;
+            <[u8; 4]>::try_from(&font[start..start + 4]).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut changed = false;
+    for index in 0..count {
+        let replacement = match &tags[index] {
+            b"kern" => Some(available_feature_tag(&tags, index)),
+            b"vkrn" => Some(available_feature_tag(&tags, index)),
+            _ => None,
+        };
+        let Some(Some(replacement)) = replacement else {
+            continue;
+        };
+        let start = records_start + index * 6;
+        font[start..start + 4].copy_from_slice(&replacement);
+        tags[index] = replacement;
+        changed = true;
+    }
+    changed
+}
+
+fn available_feature_tag(tags: &[[u8; 4]], index: usize) -> Option<[u8; 4]> {
+    let tag = tags[index];
+    let previous = index.checked_sub(1).map(|index| tags[index]);
+    let next = tags.get(index + 1).copied();
+    let available = |last| {
+        let candidate = [tag[0], tag[1], tag[2], last];
+        if previous.is_none_or(|previous| previous < candidate)
+            && next.is_none_or(|next| candidate < next)
+            && !tags.contains(&candidate)
+        {
+            return Some(candidate);
+        }
+        None
+    };
+    for last in tag[3].saturating_add(1)..=b'~' {
+        if let Some(candidate) = available(last) {
+            return Some(candidate);
+        }
+    }
+    for last in (b' '..tag[3]).rev() {
+        if let Some(candidate) = available(last) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn update_font_checksums(font: &mut [u8], directory: usize, collection: bool, head: Option<usize>) {
+    let Some(count) = read_u16(font, directory + 4).map(usize::from) else {
+        return;
+    };
+    let records_start = directory + 12;
+    if let Some(head) = head
+        && head.checked_add(12).is_some_and(|end| end <= font.len())
+    {
+        font[head + 8..head + 12].fill(0);
+    }
+    for index in 0..count {
+        let record = records_start + index * 16;
+        let Some(offset) = read_u32(font, record + 8).map(|offset| offset as usize) else {
+            continue;
+        };
+        let Some(length) = read_u32(font, record + 12).map(|length| length as usize) else {
+            continue;
+        };
+        let Some(end) = offset.checked_add(length) else {
+            continue;
+        };
+        if end > font.len() {
+            continue;
+        }
+        let checksum = font_checksum(&font[offset..end]);
+        font[record + 4..record + 8].copy_from_slice(&checksum.to_be_bytes());
+    }
+    if !collection
+        && let Some(head) = head
+        && head + 12 <= font.len()
+    {
+        let adjustment = 0xB1B0_AFBA_u32.wrapping_sub(font_checksum(font));
+        font[head + 8..head + 12].copy_from_slice(&adjustment.to_be_bytes());
+    }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    Some(u16::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    Some(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn font_checksum(bytes: &[u8]) -> u32 {
+    bytes.chunks(4).fold(0_u32, |sum, chunk| {
+        let mut word = [0; 4];
+        word[..chunk.len()].copy_from_slice(chunk);
+        sum.wrapping_add(u32::from_be_bytes(word))
+    })
 }
 
 async fn fetch(url: String) -> Result<ehttp::Response, StylesheetLoadError> {

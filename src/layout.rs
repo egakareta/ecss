@@ -167,6 +167,7 @@ pub(crate) fn show(
     style.hidden = parent_style.hidden;
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
+    style.format.font_kerning = parent_style.format.font_kerning;
     style.format.text_orientation = parent_style.format.text_orientation.clone();
     style.format.line_height = parent_style.format.line_height;
     style.format.white_space = parent_style.format.white_space.clone();
@@ -359,6 +360,11 @@ pub(crate) fn show(
         for font in content_ui.style_mut().text_styles.values_mut() {
             font.family = family.clone();
         }
+    }
+    let disable_kerning = style.format.font_kerning == crate::formatting::FontKerning::None;
+    for font in content_ui.style_mut().text_styles.values_mut() {
+        font.family =
+            crate::fonts::FontAssets::family_for_kerning(ui.ctx(), &font.family, disable_kerning);
     }
     if style.format.font_size_set {
         for font in content_ui.style_mut().text_styles.values_mut() {
@@ -573,7 +579,9 @@ pub(crate) fn show(
         u8::from(response.hovered()) | (u8::from(response.is_pointer_button_down_on()) << 1);
     ui.ctx()
         .data_mut(|d| d.insert_temp(id.with("state"), current_state));
-    if state != current_state {
+    if state != current_state
+        && matching_rules(stylesheet, class).any(|rule| rule.state != RuleState::Base)
+    {
         ui.ctx()
             .request_discard("CSS selector interaction state changed");
     }
@@ -1852,7 +1860,7 @@ fn measure_text(
         };
         Some(galley.clone())
     })?;
-    let source = prepare_text_job(&galley.job, format);
+    let source = prepare_text_job(context, &galley.job, format);
     let mut minimum = 0.0_f32;
     let mut start = 0;
     for (end, _) in unicode_linebreak::linebreaks(&source.text) {
@@ -1888,6 +1896,7 @@ fn measure_text(
 }
 
 fn prepare_text_job(
+    context: &Context,
     job: &egui::text::LayoutJob,
     format: &crate::formatting::Formatting,
 ) -> egui::text::LayoutJob {
@@ -1924,6 +1933,11 @@ fn prepare_text_job(
             space = false;
         }
         let mut text_format = job.format_at_byte(egui::text::ByteIndex(index)).clone();
+        text_format.font_id.family = crate::fonts::FontAssets::family_for_kerning(
+            context,
+            &text_format.font_id.family,
+            format.font_kerning == crate::formatting::FontKerning::None,
+        );
         if format.font_size_set {
             text_format.font_id.size = format.em;
         }
@@ -1945,6 +1959,25 @@ fn reflow_text(
     end: egui::layers::ShapeIdx,
     job: &egui::text::LayoutJob,
 ) -> Vec2 {
+    fn find_galley(shape: &egui::Shape) -> Option<&std::sync::Arc<egui::Galley>> {
+        match shape {
+            egui::Shape::Text(text) => Some(&text.galley),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(find_galley),
+            _ => None,
+        }
+    }
+
+    let current = context.graphics(|layers| {
+        let list = layers.get(layer)?;
+        list.all_entries()
+            .skip(start.0)
+            .take(end.0 - start.0)
+            .find_map(|entry| find_galley(&entry.shape).cloned())
+    });
+    if let Some(current) = current.filter(|galley| galley.job.as_ref() == job) {
+        return current.size();
+    }
+
     let galley = context.fonts_mut(|fonts| fonts.layout_job(job.clone()));
     fn replace(shape: &mut egui::Shape, galley: &std::sync::Arc<egui::Galley>) {
         match shape {

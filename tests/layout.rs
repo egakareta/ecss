@@ -4,7 +4,13 @@ use egui::{Context, Event, Modifiers, PointerButton, RawInput, Rect, Ui, Vec2, p
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-fn frame(context: &Context, width: f32, time: f64, events: Vec<Event>, build: impl FnMut(&mut Ui)) {
+fn frame(
+    context: &Context,
+    width: f32,
+    time: f64,
+    events: Vec<Event>,
+    build: impl FnMut(&mut Ui),
+) -> egui::FullOutput {
     let mut output = context.run_ui(
         RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 200.0))),
@@ -15,6 +21,7 @@ fn frame(context: &Context, width: f32, time: f64, events: Vec<Event>, build: im
         build,
     );
     output.textures_delta.clear();
+    output
 }
 
 fn empty(ui: &mut Ui) -> egui::Response {
@@ -221,6 +228,105 @@ fn min_width_min_content_uses_the_child_intrinsic_contribution() {
     );
     assert!(rects[3].width() > rects[2].width(), "{rects:?}");
     assert!(rects[3].width() < 300.0, "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn selectable_text_inside_selector_remains_highlighted_and_copyable() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".page { display:flex; flex-direction:column; gap:12px; padding:16px; } .text {}",
+    )
+    .unwrap()
+    .install(&context);
+    let text = "select this text";
+    let rect = std::cell::Cell::new(Rect::NOTHING);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rect.set(ui.add(egui::Label::new(text).selector(".text")).rect);
+                ui.response()
+            })
+            .selector(".page"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+
+    let rect = rect.get();
+    let start = pos2(rect.left() + 1.0, rect.center().y);
+    let end = pos2(rect.right() - 1.0, rect.center().y);
+    let output = frame(
+        &context,
+        200.0,
+        0.1,
+        vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &mut build,
+    );
+    assert_eq!(output.platform_output.num_completed_passes, 1);
+    let output = frame(
+        &context,
+        200.0,
+        0.2,
+        vec![Event::PointerMoved(end)],
+        &mut build,
+    );
+    assert_eq!(output.platform_output.num_completed_passes, 1);
+    let output = frame(
+        &context,
+        200.0,
+        0.3,
+        vec![Event::PointerButton {
+            pos: end,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        &mut build,
+    );
+    assert_eq!(output.platform_output.num_completed_passes, 1);
+    let selection_color = context.global_style().visuals.selection.bg_fill;
+    let highlighted = context
+        .tessellate(output.shapes.clone(), output.pixels_per_point)
+        .iter()
+        .any(|clipped| match &clipped.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh
+                .vertices
+                .iter()
+                .any(|vertex| vertex.color == selection_color),
+            egui::epaint::Primitive::Callback(_) => false,
+        });
+    assert!(
+        highlighted,
+        "selected text should have visible highlight colors"
+    );
+    let mut output = context.run_ui(
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0))),
+            time: Some(0.4),
+            events: vec![Event::Copy],
+            ..Default::default()
+        },
+        &mut build,
+    );
+    let copied = output
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|command| match command {
+            egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+            _ => None,
+        });
+    output.textures_delta.clear();
+
+    assert_eq!(copied, Some(text));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

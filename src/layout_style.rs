@@ -805,6 +805,7 @@ fn inherited(name: &str) -> bool {
     matches!(
         name,
         "font-size"
+            | "font-kerning"
             | "direction"
             | "visibility"
             | "writing-mode"
@@ -2101,6 +2102,7 @@ fn copy_format_property(
 ) {
     match name {
         "font-size" => to.em = from.em,
+        "font-kerning" => to.font_kerning = from.font_kerning,
         "writing-mode" => to.writing = from.writing,
         "text-orientation" => to.text_orientation = from.text_orientation.clone(),
         "column-count" => to.column_count = from.column_count,

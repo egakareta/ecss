@@ -269,8 +269,8 @@
 
 ## Text, fonts, and generated content
 
-- **[CSS Fonts Level 3](https://www.w3.org/TR/css3-fonts/) - Unsupported.**
-  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, ~~`font-size`~~, `font-size-adjust`, `font-stretch`,
+- **[CSS Fonts Level 3](https://www.w3.org/TR/css3-fonts/) - Partial.**
+  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, ~~`font-kerning`~~, ~~`font-size`~~, `font-size-adjust`, `font-stretch`,
     ~~`font-style`~~, `font-synthesis`, `font-variant`, `font-variant-caps`, `font-variant-east-asian`,
     `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, ~~`font-weight`~~.
 - **[CSS Generated Content for Paged Media](https://www.w3.org/TR/css3-gcpm/) - Unsupported.**

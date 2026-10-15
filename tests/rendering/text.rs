@@ -225,3 +225,94 @@ async fn inline_padding_and_borders_paint_around_text_without_expanding_line_hei
         [255, 0, 0, 255]
     );
 }
+
+async fn font_kerning_none_uses_unadjusted_glyph_spacing_and_inherits_test() {
+    let stylesheet = Stylesheet::parse(
+        ".normal { width: 250px; font-size: 48px; font-kerning: normal; white-space: nowrap; }\
+         .auto { width: 250px; font-size: 48px; font-kerning: auto; white-space: nowrap; }\
+         .none { width: 250px; font-size: 48px; font-kerning: none; white-space: nowrap; }\
+         .parent { width: 250px; font-size: 48px; font-kerning: none; white-space: nowrap; }\
+         .reset { font-kerning: normal; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let text = "AVAVAVAV";
+        let mut bounds = Vec::new();
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                bounds.push(ui.add(egui::Label::new(text)).rect);
+                ui.response()
+            })
+            .selector(".normal"),
+        );
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                bounds.push(ui.add(egui::Label::new(text)).rect);
+                ui.response()
+            })
+            .selector(".auto"),
+        );
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                bounds.push(ui.add(egui::Label::new(text)).rect);
+                ui.response()
+            })
+            .selector(".none"),
+        );
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                bounds.push(ui.add(egui::Label::new(text)).rect);
+                ui.add(
+                    (|ui: &mut egui::Ui| {
+                        bounds.push(ui.add(egui::Label::new(text)).rect);
+                        ui.response()
+                    })
+                    .selector(".reset"),
+                );
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = bounds;
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    let ink_width = |rect: egui::Rect| {
+        let mut left = f32::INFINITY;
+        let mut right = f32::NEG_INFINITY;
+        let top = (rect.top().floor() as i32).clamp(0, HEIGHT as i32);
+        let bottom = (rect.bottom().ceil() as i32).clamp(0, HEIGHT as i32);
+        let left_edge = (rect.left().floor() as i32).clamp(0, WIDTH as i32);
+        let right_edge = (rect.right().ceil() as i32).clamp(0, WIDTH as i32);
+        for y in top..bottom {
+            for x in left_edge..right_edge {
+                let color = pixel(&pixels, x as f32, y as f32);
+                if color[..3].iter().any(|channel| *channel < 240) {
+                    left = left.min(x as f32);
+                    right = right.max(x as f32 + 1.0);
+                }
+            }
+        }
+        right - left
+    };
+    let normal = ink_width(bounds[0]);
+    let auto = ink_width(bounds[1]);
+    let none = ink_width(bounds[2]);
+    assert_eq!(auto, normal);
+    assert!(none > normal, "normal={normal} none={none}");
+    assert!(
+        (bounds[3].width() - bounds[2].width()).abs() < 0.1,
+        "inherited={:?} none={:?}",
+        bounds[3],
+        bounds[2]
+    );
+    assert!(
+        (bounds[4].width() - bounds[0].width()).abs() < 0.1,
+        "reset={:?} normal={:?}",
+        bounds[4],
+        bounds[0]
+    );
+}

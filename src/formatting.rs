@@ -101,6 +101,7 @@ impl TextOverflow {
 pub(crate) struct Formatting {
     pub em: f32,
     pub font_size_set: bool,
+    pub font_kerning: FontKerning,
     pub writing: Writing,
     pub display: DisplayKind,
     pub inline_level: bool,
@@ -130,11 +131,21 @@ pub(crate) struct Formatting {
     pub white_space: String,
     pub text_orientation: String,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FontKerning {
+    #[default]
+    Auto,
+    Normal,
+    None,
+}
+
 impl Default for Formatting {
     fn default() -> Self {
         Self {
             em: 16.0,
             font_size_set: false,
+            font_kerning: FontKerning::Auto,
             writing: Writing::Horizontal,
             display: DisplayKind::Normal,
             inline_level: false,
@@ -171,6 +182,7 @@ pub(crate) fn supported(name: &str) -> bool {
     matches!(
         name,
         "font-size"
+            | "font-kerning"
             | "writing-mode"
             | "text-orientation"
             | "column-count"
@@ -250,6 +262,14 @@ pub(crate) fn apply(
     }
     let f = &mut out.format;
     match name {
+        "font-kerning" => {
+            f.font_kerning = match value.to_ascii_lowercase().as_str() {
+                "auto" => FontKerning::Auto,
+                "normal" => FontKerning::Normal,
+                "none" => FontKerning::None,
+                _ => return Err("invalid font-kerning"),
+            }
+        }
         "font-size" => {
             let size = match value.to_ascii_lowercase().as_str() {
                 "xx-small" => 9.0,
