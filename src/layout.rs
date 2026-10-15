@@ -579,9 +579,19 @@ pub(crate) fn show(
         u8::from(response.hovered()) | (u8::from(response.is_pointer_button_down_on()) << 1);
     ui.ctx()
         .data_mut(|d| d.insert_temp(id.with("state"), current_state));
-    if state != current_state
-        && matching_rules(stylesheet, class).any(|rule| rule.state != RuleState::Base)
-    {
+    let interaction_layout_changed = [(1, RuleState::Hovered), (2, RuleState::Active)]
+        .into_iter()
+        .any(|(mask, rule_state)| {
+            state & mask != current_state & mask
+                && matching_rules(stylesheet, class).any(|rule| {
+                    rule.state == rule_state
+                        && rule
+                            .declarations
+                            .iter()
+                            .any(|declaration| matches!(declaration, Declaration::Layout(_)))
+                })
+        });
+    if interaction_layout_changed {
         ui.ctx()
             .request_discard("CSS selector interaction state changed");
     }

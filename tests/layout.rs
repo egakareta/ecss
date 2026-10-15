@@ -145,6 +145,66 @@ fn padding_and_css_size_are_part_of_the_widget_click_target() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn paint_only_button_states_do_not_request_extra_passes() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".button:hover { background-color:#2458b5; } .button:active { background-color:#19448f; }",
+    )
+    .unwrap()
+    .install(&context);
+    let rect = std::cell::Cell::new(Rect::NOTHING);
+    let mut clicks = 0;
+    let mut build = |ui: &mut Ui| {
+        let response = ui.add(egui::Button::new("Save changes").selector(".button"));
+        rect.set(response.rect);
+        clicks += usize::from(response.clicked());
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    let pos = rect.get().center();
+    let hovered = frame(
+        &context,
+        200.0,
+        0.1,
+        vec![Event::PointerMoved(pos)],
+        &mut build,
+    );
+    assert_eq!(hovered.platform_output.num_completed_passes, 1);
+
+    for click in 0..5 {
+        let time = 0.2 + click as f64 * 0.2;
+        let pressed = frame(
+            &context,
+            200.0,
+            time,
+            vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut build,
+        );
+        let released = frame(
+            &context,
+            200.0,
+            time + 0.1,
+            vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut build,
+        );
+        assert_eq!(pressed.platform_output.num_completed_passes, 1);
+        assert_eq!(released.platform_output.num_completed_passes, 1);
+    }
+
+    assert_eq!(clicks, 5);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn right_to_left_flex_and_logical_margins_resolve_from_computed_direction() {
     let context = Context::default();
     Stylesheet::parse(".row { display:flex; width:100px; direction:rtl; } .first { margin-inline-start:10px; width:20px; height:10px; } .second { width:30px; height:10px; }").unwrap().install(&context);
