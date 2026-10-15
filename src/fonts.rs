@@ -202,10 +202,11 @@ impl FontAssets {
         }
 
         let disabled_family = disabled_kerning_family(&family);
-        context
-            .fonts(|fonts| fonts.definitions().families.contains_key(&disabled_family))
-            .then_some(disabled_family)
-            .unwrap_or(family)
+        if context.fonts(|fonts| fonts.definitions().families.contains_key(&disabled_family)) {
+            disabled_family
+        } else {
+            family
+        }
     }
 
     pub(crate) fn install_shared(
