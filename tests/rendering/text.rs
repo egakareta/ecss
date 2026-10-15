@@ -37,6 +37,74 @@ async fn inline_text_continues_across_selectors_and_paints_line_fragments_test()
     );
 }
 
+async fn font_size_resizes_text_and_inherits_through_nested_selectors_test() {
+    let stylesheet = Stylesheet::parse(
+        ".small { font-size: 8px; }\
+         .large { font-size: 24px; }\
+         .relative { font-size: 1.5em; }\
+         .percentage { font-size: 150%; }\
+         .parent { font-size: 12px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let small = ui.add(egui::Label::new("MMMM").selector(".small")).rect;
+        let large = ui.add(egui::Label::new("MMMM").selector(".large")).rect;
+        let relative = ui.add(egui::Label::new("MMMM").selector(".relative")).rect;
+        let percentage = ui
+            .add(egui::Label::new("MMMM").selector(".percentage"))
+            .rect;
+        let mut inherited = None;
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                inherited = Some(ui.add(egui::Label::new("MMMM").selector(".inherited")).rect);
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = vec![small, large, relative, percentage, inherited.unwrap()];
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    let ink_bounds = |rect: egui::Rect| {
+        let mut ink = egui::Rect::NOTHING;
+        let top = (rect.top().floor() as i32).clamp(0, HEIGHT as i32) as usize;
+        let bottom = (rect.bottom().ceil() as i32).clamp(0, HEIGHT as i32) as usize;
+        let left = (rect.left().floor() as i32).clamp(0, WIDTH as i32) as usize;
+        let right = (rect.right().ceil() as i32).clamp(0, WIDTH as i32) as usize;
+        for y in top..bottom {
+            for x in left..right {
+                let color = pixel(&pixels, x as f32, y as f32);
+                if color[..3].iter().all(|channel| *channel < 240) {
+                    ink = ink.union(egui::Rect::from_min_size(
+                        egui::pos2(x as f32, y as f32),
+                        egui::Vec2::splat(1.0),
+                    ));
+                }
+            }
+        }
+        ink
+    };
+    let small = ink_bounds(bounds[0]);
+    let large = ink_bounds(bounds[1]);
+    let relative = ink_bounds(bounds[2]);
+    let percentage = ink_bounds(bounds[3]);
+    let inherited = ink_bounds(bounds[4]);
+    assert!(large.height() > small.height() * 2.5, "{small:?} {large:?}");
+    for actual in [relative, percentage] {
+        assert!(
+            (actual.height() - large.height()).abs() < 1.0,
+            "{actual:?} {large:?}"
+        );
+    }
+    assert!(
+        (inherited.height() - small.height() * 1.5).abs() < 2.0,
+        "{small:?} {inherited:?}"
+    );
+}
+
 async fn vertical_text_positions_lines_and_honors_text_orientation_test() {
     let stylesheet = Stylesheet::parse(".row {display:flex; width:200px; gap:10px;} .rl {writing-mode:vertical-rl; white-space:pre; width:32px; height:60px; color:red;} .lr {writing-mode:vertical-lr; white-space:pre; width:32px; height:60px; color:red;} .upright {writing-mode:vertical-lr; text-orientation:upright; width:20px; height:20px; color:red;} .sideways {writing-mode:vertical-lr; text-orientation:sideways; width:20px; height:20px; color:red;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));

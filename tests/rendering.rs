@@ -8,6 +8,7 @@ include!("rendering/text.rs");
 
 rendering_test!(installed_white_background_renders_every_pixel_white);
 rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
+rendering_test!(functional_colors_render_rgb_rgba_hsl_and_hsla_values);
 rendering_test!(button_frame_stroke_tracks_the_css_padding_box);
 rendering_test!(asymmetric_box_model_is_visible_in_rendered_pixels);
 rendering_test!(percentage_and_auto_sizes_affect_styled_widget_bounds);
@@ -27,6 +28,7 @@ rendering_test!(stacking_contexts_contain_descendant_z_indices);
 rendering_test!(vertical_writing_paints_boxes_in_the_declared_block_direction);
 rendering_test!(subgrid_inherits_tracks_gaps_and_named_lines_on_both_axes);
 rendering_test!(inline_text_continues_across_selectors_and_paints_line_fragments);
+rendering_test!(font_size_resizes_text_and_inherits_through_nested_selectors);
 rendering_test!(vertical_text_positions_lines_and_honors_text_orientation);
 rendering_test!(inline_padding_and_borders_paint_around_text_without_expanding_line_height);
 rendering_test!(column_fragments_paint_in_destination_columns_without_painting_gutters);

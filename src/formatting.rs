@@ -100,6 +100,7 @@ impl TextOverflow {
 #[derive(Clone, Debug)]
 pub(crate) struct Formatting {
     pub em: f32,
+    pub font_size_set: bool,
     pub writing: Writing,
     pub display: DisplayKind,
     pub inline_level: bool,
@@ -133,6 +134,7 @@ impl Default for Formatting {
     fn default() -> Self {
         Self {
             em: 16.0,
+            font_size_set: false,
             writing: Writing::Horizontal,
             display: DisplayKind::Normal,
             inline_level: false,
@@ -168,7 +170,8 @@ impl Default for Formatting {
 pub(crate) fn supported(name: &str) -> bool {
     matches!(
         name,
-        "writing-mode"
+        "font-size"
+            | "writing-mode"
             | "text-orientation"
             | "column-count"
             | "column-width"
@@ -247,6 +250,34 @@ pub(crate) fn apply(
     }
     let f = &mut out.format;
     match name {
+        "font-size" => {
+            let size = match value.to_ascii_lowercase().as_str() {
+                "xx-small" => 9.0,
+                "x-small" => 10.0,
+                "small" => 13.0,
+                "medium" => 16.0,
+                "large" => 18.0,
+                "x-large" => 24.0,
+                "xx-large" => 32.0,
+                "xxx-large" => 48.0,
+                "smaller" => units.font / 1.2,
+                "larger" => units.font * 1.2,
+                _ => {
+                    if let Some(handle) = crate::math::length(value, units, true, true)? {
+                        crate::math::resolve(handle, units.font)
+                    } else {
+                        let (size, percentage) =
+                            crate::layout_style::length_value(value, units, true)?;
+                        if percentage { size * units.font } else { size }
+                    }
+                }
+            };
+            if !size.is_finite() || size < 0.0 {
+                return Err("invalid font-size");
+            }
+            f.em = size;
+            f.font_size_set = true;
+        }
         "writing-mode" => {
             f.writing = match value {
                 "horizontal-tb" => Writing::Horizontal,

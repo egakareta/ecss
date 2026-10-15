@@ -30,6 +30,61 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
+async fn functional_colors_render_rgb_rgba_hsl_and_hsla_values_test() {
+    let stylesheet = Stylesheet::parse(
+        ".rgb-comma { background-color: rgb(255, 0, 0); }\
+         .rgb-space { background-color: rgb(100% 0% 0%); }\
+         .rgba-comma { background-color: rgba(0, 0, 255, 50%); }\
+         .hsl-comma { background-color: hsl(120, 100%, 50%); }\
+         .hsl-angle { background-color: hsl(0.5turn 100% 50%); }\
+         .hsla-space { background-color: hsla(120 100% 50% / 25%); }",
+    )
+    .unwrap();
+    let widget_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let rects_from_ui = widget_rects.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let mut rects = Vec::new();
+        for class in [
+            ".rgb-comma",
+            ".rgb-space",
+            ".rgba-comma",
+            ".hsl-comma",
+            ".hsl-angle",
+            ".hsla-space",
+        ] {
+            let widget = |ui: &mut egui::Ui| {
+                ui.allocate_exact_size(egui::vec2(30.0, 18.0), egui::Sense::hover())
+                    .1
+            };
+            let response = ui.add(widget.selector(class));
+            rects.push(response.rect);
+        }
+        *rects_from_ui.lock().unwrap() = rects;
+    })
+    .await;
+
+    let expected = [
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [127, 127, 255, 255],
+        [0, 255, 0, 255],
+        [0, 255, 255, 255],
+        [191, 255, 191, 255],
+    ];
+    let rects = widget_rects.lock().unwrap();
+    assert_eq!(rects.len(), expected.len());
+    for (rect, expected) in rects.iter().zip(expected) {
+        let actual = pixel(&pixels, rect.min.x + 4.0, rect.min.y + 3.0);
+        assert!(
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "pixel at {rect:?} was {actual:?}, expected {expected:?}"
+        );
+    }
+}
+
 async fn button_frame_stroke_tracks_the_css_padding_box_test() {
     let stylesheet = Stylesheet::parse(
         ".primary { background-color: #f00; padding: 8px 12px; border-radius: 6px; }",

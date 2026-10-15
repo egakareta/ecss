@@ -179,13 +179,35 @@ pub(crate) fn show(
     style.format.widows = parent_style.format.widows;
     style.format.orphans = parent_style.format.orphans;
     let math = active.0.borrow().math.clone();
-    let units = Units {
+    let base_font_size = if root {
+        ui.style().text_styles[&egui::TextStyle::Body].size
+    } else {
+        parent_style.format.em
+    };
+    style.format.em = base_font_size;
+    style.format.font_size_set = parent_style.format.font_size_set;
+    let mut units = Units {
         math: &math,
-        font: ui.style().text_styles[&egui::TextStyle::Body].size,
+        font: base_font_size,
         root_font: 16.0,
         viewport: ui.ctx().viewport_rect().size(),
     };
-    style.format.em = units.font;
+    for rule in matching_rules(stylesheet, class).filter(|r| {
+        r.state == RuleState::Base
+            || r.state == RuleState::Hovered && state & 1 != 0
+            || r.state == RuleState::Active && state & 2 != 0
+    }) {
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(declaration) = declaration
+                && declaration.name == "font-size"
+            {
+                declaration
+                    .apply_with_parent(&mut style, &parent_style, units)
+                    .expect("validated font-size declaration");
+            }
+        }
+    }
+    units.font = style.format.em;
 
     for rule in matching_rules(stylesheet, class).filter(|r| {
         r.state == RuleState::Base
@@ -209,6 +231,9 @@ pub(crate) fn show(
         {
             for declaration in &rule.declarations {
                 if let Declaration::Layout(declaration) = declaration {
+                    if declaration.name == "font-size" {
+                        continue;
+                    }
                     declaration
                         .apply_with_parent(&mut style, &parent_style, units)
                         .expect("validated CSS layout declaration");
@@ -333,6 +358,11 @@ pub(crate) fn show(
     {
         for font in content_ui.style_mut().text_styles.values_mut() {
             font.family = family.clone();
+        }
+    }
+    if style.format.font_size_set {
+        for font in content_ui.style_mut().text_styles.values_mut() {
+            font.size = style.format.em;
         }
     }
     if absent || style.hidden {
@@ -1894,6 +1924,9 @@ fn prepare_text_job(
             space = false;
         }
         let mut text_format = job.format_at_byte(egui::text::ByteIndex(index)).clone();
+        if format.font_size_set {
+            text_format.font_id.size = format.em;
+        }
         if let Some(height) = format.line_height {
             text_format.line_height = Some(height);
         }

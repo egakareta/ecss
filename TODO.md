@@ -11,7 +11,7 @@
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, ~~`border-spacing`~~, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, ~~`caption-side`~~,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, _~~`cue`~~_, _~~`cue-after`~~_, _~~`cue-before`~~_,
-    `cursor`, ~~`direction`~~, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`,
+    `cursor`, ~~`direction`~~, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~,
     ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~,
     ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
@@ -270,7 +270,7 @@
 ## Text, fonts, and generated content
 
 - **[CSS Fonts Level 3](https://www.w3.org/TR/css3-fonts/) - Unsupported.**
-  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, `font-size`, `font-size-adjust`, `font-stretch`,
+  - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, ~~`font-size`~~, `font-size-adjust`, `font-stretch`,
     ~~`font-style`~~, `font-synthesis`, `font-variant`, `font-variant-caps`, `font-variant-east-asian`,
     `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, ~~`font-weight`~~.
 - **[CSS Generated Content for Paged Media](https://www.w3.org/TR/css3-gcpm/) - Unsupported.**
@@ -316,7 +316,7 @@
     `word-break`, `word-space-transform`, `word-spacing`, `wrap-after`, `wrap-before`, `wrap-inside`.
 - **[Fonts Level 4](https://www.w3.org/TR/css-fonts-4/) - Unsupported.**
   - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, `font-kerning`, `font-language-override`, `font-optical-sizing`,
-    `font-palette`, `font-size`, `font-size-adjust`, ~~`font-style`~~, `font-synthesis`, `font-synthesis-position`,
+    `font-palette`, ~~`font-size`~~, `font-size-adjust`, ~~`font-style`~~, `font-synthesis`, `font-synthesis-position`,
     `font-synthesis-small-caps`, `font-synthesis-style`, `font-synthesis-weight`, `font-variant`,
     `font-variant-alternates`, `font-variant-caps`, `font-variant-east-asian`, `font-variant-emoji`,
     `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, `font-variation-settings`, ~~`font-weight`~~,
@@ -405,7 +405,7 @@
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
@@ -453,7 +453,7 @@ These property-bearing specifications also appear in the W3C generated property 
     `border-right`, `border-right-color`, `border-right-style`, `border-right-width`, `border-spacing`, `border-style`,
     `border-top`, `border-top-color`, `border-top-style`, `border-top-width`, `border-width`, `bottom`, `caption-side`,
     `clear`, `clip`, ~~`color`~~, `content`, `counter-increment`, `counter-reset`, `cursor`, `direction`, `display`,
-    `empty-cells`, `float`, `font`, ~~`font-family`~~, `font-size`, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
+    `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,

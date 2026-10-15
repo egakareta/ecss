@@ -316,6 +316,9 @@ impl Declaration {
         parent: &BoxStyle,
         units: Units,
     ) -> Result<(), &'static str> {
+        if self.name == "font-size" {
+            output.format.font_size_set = true;
+        }
         let keyword = self.value.trim();
         let keyword = keyword.to_ascii_lowercase();
         if self.name == "text-align" && keyword == "match-parent" {
@@ -801,7 +804,8 @@ impl Declaration {
 fn inherited(name: &str) -> bool {
     matches!(
         name,
-        "direction"
+        "font-size"
+            | "direction"
             | "visibility"
             | "writing-mode"
             | "text-orientation"
@@ -2096,6 +2100,7 @@ fn copy_format_property(
     from: &crate::formatting::Formatting,
 ) {
     match name {
+        "font-size" => to.em = from.em,
         "writing-mode" => to.writing = from.writing,
         "text-orientation" => to.text_orientation = from.text_orientation.clone(),
         "column-count" => to.column_count = from.column_count,
