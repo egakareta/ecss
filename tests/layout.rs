@@ -1,5 +1,5 @@
 use egui::{Context, Event, Modifiers, PointerButton, RawInput, Rect, Ui, Vec2, pos2, vec2};
-use trcss::{SelectorExt as _, Stylesheet};
+use ecss::{SelectorExt as _, Stylesheet};
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
