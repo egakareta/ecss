@@ -1207,7 +1207,7 @@ fn inline_text_flows_around_a_float() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn text_overflow_ellipsis_elides_text_at_the_inline_edge() {
+fn text_overflow_ellipsis_truncates_and_paints_a_marker_at_the_inline_end() {
     let context = Context::default();
     Stylesheet::parse(
         ".box { width:60px; height:20px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; } .text { display:inline; }",
@@ -1215,7 +1215,7 @@ fn text_overflow_ellipsis_elides_text_at_the_inline_edge() {
     .unwrap()
     .install(&context);
     let mut text_rect = Rect::NOTHING;
-    let mut elided = false;
+    let mut has_ellipsis = false;
     frame(&context, 100.0, 0.0, Vec::new(), |ui| {
         text_rect = ui
             .add(
@@ -1229,29 +1229,75 @@ fn text_overflow_ellipsis_elides_text_at_the_inline_edge() {
             )
             .rect;
         let layer = ui.layer_id();
-        elided = ui.ctx().graphics(|layers| {
+        has_ellipsis = ui.ctx().graphics(|layers| {
             let Some(list) = layers.get(layer) else {
                 return false;
             };
-            fn has_elided_text(shape: &egui::Shape) -> bool {
+            fn has_ellipsis(shape: &egui::Shape) -> bool {
                 match shape {
-                    egui::Shape::Text(text) => text.galley.elided,
-                    egui::Shape::Vec(shapes) => shapes.iter().any(has_elided_text),
+                    egui::Shape::Text(text) => text.galley.rows.iter().any(|row| {
+                        let text = row.row.text();
+                        text.ends_with('…') && text.chars().count() > 1
+                    }),
+                    egui::Shape::Vec(shapes) => shapes.iter().any(has_ellipsis),
                     _ => false,
                 }
             }
-            list.all_entries()
-                .any(|entry| has_elided_text(&entry.shape))
+            list.all_entries().any(|entry| has_ellipsis(&entry.shape))
         });
     });
     assert!((text_rect.width() - 60.0).abs() < 0.05, "{text_rect:?}");
-    assert!(elided, "the clipped label should paint an ellipsis");
+    assert!(has_ellipsis, "the clipped label should paint an ellipsis");
     for value in ["clip ellipsis hidden", "ellipsis ellipsis ellipsis"] {
         assert!(
             Stylesheet::parse(&format!(".box {{ text-overflow:{value}; }}")).is_err(),
             "accepted invalid text-overflow: {value}"
         );
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_overflow_uses_a_custom_string_marker() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".box { width:60px; height:20px; overflow:hidden; white-space:nowrap; text-overflow:clip \" [more]\"; } .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut has_marker = false;
+    frame(&context, 100.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Label::new("The overflow text is clipped").selector(".text"));
+                ui.response()
+            })
+            .selector(".box"),
+        );
+        let layer = ui.layer_id();
+        has_marker = ui.ctx().graphics(|layers| {
+            let Some(list) = layers.get(layer) else {
+                return false;
+            };
+            fn has_marker(shape: &egui::Shape) -> bool {
+                match shape {
+                    egui::Shape::Text(text) => text.galley.rows.iter().any(|row| {
+                        let text = row.row.text();
+                        text.ends_with(" [more]")
+                            && text.chars().count() > " [more]".chars().count()
+                    }),
+                    egui::Shape::Vec(shapes) => shapes.iter().any(has_marker),
+                    _ => false,
+                }
+            }
+            list.all_entries().any(|entry| has_marker(&entry.shape))
+        });
+    });
+    assert!(
+        has_marker,
+        "the clipped label should paint its custom marker"
+    );
+    assert!(Stylesheet::parse(".box { text-overflow: ellipsis ellipsis ellipsis; }").is_err());
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -1263,7 +1309,7 @@ fn text_overflow_uses_the_logical_inline_axis_in_vertical_writing() {
     )
     .unwrap()
     .install(&context);
-    let mut elided = false;
+    let mut has_ellipsis = false;
     frame(&context, 100.0, 0.0, Vec::new(), |ui| {
         ui.add(
             (|ui: &mut Ui| {
@@ -1273,22 +1319,27 @@ fn text_overflow_uses_the_logical_inline_axis_in_vertical_writing() {
             .selector(".box"),
         );
         let layer = ui.layer_id();
-        elided = ui.ctx().graphics(|layers| {
+        has_ellipsis = ui.ctx().graphics(|layers| {
             let Some(list) = layers.get(layer) else {
                 return false;
             };
-            fn has_elided_text(shape: &egui::Shape) -> bool {
+            fn has_ellipsis(shape: &egui::Shape) -> bool {
                 match shape {
-                    egui::Shape::Text(text) => text.galley.elided,
-                    egui::Shape::Vec(shapes) => shapes.iter().any(has_elided_text),
+                    egui::Shape::Text(text) => text.galley.rows.iter().any(|row| {
+                        let text = row.row.text();
+                        text.ends_with('…') && text.chars().count() > 1
+                    }),
+                    egui::Shape::Vec(shapes) => shapes.iter().any(has_ellipsis),
                     _ => false,
                 }
             }
-            list.all_entries()
-                .any(|entry| has_elided_text(&entry.shape))
+            list.all_entries().any(|entry| has_ellipsis(&entry.shape))
         });
     });
-    assert!(elided, "vertical inline overflow should paint an ellipsis");
+    assert!(
+        has_ellipsis,
+        "vertical inline overflow should paint an ellipsis"
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

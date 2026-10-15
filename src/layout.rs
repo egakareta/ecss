@@ -1752,8 +1752,8 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
                     .iter()
                     .map(|fragment| crate::layout_tree::Fragment {
                         range: fragment.range.clone(),
-                        ellipsis: fragment.ellipsis,
-                        truncate: fragment.truncate,
+                        marker: fragment.marker.clone(),
+                        marker_width: fragment.marker_width,
                         rect: tree.nodes[usize::from(ids[i])]
                             .layout_axes
                             .rect(fragment.rect, layout.size.width),
@@ -2088,8 +2088,11 @@ fn text_runs(
                 } else {
                     0.0
                 },
-                ellipsis_width: context
-                    .fonts_mut(|fonts| fonts.glyph_width(&section.format.font_id, '…')),
+                marker_width: format.text_overflow[1].marker().map_or(0.0, |marker| {
+                    let mut marker_job = egui::text::LayoutJob::default();
+                    marker_job.append(marker, 0.0, section.format.clone());
+                    context.fonts_mut(|fonts| fonts.layout_job(marker_job).size().x)
+                }),
                 newline: original.contains('\n'),
             });
         }
@@ -2137,14 +2140,38 @@ fn replace_fragmented_text(
     for fragment in &geometry.fragments {
         if let Some(range) = &fragment.range {
             let mut text = template.clone();
-            let mut layout = slice_job(job, range.clone());
-            if fragment.truncate {
-                layout.wrap =
-                    egui::text::TextWrapping::truncate_at_width(fragment.text_rect.width());
-            } else if fragment.ellipsis
-                && let Some(format) = layout.sections.last().map(|section| section.format.clone())
-            {
-                layout.append("…", 0.0, format);
+            let mut layout = if let Some(marker) = &fragment.marker {
+                let content_width = (fragment.text_rect.width() - fragment.marker_width).max(0.0);
+                let mut fitting = slice_job(job, range.clone());
+                fitting.wrap = egui::text::TextWrapping::truncate_at_width(content_width);
+                fitting.wrap.overflow_character = None;
+                let visible_chars = context.fonts_mut(|fonts| {
+                    fonts
+                        .layout_job(fitting)
+                        .rows
+                        .first()
+                        .map_or(0, |row| row.row.glyphs.len())
+                });
+                let source = &job.text[range.start.0..range.end.0];
+                let visible_bytes = source
+                    .char_indices()
+                    .nth(visible_chars)
+                    .map_or(source.len(), |(offset, _)| offset);
+                let visible_end = egui::text::ByteIndex(range.start.0 + visible_bytes);
+                let mut layout = slice_job(job, range.start..visible_end);
+                if let Some(section) = layout.sections.last().or_else(|| {
+                    job.sections
+                        .iter()
+                        .find(|section| section.byte_range.end > range.start)
+                }) {
+                    layout.append(marker, 0.0, section.format.clone());
+                }
+                layout
+            } else {
+                slice_job(job, range.clone())
+            };
+            if fragment.marker.is_some() {
+                layout.wrap = egui::text::TextWrapping::no_max_width();
             }
             text.galley = context.fonts_mut(|fonts| fonts.layout_job(layout));
             text.pos = geometry.border.min + fragment.text_rect.min.to_vec2();

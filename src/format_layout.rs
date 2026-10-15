@@ -1306,14 +1306,13 @@ impl Tree<'_> {
             width: f32,
             height: f32,
             gap: f32,
-            ellipsis_width: f32,
+            marker_width: f32,
             newline: bool,
             offset: Vec2,
             size: Vec2,
             text_offset: Vec2,
             text_size: Vec2,
-            ellipsis: bool,
-            truncate: bool,
+            marker: Option<String>,
         }
         let mut tokens = Vec::new();
         let mut stack: Vec<_> = self.nodes[usize::from(id)]
@@ -1373,14 +1372,13 @@ impl Tree<'_> {
                         width: run.width + left + right + before + after,
                         height: run.height,
                         gap: run.gap,
-                        ellipsis_width: run.ellipsis_width,
+                        marker_width: run.marker_width,
                         newline: run.newline,
                         offset: vec2(before, -top),
                         size: vec2(run.width + left + right, run.height + top + bottom),
                         text_offset: vec2(left, top),
                         text_size: vec2(run.width, run.height),
-                        ellipsis: false,
-                        truncate: false,
+                        marker: None,
                     });
                 }
             } else {
@@ -1407,14 +1405,13 @@ impl Tree<'_> {
                     width: output.size.width + margin.left + margin.right,
                     height: output.size.height + margin.top + margin.bottom,
                     gap: 0.0,
-                    ellipsis_width: 0.0,
+                    marker_width: 0.0,
                     newline: false,
                     offset: vec2(margin.left, margin.top),
                     size: vec2(output.size.width, output.size.height),
                     text_offset: Vec2::ZERO,
                     text_size: vec2(output.size.width, output.size.height),
-                    ellipsis: false,
-                    truncate: false,
+                    marker: None,
                 });
             }
             self.nodes[usize::from(child)].fragments.clear();
@@ -1509,7 +1506,7 @@ impl Tree<'_> {
                 overflow.x != taffy::Overflow::Visible
             };
             if overflow_inline
-                && format.text_overflow[1] == "ellipsis"
+                && let Some(marker) = format.text_overflow[1].marker()
                 && line.width.is_finite()
                 && line
                     .items
@@ -1521,19 +1518,19 @@ impl Tree<'_> {
                     if token.range.is_some() {
                         let extra = token.width - token.text_size.x;
                         let available = line.width - x - extra;
-                        if available >= token.ellipsis_width {
-                            if token.text_size.x + token.ellipsis_width <= available {
-                                token.text_size.x += token.ellipsis_width;
-                                token.size.x += token.ellipsis_width;
-                                token.width += token.ellipsis_width;
-                                token.ellipsis = true;
-                            } else {
-                                let width_delta = available - token.text_size.x;
-                                token.text_size.x = available;
-                                token.size.x += width_delta;
-                                token.width += width_delta;
-                                token.truncate = true;
-                            }
+                        if available >= token.marker_width {
+                            let width_delta = available - token.text_size.x;
+                            token.text_size.x = available;
+                            token.size.x += width_delta;
+                            token.width += width_delta;
+                            token.marker = Some(marker.to_owned());
+                            break;
+                        }
+                        if line.items.len() == 1 {
+                            let width_delta = available.max(0.0) - token.text_size.x;
+                            token.text_size.x = available.max(0.0);
+                            token.size.x += width_delta;
+                            token.width += width_delta;
                             break;
                         }
                     }
@@ -1581,8 +1578,8 @@ impl Tree<'_> {
                 };
                 node.fragments.push(Fragment {
                     range: token.range.clone(),
-                    ellipsis: token.ellipsis,
-                    truncate: token.truncate,
+                    marker: token.marker.clone(),
+                    marker_width: token.marker_width,
                     rect: Rect::from_min_size(
                         pos2(
                             inset.x + line.x + x + align + token.offset.x,
@@ -1655,8 +1652,8 @@ impl Tree<'_> {
                         let node = &self.nodes[usize::from(*child)];
                         node.fragments.iter().map(|fragment| Fragment {
                             range: None,
-                            ellipsis: false,
-                            truncate: false,
+                            marker: None,
+                            marker_width: 0.0,
                             rect: fragment
                                 .rect
                                 .translate(vec2(node.layout.location.x, node.layout.location.y)),

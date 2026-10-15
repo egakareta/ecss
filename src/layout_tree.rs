@@ -54,8 +54,8 @@ pub(crate) struct Node {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Fragment {
     pub range: Option<egui::text::ByteRange>,
-    pub ellipsis: bool,
-    pub truncate: bool,
+    pub marker: Option<String>,
+    pub marker_width: f32,
     pub rect: egui::Rect,
     pub text_rect: egui::Rect,
 }
@@ -65,7 +65,7 @@ pub(crate) struct TextRun {
     pub width: f32,
     pub height: f32,
     pub gap: f32,
-    pub ellipsis_width: f32,
+    pub marker_width: f32,
     pub newline: bool,
 }
 #[derive(Clone, Debug, PartialEq)]

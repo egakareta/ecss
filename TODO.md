@@ -144,12 +144,14 @@
 - **[CSS Overflow Module Level 3](https://www.w3.org/TR/css-overflow-3/) - Partial.**
   - CSS properties: ~~`overflow`~~, ~~`overflow-block`~~, ~~`overflow-clip-margin`~~, ~~`overflow-inline`~~, ~~`overflow-x`~~, ~~`overflow-y`~~,
     `scroll-behavior`, ~~`scrollbar-gutter`~~, `text-overflow`.
+  - `text-overflow` supports inline-end ellipsis and string markers; inline-start markers remain incomplete.
 - **[CSS Overflow Module Level 4](https://www.w3.org/TR/css-overflow-4/) - Unsupported.**
   - CSS properties: `-webkit-line-clamp`, `block-ellipsis`, `continue`, `line-clamp`, `max-lines`,
     ~~`overflow-clip-margin`~~, ~~`overflow-clip-margin-block`~~, ~~`overflow-clip-margin-block-end`~~, ~~`overflow-clip-margin-block-start`~~,
     ~~`overflow-clip-margin-bottom`~~, ~~`overflow-clip-margin-inline`~~, ~~`overflow-clip-margin-inline-end`~~,
     ~~`overflow-clip-margin-inline-start`~~, ~~`overflow-clip-margin-left`~~, ~~`overflow-clip-margin-right`~~,
     ~~`overflow-clip-margin-top`~~, `text-overflow`.
+  - `text-overflow` supports inline-end ellipsis and string markers; inline-start markers remain incomplete.
 - **[CSS Overflow Module Level 5](https://www.w3.org/TR/css-overflow-5/) - Unsupported.**
   - CSS properties: `scroll-axis-lock`, `scroll-marker-group`, `scroll-target-group`.
 - **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Partial.**

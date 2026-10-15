@@ -80,6 +80,23 @@ impl Default for ColumnRule {
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TextOverflow {
+    Clip,
+    Ellipsis,
+    String(String),
+}
+impl TextOverflow {
+    pub(crate) fn marker(&self) -> Option<&str> {
+        match self {
+            Self::Clip => None,
+            Self::Ellipsis => Some("…"),
+            Self::String(value) => Some(value),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Formatting {
     pub em: f32,
@@ -108,7 +125,7 @@ pub(crate) struct Formatting {
     pub vertical_align: String,
     pub line_height: Option<f32>,
     pub text_align: String,
-    pub text_overflow: [String; 2],
+    pub text_overflow: [TextOverflow; 2],
     pub white_space: String,
     pub text_orientation: String,
 }
@@ -141,7 +158,7 @@ impl Default for Formatting {
             vertical_align: "baseline".into(),
             line_height: None,
             text_align: "start".into(),
-            text_overflow: ["clip".into(), "clip".into()],
+            text_overflow: [TextOverflow::Clip, TextOverflow::Clip],
             white_space: "normal".into(),
             text_orientation: "mixed".into(),
         }
@@ -395,13 +412,16 @@ pub(crate) fn apply(
                     break;
                 }
                 let value = match parser.next().map_err(|_| "invalid text-overflow")? {
-                    Token::Ident(value) if matches_ignore_ascii_case(value, "clip") => "clip",
-                    Token::Ident(value) if matches_ignore_ascii_case(value, "ellipsis") => {
-                        "ellipsis"
+                    Token::Ident(value) if matches_ignore_ascii_case(value, "clip") => {
+                        TextOverflow::Clip
                     }
+                    Token::Ident(value) if matches_ignore_ascii_case(value, "ellipsis") => {
+                        TextOverflow::Ellipsis
+                    }
+                    Token::QuotedString(value) => TextOverflow::String(value.to_string()),
                     _ => return Err("unsupported text-overflow value"),
                 };
-                values.push(value.to_owned());
+                values.push(value);
                 if values.len() > 2 {
                     return Err("too many text-overflow values");
                 }
@@ -410,7 +430,7 @@ pub(crate) fn apply(
                 return Err("invalid text-overflow");
             }
             f.text_overflow = if values.len() == 1 {
-                ["clip".into(), values.remove(0)]
+                [TextOverflow::Clip, values.remove(0)]
             } else {
                 [values.remove(0), values.remove(0)]
             };
