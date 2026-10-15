@@ -1119,6 +1119,34 @@ fn margin_trim_removes_selected_first_and_last_child_margins() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn margin_trim_removes_inline_edge_margins_from_each_block_child() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".container { display:flow-root; width:80px; margin-trim:inline-start; } .child { width:20px; height:10px; margin-inline-start:8px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        ui.add(
+            (|ui: &mut Ui| {
+                for _ in 0..3 {
+                    rects.push(ui.add(empty.selector(".child")).rect);
+                }
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    });
+    assert!(
+        rects.iter().all(|rect| rect.left().abs() < 0.05),
+        "{rects:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn margin_trim_applies_to_ordered_flex_items() {
     let context = Context::default();
     Stylesheet::parse(

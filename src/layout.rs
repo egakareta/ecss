@@ -1305,13 +1305,14 @@ fn trim_child_margins(frame: &Frame, child: usize, style: &mut Style) {
             trim[cross_end] = container.margin_trim[cross_end];
         }
     } else {
-        if children.first() != Some(&child) && children.last() != Some(&child) {
-            return;
-        }
         let first = children.first() == Some(&child);
         let last = children.last() == Some(&child);
         for (axis, selected) in container.margin_trim.iter().copied().enumerate() {
-            let at_edge = if axis == 0 || axis == 2 { first } else { last };
+            let at_edge = match axis {
+                0 => first,
+                1 => last,
+                _ => true,
+            };
             trim[axis] = selected && at_edge;
         }
     }
