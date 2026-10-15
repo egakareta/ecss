@@ -39,4 +39,4 @@ run = "cargo test --all-features -- --nocapture"
 
 [tasks."test:wasm"]
 description = "Run .rs tests for wasm"
-run = "WASM_BINDGEN_TEST_WEBDRIVER_JSON=tests/webdriver.json wasm-pack test --headless --chrome -- --test rendering"
+run = "WASM_BINDGEN_TEST_WEBDRIVER_JSON=tests/webdriver.json wasm-pack test --headless --chrome"

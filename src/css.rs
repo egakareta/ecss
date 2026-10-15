@@ -33,128 +33,11 @@ pub(crate) enum RuleState {
 pub(crate) enum Declaration {
     Color(Color32),
     Background(Color32),
-    Padding(egui::epaint::MarginF32),
-    PaddingSide(Side, f32),
-    Margin(egui::epaint::MarginF32),
-    MarginSide(Side, f32),
-    Width(SizeValue),
-    Height(SizeValue),
+    Layout(crate::layout_style::Declaration),
     BorderRadius(u8),
     FontFamily(Vec<String>),
     FontWeight(u16),
     FontStyle(bool),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Side {
-    Top,
-    Right,
-    Bottom,
-    Left,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum SizeValue {
-    Auto,
-    Length(f32),
-    Percentage(f32),
-}
-
-impl SizeValue {
-    pub(crate) fn resolve(self, available: f32) -> Option<f32> {
-        match self {
-            Self::Auto => None,
-            Self::Length(length) => Some(length),
-            Self::Percentage(fraction) if available.is_finite() => Some(available * fraction),
-            Self::Percentage(_) => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct BoxStyle {
-    pub(crate) padding: egui::epaint::MarginF32,
-    pub(crate) margin: egui::epaint::MarginF32,
-    pub(crate) width: Option<SizeValue>,
-    pub(crate) height: Option<SizeValue>,
-    pub(crate) has_padding: bool,
-    pub(crate) has_margin: bool,
-    pub(crate) has_background: [bool; 3],
-}
-
-pub(crate) fn box_style_for_target(rules: &[Rule], class: Option<&str>) -> BoxStyle {
-    let mut padding = egui::epaint::MarginF32::ZERO;
-    let mut margin = egui::epaint::MarginF32::ZERO;
-    let mut width = None;
-    let mut height = None;
-    let mut has_padding = false;
-    let mut has_margin = false;
-    let mut has_background = [false; 3];
-
-    let mut apply_rule = |rule: &Rule| {
-        for declaration in &rule.declarations {
-            match declaration {
-                Declaration::Padding(value) if rule.state == RuleState::Base => {
-                    padding = *value;
-                    has_padding = true;
-                }
-                Declaration::PaddingSide(side, value) if rule.state == RuleState::Base => {
-                    set_side(&mut padding, *side, *value);
-                    has_padding = true;
-                }
-                Declaration::Margin(value) if rule.state == RuleState::Base => {
-                    margin = *value;
-                    has_margin = true;
-                }
-                Declaration::MarginSide(side, value) if rule.state == RuleState::Base => {
-                    set_side(&mut margin, *side, *value);
-                    has_margin = true;
-                }
-                Declaration::Width(value) if rule.state == RuleState::Base => width = Some(*value),
-                Declaration::Height(value) if rule.state == RuleState::Base => {
-                    height = Some(*value);
-                }
-                Declaration::Background(_) => {
-                    has_background[match rule.state {
-                        RuleState::Base => 0,
-                        RuleState::Hovered => 1,
-                        RuleState::Active => 2,
-                    }] = true;
-                }
-                _ => {}
-            }
-        }
-    };
-    for rule in rules.iter().filter(|rule| rule.class.is_none()) {
-        apply_rule(rule);
-    }
-    if let Some(class) = class {
-        for rule in rules
-            .iter()
-            .filter(|rule| rule.class.as_deref() == Some(class))
-        {
-            apply_rule(rule);
-        }
-    }
-
-    BoxStyle {
-        padding,
-        margin,
-        width,
-        height,
-        has_padding,
-        has_margin,
-        has_background,
-    }
-}
-
-fn set_side(edges: &mut egui::epaint::MarginF32, side: Side, value: f32) {
-    match side {
-        Side::Top => edges.top = value,
-        Side::Right => edges.right = value,
-        Side::Bottom => edges.bottom = value,
-        Side::Left => edges.left = value,
-    }
 }
 
 enum ParsedRule {
@@ -367,58 +250,15 @@ impl<'i> DeclarationParser<'i> for Declarations {
         input: &mut CssParser<'i>,
         _declaration_start: &ParserState,
     ) -> Result<Self::Declaration, ParseError<Self::Error>> {
+        if let Some(declaration) =
+            crate::layout_style::parse(&name, input).map_err(ParseError::custom)?
+        {
+            return Ok(Some(Declaration::Layout(declaration)));
+        }
         let declaration = if name.eq_ignore_ascii_case("color") {
             Some(Declaration::Color(parse_color(input)?))
         } else if name.eq_ignore_ascii_case("background-color") {
             Some(Declaration::Background(parse_color(input)?))
-        } else if name.eq_ignore_ascii_case("padding") {
-            Some(Declaration::Padding(parse_box_sides(input, true)?))
-        } else if name.eq_ignore_ascii_case("padding-top") {
-            Some(Declaration::PaddingSide(
-                Side::Top,
-                parse_side_length(input, true)?,
-            ))
-        } else if name.eq_ignore_ascii_case("padding-right") {
-            Some(Declaration::PaddingSide(
-                Side::Right,
-                parse_side_length(input, true)?,
-            ))
-        } else if name.eq_ignore_ascii_case("padding-bottom") {
-            Some(Declaration::PaddingSide(
-                Side::Bottom,
-                parse_side_length(input, true)?,
-            ))
-        } else if name.eq_ignore_ascii_case("padding-left") {
-            Some(Declaration::PaddingSide(
-                Side::Left,
-                parse_side_length(input, true)?,
-            ))
-        } else if name.eq_ignore_ascii_case("margin") {
-            Some(Declaration::Margin(parse_box_sides(input, false)?))
-        } else if name.eq_ignore_ascii_case("margin-top") {
-            Some(Declaration::MarginSide(
-                Side::Top,
-                parse_side_length(input, false)?,
-            ))
-        } else if name.eq_ignore_ascii_case("margin-right") {
-            Some(Declaration::MarginSide(
-                Side::Right,
-                parse_side_length(input, false)?,
-            ))
-        } else if name.eq_ignore_ascii_case("margin-bottom") {
-            Some(Declaration::MarginSide(
-                Side::Bottom,
-                parse_side_length(input, false)?,
-            ))
-        } else if name.eq_ignore_ascii_case("margin-left") {
-            Some(Declaration::MarginSide(
-                Side::Left,
-                parse_side_length(input, false)?,
-            ))
-        } else if name.eq_ignore_ascii_case("width") {
-            Some(Declaration::Width(parse_size_value(input)?))
-        } else if name.eq_ignore_ascii_case("height") {
-            Some(Declaration::Height(parse_size_value(input)?))
         } else if name.eq_ignore_ascii_case("border-radius") {
             let radius = parse_length(input, "unsupported border radius")?;
             Some(Declaration::BorderRadius(
@@ -482,16 +322,213 @@ fn parse_declarations<'i>(input: &mut CssParser<'i>) -> Result<Vec<Declaration>,
     Ok(declarations)
 }
 
-fn parse_color<'i>(input: &mut CssParser<'i>) -> Result<Color32, ParseError<&'static str>> {
-    match input.next()? {
+pub(crate) fn parse_color<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Color32, ParseError<&'static str>> {
+    let color = match input.next()? {
         Token::Ident(value) if value.eq_ignore_ascii_case("transparent") => {
             Ok(Color32::TRANSPARENT)
         }
         Token::Hash(hex) | Token::IDHash(hex) => {
             parse_hex_color(hex).ok_or_else(|| ParseError::custom("unsupported color value"))
         }
+        Token::Ident(value) => cssparser::color::parse_named_color(value)
+            .map(|(r, g, b)| Color32::from_rgb(r, g, b))
+            .map_err(|_| ParseError::custom("unsupported color value")),
+        Token::Function(name)
+            if name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba") =>
+        {
+            parse_functional_color(input, FunctionalColorKind::Rgb)
+        }
+        Token::Function(name)
+            if name.eq_ignore_ascii_case("hsl") || name.eq_ignore_ascii_case("hsla") =>
+        {
+            parse_functional_color(input, FunctionalColorKind::Hsl)
+        }
         _ => Err(ParseError::custom("unsupported color value")),
+    }?;
+    input.expect_exhausted()?;
+    Ok(color)
+}
+
+#[derive(Clone, Copy)]
+enum FunctionalColorKind {
+    Rgb,
+    Hsl,
+}
+
+enum FunctionalColorToken {
+    Number(f32),
+    Percentage(f32),
+    Dimension(f32, String),
+    Comma,
+    Slash,
+}
+
+fn parse_functional_color<'i>(
+    input: &mut CssParser<'i>,
+    kind: FunctionalColorKind,
+) -> Result<Color32, ParseError<&'static str>> {
+    let values = input.parse_nested_block(|args| {
+        let mut values = Vec::new();
+        while !args.is_exhausted() {
+            let value = match args.next()? {
+                Token::Number { value, .. } => FunctionalColorToken::Number(*value),
+                Token::Percentage { unit_value, .. } => {
+                    FunctionalColorToken::Percentage(*unit_value)
+                }
+                Token::Dimension { value, unit, .. } => {
+                    FunctionalColorToken::Dimension(*value, unit.to_string())
+                }
+                Token::Comma => FunctionalColorToken::Comma,
+                Token::Delim('/') => FunctionalColorToken::Slash,
+                _ => return Err(ParseError::custom("unsupported color value")),
+            };
+            values.push(value);
+        }
+        Ok(values)
+    })?;
+
+    let (first, second, third, alpha) = functional_components(&values)
+        .ok_or_else(|| ParseError::custom("unsupported color value"))?;
+    let alpha = match alpha {
+        Some(alpha) => {
+            color_alpha(alpha).ok_or_else(|| ParseError::custom("unsupported color value"))?
+        }
+        None => 1.0,
+    };
+
+    let (red, green, blue) = match kind {
+        FunctionalColorKind::Rgb => (
+            rgb_component(first),
+            rgb_component(second),
+            rgb_component(third),
+        ),
+        FunctionalColorKind::Hsl => hsl_components(first, second, third),
+    };
+    let (Some(red), Some(green), Some(blue)) = (red, green, blue) else {
+        return Err(ParseError::custom("unsupported color value"));
+    };
+
+    Ok(Color32::from_rgba_unmultiplied(
+        color_byte(red),
+        color_byte(green),
+        color_byte(blue),
+        color_byte(alpha),
+    ))
+}
+
+fn functional_components(
+    values: &[FunctionalColorToken],
+) -> Option<(
+    &FunctionalColorToken,
+    &FunctionalColorToken,
+    &FunctionalColorToken,
+    Option<&FunctionalColorToken>,
+)> {
+    match values {
+        [
+            first,
+            FunctionalColorToken::Comma,
+            second,
+            FunctionalColorToken::Comma,
+            third,
+        ] => Some((first, second, third, None)),
+        [
+            first,
+            FunctionalColorToken::Comma,
+            second,
+            FunctionalColorToken::Comma,
+            third,
+            FunctionalColorToken::Comma,
+            alpha,
+        ] => Some((first, second, third, Some(alpha))),
+        [first, second, third] => Some((first, second, third, None)),
+        [first, second, third, FunctionalColorToken::Slash, alpha] => {
+            Some((first, second, third, Some(alpha)))
+        }
+        _ => None,
     }
+}
+
+fn rgb_component(value: &FunctionalColorToken) -> Option<f32> {
+    let channel = match value {
+        FunctionalColorToken::Number(value) => value / 255.0,
+        FunctionalColorToken::Percentage(value) => *value,
+        _ => return None,
+    };
+    channel.is_finite().then(|| channel.clamp(0.0, 1.0))
+}
+
+fn color_alpha(value: &FunctionalColorToken) -> Option<f32> {
+    let alpha = match value {
+        FunctionalColorToken::Number(value) => *value,
+        FunctionalColorToken::Percentage(value) => *value,
+        _ => return None,
+    };
+    alpha.is_finite().then(|| alpha.clamp(0.0, 1.0))
+}
+
+fn hsl_components(
+    hue: &FunctionalColorToken,
+    saturation: &FunctionalColorToken,
+    lightness: &FunctionalColorToken,
+) -> (Option<f32>, Option<f32>, Option<f32>) {
+    let hue = match hue {
+        FunctionalColorToken::Number(value) => Some(*value),
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("deg") => {
+            Some(*value)
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("grad") => {
+            Some(*value * 0.9)
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("rad") => {
+            Some(value.to_degrees())
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("turn") => {
+            Some(*value * 360.0)
+        }
+        _ => None,
+    };
+    let saturation = hsl_percentage(saturation);
+    let lightness = hsl_percentage(lightness);
+    let (Some(hue), Some(saturation), Some(lightness)) = (hue, saturation, lightness) else {
+        return (None, None, None);
+    };
+    if !hue.is_finite() {
+        return (None, None, None);
+    }
+
+    let hue = hue.rem_euclid(360.0) / 60.0;
+    let saturation = saturation.clamp(0.0, 1.0);
+    let lightness = lightness.clamp(0.0, 1.0);
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let secondary = chroma * (1.0 - (hue.rem_euclid(2.0) - 1.0).abs());
+    let (red, green, blue) = match hue as u8 {
+        0 => (chroma, secondary, 0.0),
+        1 => (secondary, chroma, 0.0),
+        2 => (0.0, chroma, secondary),
+        3 => (0.0, secondary, chroma),
+        4 => (secondary, 0.0, chroma),
+        _ => (chroma, 0.0, secondary),
+    };
+    let offset = lightness - chroma / 2.0;
+    (
+        Some(red + offset),
+        Some(green + offset),
+        Some(blue + offset),
+    )
+}
+
+fn hsl_percentage(value: &FunctionalColorToken) -> Option<f32> {
+    match value {
+        FunctionalColorToken::Percentage(value) if value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
+fn color_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn parse_hex_color(hex: &str) -> Option<Color32> {
@@ -536,102 +573,6 @@ fn parse_length<'i>(
         Ok(length)
     } else {
         Err(ParseError::custom(message))
-    }
-}
-
-fn parse_size_value<'i>(input: &mut CssParser<'i>) -> Result<SizeValue, ParseError<&'static str>> {
-    let value = match input.next()? {
-        Token::Ident(value) if value.eq_ignore_ascii_case("auto") => SizeValue::Auto,
-        Token::Number { value, .. } => SizeValue::Length(*value),
-        Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => {
-            SizeValue::Length(*value)
-        }
-        Token::Percentage { unit_value, .. } => SizeValue::Percentage(*unit_value),
-        _ => return Err(ParseError::custom("unsupported size value")),
-    };
-    let nonnegative = match value {
-        SizeValue::Auto => true,
-        SizeValue::Length(value) | SizeValue::Percentage(value) => {
-            value.is_finite() && value >= 0.0
-        }
-    };
-    if !nonnegative || input.expect_exhausted().is_err() {
-        Err(ParseError::custom("unsupported size value"))
-    } else {
-        Ok(value)
-    }
-}
-
-fn parse_box_sides<'i>(
-    input: &mut CssParser<'i>,
-    padding: bool,
-) -> Result<egui::epaint::MarginF32, ParseError<&'static str>> {
-    let message = if padding {
-        "padding must have one to four nonnegative lengths"
-    } else {
-        "margin must have one to four lengths"
-    };
-    let mut lengths = Vec::with_capacity(4);
-    while !input.is_exhausted() {
-        if lengths.len() == 4 {
-            return Err(ParseError::custom(message));
-        }
-        lengths.push(parse_side_length_component(input, padding)?);
-    }
-    match lengths.as_slice() {
-        [all] => Ok(egui::epaint::MarginF32::same(*all)),
-        [vertical, horizontal] => Ok(egui::epaint::MarginF32::symmetric(*horizontal, *vertical)),
-        [top, horizontal, bottom] => Ok(egui::epaint::MarginF32 {
-            top: *top,
-            right: *horizontal,
-            bottom: *bottom,
-            left: *horizontal,
-        }),
-        [top, right, bottom, left] => Ok(egui::epaint::MarginF32 {
-            top: *top,
-            right: *right,
-            bottom: *bottom,
-            left: *left,
-        }),
-        _ => Err(ParseError::custom(message)),
-    }
-}
-
-fn parse_side_length<'i>(
-    input: &mut CssParser<'i>,
-    nonnegative: bool,
-) -> Result<f32, ParseError<&'static str>> {
-    let message = if nonnegative {
-        "padding sides must be nonnegative lengths"
-    } else {
-        "margin sides must be lengths"
-    };
-    let length = parse_side_length_component(input, nonnegative)?;
-    if input.expect_exhausted().is_err() {
-        Err(ParseError::custom(message))
-    } else {
-        Ok(length)
-    }
-}
-
-fn parse_side_length_component<'i>(
-    input: &mut CssParser<'i>,
-    nonnegative: bool,
-) -> Result<f32, ParseError<&'static str>> {
-    let message = if nonnegative {
-        "padding sides must be nonnegative lengths"
-    } else {
-        "margin sides must be lengths"
-    };
-    let length = match input.next()? {
-        Token::Number { value, .. } => *value,
-        Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => *value,
-        _ => return Err(ParseError::custom(message)),
-    };
-    if !length.is_finite() || (nonnegative && length < 0.0) {
-        Err(ParseError::custom(message))
-    } else {
-        Ok(length)
     }
 }
 
