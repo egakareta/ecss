@@ -3,8 +3,8 @@ use std::sync::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{OnceLock, mpsc};
 
+use ecss::{SelectorExt as _, Stylesheet};
 use eframe::{egui, egui_wgpu, wgpu};
-use trcss::{SelectorExt as _, Stylesheet};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 128;
@@ -228,7 +228,7 @@ async fn render_ui_pixels(
     let requests = RENDERER_THREAD.get_or_init(|| {
         let (requests_tx, requests_rx) = mpsc::channel::<RenderRequest>();
         std::thread::Builder::new()
-            .name("trcss-test-renderer".to_owned())
+            .name("ecss-test-renderer".to_owned())
             .spawn(move || {
                 let mut renderer = pollster::block_on(OffscreenRenderer::new());
                 while let Ok(request) = requests_rx.recv() {
@@ -309,7 +309,7 @@ impl OffscreenRenderer {
         let renderer =
             egui_wgpu::Renderer::new(&device, FORMAT, egui_wgpu::RendererOptions::PREDICTABLE);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("trcss test render target"),
+            label: Some("ecss test render target"),
             size: wgpu::Extent3d {
                 width: WIDTH,
                 height: HEIGHT,
@@ -324,7 +324,7 @@ impl OffscreenRenderer {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("trcss test pixel readback"),
+            label: Some("ecss test pixel readback"),
             size: u64::from(WIDTH * HEIGHT * 4),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -367,7 +367,7 @@ impl OffscreenRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("trcss test render encoder"),
+                label: Some("ecss test render encoder"),
             });
         let user_buffers = self.renderer.update_buffers(
             &self.device,
@@ -379,7 +379,7 @@ impl OffscreenRenderer {
         {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("trcss test render pass"),
+                    label: Some("ecss test render pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &self.texture_view,
                         resolve_target: None,

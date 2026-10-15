@@ -1,12 +1,12 @@
 use std::error::Error;
 
-use trcss::{SelectorExt as _, Stylesheet};
+use ecss::{SelectorExt as _, Stylesheet};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let stylesheet = Stylesheet::parse(include_str!("theme.css"))?;
 
     eframe::run_native(
-        "trcss",
+        "ecss",
         eframe::NativeOptions::default(),
         Box::new(move |creation_context| {
             stylesheet.install(&creation_context.egui_ctx);

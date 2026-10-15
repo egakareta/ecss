@@ -1,10 +1,10 @@
 [package]
-name = "trcss"
+name = "ecss"
 version = "0.1.0"
 edition = "2024"
 description = "CSS class styling for egui widgets."
-documentation = "https://docs.rs/trcss"
-repository = "https://github.com/egakareta/trcss"
+documentation = "https://docs.rs/ecss"
+repository = "https://github.com/egakareta/ecss"
 license = "MIT"
 
 [dependencies]

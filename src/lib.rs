@@ -3,7 +3,7 @@
 //! Apply CSS to egui widgets.
 //!
 //! ```no_run
-//! use trcss::{SelectorExt as _, Stylesheet};
+//! use ecss::{SelectorExt as _, Stylesheet};
 //!
 //! # fn ui(ui: &mut egui::Ui, context: &egui::Context) -> Result<(), Box<dyn std::error::Error>> {
 //! let css = Stylesheet::from_file("theme.css")?;
@@ -31,8 +31,8 @@ use fonts::{FontAssets, FontRequest};
 mod css;
 mod fonts;
 
-const STYLESHEET_ID: &str = "trcss.stylesheet";
-const BACKGROUND_ID: &str = "trcss.background";
+const STYLESHEET_ID: &str = "ecss.stylesheet";
+const BACKGROUND_ID: &str = "ecss.background";
 
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_background<F>(future: F)
@@ -40,7 +40,7 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let _ = std::thread::Builder::new()
-        .name("trcss-font-loader".to_owned())
+        .name("ecss-font-loader".to_owned())
         .spawn(move || pollster::block_on(future))
         .expect("failed to start font loader");
 }
@@ -846,7 +846,7 @@ mod tests {
 
         assert_eq!(
             observed_font,
-            Some(egui::FontFamily::Name("trcss:outfit:500:normal".into()))
+            Some(egui::FontFamily::Name("ecss:outfit:500:normal".into()))
         );
     }
 

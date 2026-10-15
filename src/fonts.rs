@@ -46,12 +46,12 @@ struct FontFace {
     url: String,
 }
 
-const FONT_ASSETS_ID: &str = "trcss.font-assets";
-const FONT_REVISION_ID: &str = "trcss.font-revision";
-const FONT_GENERATION_ID: &str = "trcss.font-generation";
-const FONT_REQUEST_ID: &str = "trcss.font-request";
-const FONT_CALLBACK_REGISTERED_ID: &str = "trcss.font-callback-registered";
-const FONT_INSTALL_CALLBACK_ID: &str = "trcss.font-install";
+const FONT_ASSETS_ID: &str = "ecss.font-assets";
+const FONT_REVISION_ID: &str = "ecss.font-revision";
+const FONT_GENERATION_ID: &str = "ecss.font-generation";
+const FONT_REQUEST_ID: &str = "ecss.font-request";
+const FONT_CALLBACK_REGISTERED_ID: &str = "ecss.font-callback-registered";
+const FONT_INSTALL_CALLBACK_ID: &str = "ecss.font-install";
 
 impl FontAssets {
     #[cfg(test)]
@@ -559,7 +559,7 @@ pub(crate) fn normalize_family(family: &str) -> String {
 
 fn font_family_id(font: &LoadedFont) -> String {
     format!(
-        "trcss:{}:{}:{}",
+        "ecss:{}:{}:{}",
         normalize_family(&font.family),
         font.weight,
         if font.italic { "italic" } else { "normal" }

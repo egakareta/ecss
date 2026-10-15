@@ -564,6 +564,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecss"
+version = "0.1.0"
+dependencies = [
+ "cssparser",
+ "eframe",
+ "egui",
+ "ehttp",
+ "futures-channel",
+ "futures-util",
+ "paste",
+ "pollster",
+ "precomputed-hash",
+ "selectors",
+ "wasm-bindgen-test",
+ "wgpu",
+ "wuff",
+]
+
+[[package]]
 name = "eframe"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2724,25 +2743,6 @@ name = "tracing-core"
 version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
-
-[[package]]
-name = "trcss"
-version = "0.1.0"
-dependencies = [
- "cssparser",
- "eframe",
- "egui",
- "ehttp",
- "futures-channel",
- "futures-util",
- "paste",
- "pollster",
- "precomputed-hash",
- "selectors",
- "wasm-bindgen-test",
- "wgpu",
- "wuff",
-]
 
 [[package]]
 name = "type-map"
