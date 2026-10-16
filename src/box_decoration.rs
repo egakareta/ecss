@@ -298,18 +298,8 @@ impl BorderShape {
         ))
     }
 
-    pub(crate) fn outer_points(
-        &self,
-        border: Rect,
-        stroke: egui::epaint::MarginF32,
-        padding: egui::epaint::MarginF32,
-        margin: egui::epaint::MarginF32,
-        widths: [f32; 4],
-    ) -> Vec<Pos2> {
-        self.outer_paths(border, stroke, padding, margin, widths)
-            .into_iter()
-            .next()
-            .unwrap_or_default()
+    fn outer_fill_rule(&self) -> FillRule {
+        self.shapes[0].0.fill_rule()
     }
 
     pub(crate) fn inner_paths(
@@ -326,17 +316,8 @@ impl BorderShape {
         )))
     }
 
-    pub(crate) fn inner_points(
-        &self,
-        border: Rect,
-        stroke: egui::epaint::MarginF32,
-        padding: egui::epaint::MarginF32,
-        margin: egui::epaint::MarginF32,
-        widths: [f32; 4],
-    ) -> Option<Vec<Pos2>> {
-        self.shapes.get(1)?;
-        self.inner_paths(border, stroke, padding, margin, widths)
-            .and_then(|paths| paths.into_iter().next())
+    fn inner_fill_rule(&self) -> Option<FillRule> {
+        self.shapes.get(1).map(|(shape, _)| shape.fill_rule())
     }
 
     pub(crate) fn background_paths(
@@ -3194,42 +3175,39 @@ fn parse_border_image(values: &[String], units: Units) -> Result<BorderImage, &'
 
 fn parse_image_slice(values: &[String]) -> Result<([ImageSlice; 4], bool), &'static str> {
     let mut fill = false;
-    let mut values = values
-        .iter()
-        .filter_map(|value| {
-            if value.eq_ignore_ascii_case("fill") {
-                fill = true;
-                None
-            } else {
-                Some(value)
+    let mut slices = Vec::with_capacity(values.len());
+    for value in values {
+        if value.eq_ignore_ascii_case("fill") {
+            if fill {
+                return Err("duplicate border-image-slice fill");
             }
-        })
-        .map(|value| {
-            let value = value.trim();
-            if let Some(percent) = value.strip_suffix('%') {
-                let percent = percent
-                    .parse::<f32>()
-                    .map_err(|_| "invalid border-image-slice")?;
-                if percent < 0.0 || !percent.is_finite() {
-                    return Err("invalid border-image-slice");
-                }
-                Ok(ImageSlice::Percentage(percent / 100.0))
-            } else {
-                let number = value
-                    .parse::<f32>()
-                    .map_err(|_| "invalid border-image-slice")?;
-                if number < 0.0 || !number.is_finite() {
-                    return Err("invalid border-image-slice");
-                }
-                Ok(ImageSlice::Number(number))
+            fill = true;
+            continue;
+        }
+        let value = value.trim();
+        let slice = if let Some(percent) = value.strip_suffix('%') {
+            let percent = percent
+                .parse::<f32>()
+                .map_err(|_| "invalid border-image-slice")?;
+            if percent < 0.0 || !percent.is_finite() {
+                return Err("invalid border-image-slice");
             }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if values.is_empty() {
+            ImageSlice::Percentage(percent / 100.0)
+        } else {
+            let number = value
+                .parse::<f32>()
+                .map_err(|_| "invalid border-image-slice")?;
+            if number < 0.0 || !number.is_finite() {
+                return Err("invalid border-image-slice");
+            }
+            ImageSlice::Number(number)
+        };
+        slices.push(slice);
+    }
+    if slices.is_empty() {
         return Err("border-image-slice requires a value");
     }
-    let expanded = quad(&values)?;
-    values.clear();
+    let expanded = quad(&slices)?;
     Ok((expanded, fill))
 }
 
@@ -3578,7 +3556,7 @@ pub(crate) fn shadow_shapes(
         }
 
         let blur = shadow.blur;
-        let count = if blur > 0.0 { 12 } else { 1 };
+        let count = if blur > 0.0 { 96 } else { 1 };
         let sigma = blur * 0.5;
         for step in 0..count {
             let (distance, alpha) = if count == 1 {
@@ -3586,14 +3564,19 @@ pub(crate) fn shadow_shapes(
             } else {
                 let outer_distance = shadow.spread + sigma * 3.0;
                 let inner_distance = shadow.spread - sigma * 3.0;
-                let previous = outer_distance
-                    + (inner_distance - outer_distance) * (step as f32 / count as f32);
-                let current_distance = outer_distance
-                    + (inner_distance - outer_distance) * ((step + 1) as f32 / count as f32);
+                let previous_distance = outer_distance
+                    + (inner_distance - outer_distance) * ((step as f32 - 0.5) / count as f32);
+                let distance = outer_distance
+                    + (inner_distance - outer_distance) * ((step as f32 + 0.5) / count as f32);
+                let previous_opacity = if step == 0 {
+                    0.0
+                } else {
+                    shadow_opacity(previous_distance, sigma)
+                };
+                let opacity = shadow_opacity(distance, sigma);
                 (
-                    (previous + current_distance) * 0.5,
-                    (shadow_opacity(current_distance, sigma) - shadow_opacity(previous, sigma))
-                        * f32::from(color.a()),
+                    distance,
+                    (opacity - previous_opacity) / (1.0 - previous_opacity) * f32::from(color.a()),
                 )
             };
             let target = rect.translate(offset).expand(distance);
@@ -3606,24 +3589,49 @@ pub(crate) fn shadow_shapes(
                     (radius.y + distance).max(0.0),
                 )
             });
-            let points = style.decorations.border_shape.as_ref().map_or_else(
-                || rounded_path(target, target_radii, style.decorations.corner_shapes),
-                |shape| shape.outer_points(target, stroke, padding, margin, widths),
-            );
             let paint = shadow_color(color, alpha);
-            if style
-                .decorations
-                .corner_shapes
-                .iter()
-                .any(|shape| shape.parameter_is_concave())
-            {
-                shapes.push(filled_path(points, paint));
+            if let Some(border_shape) = &style.decorations.border_shape {
+                let fill_rule = border_shape.outer_fill_rule();
+                let paths = offset_filled_paths(
+                    &border_shape.outer_paths(rect, stroke, padding, margin, widths),
+                    fill_rule,
+                    distance,
+                )
+                .into_iter()
+                .map(|path| path.into_iter().map(|point| point + offset).collect())
+                .collect();
+                shapes.push(filled_paths(paths, fill_rule, paint));
             } else {
-                shapes.push(Shape::convex_polygon(points, paint, Stroke::NONE));
+                let points = rounded_path(target, target_radii, style.decorations.corner_shapes);
+                if style
+                    .decorations
+                    .corner_shapes
+                    .iter()
+                    .any(|shape| shape.parameter_is_concave())
+                {
+                    shapes.push(filled_path(points, paint));
+                } else {
+                    shapes.push(Shape::convex_polygon(points, paint, Stroke::NONE));
+                }
             }
         }
     }
     shapes
+}
+
+pub(crate) fn inset_shadow_extent(rect: Rect, style: &BoxStyle) -> f32 {
+    shadows(&style.decorations)
+        .into_iter()
+        .filter(|shadow| shadow.position == ShadowPosition::Inset)
+        .filter_map(|shadow| {
+            let offset = shadow.offset?;
+            Some(
+                (shadow.spread + shadow.blur * 1.5 + offset.x.abs().max(offset.y.abs()))
+                    .max(0.0)
+                    .min(rect.width().min(rect.height()) * 0.5),
+            )
+        })
+        .fold(0.0, f32::max)
 }
 
 fn inset_shadow_shapes(
@@ -3637,82 +3645,207 @@ fn inset_shadow_shapes(
     margin: egui::epaint::MarginF32,
     widths: [f32; 4],
 ) -> Vec<Shape> {
+    use egui::epaint::{Mesh, Vertex};
+
     let Some(offset) = shadow.offset else {
         return Vec::new();
     };
     let blur = shadow.blur;
-    let thickness = (shadow.spread.max(0.0) + blur * 1.5 + offset.x.abs().max(offset.y.abs()))
+    let thickness = (shadow.spread + blur * 1.5 + offset.x.abs().max(offset.y.abs()))
+        .max(0.0)
         .min(rect.width().min(rect.height()) * 0.5);
     if thickness <= 0.0 {
         return Vec::new();
     }
-    let count = if blur > 0.0 { 12 } else { 1 };
-    let mut shapes = Vec::new();
-    let base = if let Some(border_shape) = &style.decorations.border_shape {
-        border_shape
-            .inner_points(rect, stroke, padding, margin, widths)
-            .unwrap_or_else(|| border_shape.outer_points(rect, stroke, padding, margin, widths))
+    let count = if blur > 0.0 {
+        64
     } else {
-        rounded_path(rect, outer_radii, style.decorations.corner_shapes)
+        thickness.ceil().max(1.0) as usize
     };
-    if base.len() < 3 {
+    let (base_paths, fill_rule) = if let Some(border_shape) = &style.decorations.border_shape {
+        match border_shape.inner_paths(rect, stroke, padding, margin, widths) {
+            Some(paths) => (
+                paths,
+                border_shape.inner_fill_rule().unwrap_or(FillRule::Nonzero),
+            ),
+            None => (
+                border_shape.outer_paths(rect, stroke, padding, margin, widths),
+                border_shape.outer_fill_rule(),
+            ),
+        }
+    } else {
+        let padding_box = crate::nonnegative_rect(rect - stroke);
+        let radii = [
+            vec2(
+                (outer_radii[0].x - stroke.left).max(0.0),
+                (outer_radii[0].y - stroke.top).max(0.0),
+            ),
+            vec2(
+                (outer_radii[1].x - stroke.right).max(0.0),
+                (outer_radii[1].y - stroke.top).max(0.0),
+            ),
+            vec2(
+                (outer_radii[2].x - stroke.right).max(0.0),
+                (outer_radii[2].y - stroke.bottom).max(0.0),
+            ),
+            vec2(
+                (outer_radii[3].x - stroke.left).max(0.0),
+                (outer_radii[3].y - stroke.bottom).max(0.0),
+            ),
+        ];
+        (
+            vec![rounded_path(
+                padding_box,
+                radii,
+                style.decorations.corner_shapes,
+            )],
+            FillRule::Nonzero,
+        )
+    };
+    let base_paths = base_paths
+        .into_iter()
+        .filter(|path| path.len() >= 3)
+        .collect::<Vec<_>>();
+    if base_paths.is_empty() {
         return Vec::new();
     }
-    for ring in 0..count {
-        let outer_inset = thickness * ring as f32 / count as f32;
-        let inner_inset = thickness * (ring + 1) as f32 / count as f32;
-        let alpha = if count == 1 {
-            f32::from(color.a())
-        } else {
-            let sigma = blur * 0.5;
-            (shadow_opacity(outer_inset, sigma) - shadow_opacity(inner_inset, sigma))
-                * f32::from(color.a())
-        };
-        if alpha <= 0.0 {
-            continue;
-        }
-        let outer_points = offset_polygon(&base, -outer_inset);
-        let inner_points = offset_polygon(&base, -inner_inset);
-        if outer_points.len() != inner_points.len() || outer_points.len() < 3 {
-            break;
-        }
-        for index in 0..outer_points.len() {
-            let next = (index + 1) % outer_points.len();
-            let direction = outer_points[next] - outer_points[index];
-            let normal = outward_normal(&base, index, direction);
-            let side = if normal.y < -normal.x.abs() {
-                0
-            } else if normal.x > normal.y.abs() {
-                1
-            } else if normal.y > normal.x.abs() {
-                2
-            } else {
-                3
-            };
-            let directional = match side {
-                0 => 0.5 + offset.y / (2.0 * thickness),
-                1 => 0.5 - offset.x / (2.0 * thickness),
-                2 => 0.5 - offset.y / (2.0 * thickness),
-                _ => 0.5 + offset.x / (2.0 * thickness),
+    let directions = (0..base_paths.len())
+        .map(|index| contour_expansion_direction(&base_paths, index, fill_rule))
+        .collect::<Vec<_>>();
+    let sigma = blur * 0.5;
+    let mut mesh = Mesh::default();
+    for (base, contour_direction) in base_paths.iter().zip(directions) {
+        for ring in 0..count {
+            let outer_inset = thickness * ring as f32 / count as f32;
+            let inner_inset = thickness * (ring + 1) as f32 / count as f32;
+            let outer_points = offset_polygon(base, -contour_direction * outer_inset);
+            let inner_points = offset_polygon(base, -contour_direction * inner_inset);
+            if outer_points.len() != inner_points.len() || outer_points.len() < 3 {
+                break;
             }
-            .clamp(0.0, 1.0);
-            let segment_alpha = alpha * directional;
-            if segment_alpha <= 0.0 {
-                continue;
+            for index in 0..outer_points.len() {
+                let next = (index + 1) % outer_points.len();
+                let direction = base[next] - base[index];
+                let normal = outward_normal(base, index, direction) * contour_direction;
+                let offset = offset.dot(normal) - shadow.spread;
+                let outer_alpha = if blur == 0.0 {
+                    if outer_inset + offset < 0.0 {
+                        f32::from(color.a())
+                    } else {
+                        0.0
+                    }
+                } else {
+                    shadow_opacity(outer_inset + offset, sigma) * f32::from(color.a())
+                };
+                let inner_alpha = if blur == 0.0 {
+                    if inner_inset + offset < 0.0 {
+                        f32::from(color.a())
+                    } else {
+                        0.0
+                    }
+                } else {
+                    shadow_opacity(inner_inset + offset, sigma) * f32::from(color.a())
+                };
+                let first = mesh.vertices.len() as u32;
+                mesh.vertices.extend([
+                    Vertex {
+                        pos: outer_points[index],
+                        uv: Pos2::ZERO,
+                        color: shadow_color(color, outer_alpha),
+                    },
+                    Vertex {
+                        pos: outer_points[next],
+                        uv: Pos2::ZERO,
+                        color: shadow_color(color, outer_alpha),
+                    },
+                    Vertex {
+                        pos: inner_points[next],
+                        uv: Pos2::ZERO,
+                        color: shadow_color(color, inner_alpha),
+                    },
+                    Vertex {
+                        pos: inner_points[index],
+                        uv: Pos2::ZERO,
+                        color: shadow_color(color, inner_alpha),
+                    },
+                ]);
+                mesh.add_triangle(first, first + 1, first + 2);
+                mesh.add_triangle(first, first + 2, first + 3);
             }
-            shapes.push(Shape::convex_polygon(
-                vec![
-                    outer_points[index],
-                    outer_points[next],
-                    inner_points[next],
-                    inner_points[index],
-                ],
-                shadow_color(color, segment_alpha),
-                Stroke::NONE,
-            ));
         }
     }
-    shapes
+    vec![Shape::Mesh(mesh.into())]
+}
+
+fn offset_filled_paths(paths: &[Vec<Pos2>], fill_rule: FillRule, distance: f32) -> Vec<Vec<Pos2>> {
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let direction = contour_expansion_direction(paths, index, fill_rule);
+            offset_polygon(path, distance * direction)
+        })
+        .collect()
+}
+
+fn contour_expansion_direction(paths: &[Vec<Pos2>], index: usize, fill_rule: FillRule) -> f32 {
+    let path = &paths[index];
+    if path.len() < 3 {
+        return 1.0;
+    }
+    let Some((edge_index, direction)) = (0..path.len()).find_map(|edge_index| {
+        let direction = path[(edge_index + 1) % path.len()] - path[edge_index];
+        (direction.length_sq() > 0.000_001).then_some((edge_index, direction))
+    }) else {
+        return 1.0;
+    };
+    let extent = path.iter().map(|point| point.to_vec2()).fold(
+        (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+        |(min, max), point| (min.min(point), max.max(point)),
+    );
+    let epsilon = (extent.1 - extent.0).max_elem() * 0.0001;
+    let sample = path[edge_index].lerp(path[(edge_index + 1) % path.len()], 0.5)
+        - outward_normal(path, edge_index, direction) * epsilon.max(0.0001);
+    let own_winding = path_winding_number(path, sample);
+    let other_winding = paths
+        .iter()
+        .enumerate()
+        .filter(|(other_index, _)| *other_index != index)
+        .map(|(_, path)| path_winding_number(path, sample));
+    match fill_rule {
+        FillRule::Evenodd => {
+            if other_winding.map(i32::unsigned_abs).sum::<u32>() % 2 == 0 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        FillRule::Nonzero => {
+            let other_winding = other_winding.sum::<i32>();
+            match (other_winding == 0, other_winding + own_winding == 0) {
+                (true, false) => 1.0,
+                (false, true) => -1.0,
+                _ => 0.0,
+            }
+        }
+    }
+}
+
+fn path_winding_number(path: &[Pos2], point: Pos2) -> i32 {
+    let mut winding = 0;
+    for index in 0..path.len() {
+        let start = path[index];
+        let end = path[(index + 1) % path.len()];
+        let cross = cross_vec(end - start, point - start);
+        if start.y <= point.y {
+            if end.y > point.y && cross > 0.0 {
+                winding += 1;
+            }
+        } else if end.y <= point.y && cross < 0.0 {
+            winding -= 1;
+        }
+    }
+    winding
 }
 
 fn offset_polygon(points: &[Pos2], amount: f32) -> Vec<Pos2> {

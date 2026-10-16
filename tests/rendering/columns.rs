@@ -88,3 +88,36 @@ async fn column_rules_and_cloned_fragment_borders_render_their_styles_test() {
     assert!(left[1] > left[0] && left[1] > left[2], "{left:?}");
     assert!(right[1] > right[0] && right[1] > right[2], "{right:?}");
 }
+
+async fn multicolumn_box_shadows_follow_box_decoration_break_test() {
+    async fn shadow_pixels(decoration_break: &str, shadow: &str) -> usize {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".columns {{ width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; }} .box {{ height:60px; background:white; box-shadow:{shadow}; box-decoration-break:{decoration_break}; }}"
+        ))
+        .unwrap();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(empty_box.selector(".box"));
+                    ui.response()
+                })
+                .selector(".columns"),
+            );
+        })
+        .await;
+        pixels
+            .iter()
+            .filter(|pixel| **pixel == [255, 0, 0, 255])
+            .count()
+    }
+
+    for shadow in ["0 0 0 3px red", "inset 0 0 0 3px red"] {
+        let sliced_shadow = shadow_pixels("slice", shadow).await;
+        let cloned_shadow = shadow_pixels("clone", shadow).await;
+        assert!(sliced_shadow > 0, "slice should keep unbroken shadow edges for {shadow}");
+        assert!(
+            cloned_shadow > sliced_shadow,
+            "clone should paint a shadow around each column fragment for {shadow}: clone={cloned_shadow}, slice={sliced_shadow}"
+        );
+    }
+}

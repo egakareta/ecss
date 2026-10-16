@@ -695,13 +695,31 @@ pub(crate) fn show(
             frame_stroke.unwrap_or(egui::Stroke::NONE)
         };
         let mut surfaces = Vec::new();
-        if style.format.display == crate::formatting::DisplayKind::Inline
-            && !final_geometry.fragments.is_empty()
-        {
+        let inline_fragmented = style.format.display == crate::formatting::DisplayKind::Inline
+            && !final_geometry.fragments.is_empty();
+        let (inline_vertical, inline_forward) = if inline_fragmented {
+            let frame = active.0.borrow();
+            frame.nodes[index].parent.map_or(
+                (
+                    style.format.writing.vertical(),
+                    style.layout.direction != taffy::Direction::Rtl,
+                ),
+                |parent| {
+                    let parent_style = &frame.nodes[parent].style;
+                    (
+                        parent_style.format.writing.vertical(),
+                        parent_style.layout.direction != taffy::Direction::Rtl,
+                    )
+                },
+            )
+        } else {
+            (false, true)
+        };
+        if inline_fragmented {
             for fragment in &final_geometry.fragments {
                 let rect = fragment.rect.translate(border.min.to_vec2());
                 if let Some(last) = surfaces.last_mut()
-                    && same_line(*last, rect, style.format.writing.vertical())
+                    && same_line(*last, rect, inline_vertical)
                 {
                     *last = last.union(rect);
                 } else {
@@ -711,16 +729,48 @@ pub(crate) fn show(
         } else {
             surfaces.push(border);
         }
-        let mut shapes = crate::box_decoration::shadow_shapes(
-            border,
-            &style,
-            visuals.fg_stroke.color,
-            crate::box_decoration::ShadowPosition::Outset,
-            final_geometry.stroke,
-            final_geometry.padding,
-            final_geometry.margin,
-        );
+        let suppress_outer_shadow = final_geometry.collapsed.is_some()
+            && matches!(
+                style.format.display,
+                crate::formatting::DisplayKind::Row
+                    | crate::formatting::DisplayKind::Cell
+                    | crate::formatting::DisplayKind::RowGroup
+                    | crate::formatting::DisplayKind::Header
+                    | crate::formatting::DisplayKind::Footer
+                    | crate::formatting::DisplayKind::Column
+                    | crate::formatting::DisplayKind::ColumnGroup
+            );
         let surface_count = surfaces.len();
+        let mut shapes = Vec::new();
+        if !suppress_outer_shadow && final_geometry.slices.is_empty() {
+            for (surface_index, surface) in surfaces.iter().copied().enumerate() {
+                let shadow = crate::box_decoration::shadow_shapes(
+                    if inline_fragmented { surface } else { border },
+                    &style,
+                    visuals.fg_stroke.color,
+                    crate::box_decoration::ShadowPosition::Outset,
+                    final_geometry.stroke,
+                    final_geometry.padding,
+                    final_geometry.margin,
+                );
+                if inline_fragmented && !style.format.clone_decoration && surface_count > 1 {
+                    let clip = fragment_shadow_clip(
+                        surface,
+                        ui.clip_rect(),
+                        inline_vertical,
+                        inline_forward,
+                        surface_index,
+                        surface_count,
+                        crate::box_decoration::ShadowPosition::Outset,
+                        0.0,
+                        final_geometry.stroke,
+                    );
+                    shapes.extend(clip_fragment_shadows(ui.ctx(), shadow, clip));
+                } else {
+                    shapes.extend(shadow);
+                }
+            }
+        }
         for (surface_index, surface) in surfaces.into_iter().enumerate() {
             let color_surface = match color_clip {
                 crate::css::BackgroundClip::Border => surface,
@@ -894,7 +944,7 @@ pub(crate) fn show(
                     }
                 }
             }
-            shapes.extend(crate::box_decoration::shadow_shapes(
+            let inset_shadow = crate::box_decoration::shadow_shapes(
                 surface,
                 &style,
                 visuals.fg_stroke.color,
@@ -902,7 +952,23 @@ pub(crate) fn show(
                 final_geometry.stroke,
                 final_geometry.padding,
                 final_geometry.margin,
-            ));
+            );
+            if inline_fragmented && !style.format.clone_decoration && surface_count > 1 {
+                let clip = fragment_shadow_clip(
+                    surface,
+                    ui.clip_rect(),
+                    inline_vertical,
+                    inline_forward,
+                    surface_index,
+                    surface_count,
+                    crate::box_decoration::ShadowPosition::Inset,
+                    crate::box_decoration::inset_shadow_extent(surface, &style),
+                    final_geometry.stroke,
+                );
+                shapes.extend(clip_fragment_shadows(ui.ctx(), inset_shadow, clip));
+            } else {
+                shapes.extend(inset_shadow);
+            }
             if frame_stroke.width > 0.0 {
                 shapes.push(egui::Shape::Rect(egui::epaint::RectShape::new(
                     surface,
@@ -1256,8 +1322,69 @@ fn reorder_paint(frame: &Frame, context: &Context) {
         } else if paint.geometry.slices.is_empty() {
             grouped[owner].extend(clip_painted_entry(context, entry, &clips));
         } else {
-            for slice in &paint.geometry.slices {
+            let slices = &paint.geometry.slices;
+            for (slice_index, slice) in slices.iter().enumerate() {
                 let source = slice.source.translate(paint.geometry.border.min.to_vec2());
+                if decoration {
+                    let collapsed_internal = paint.geometry.collapsed.is_some()
+                        && matches!(
+                            node.style.format.display,
+                            crate::formatting::DisplayKind::Row
+                                | crate::formatting::DisplayKind::Cell
+                                | crate::formatting::DisplayKind::RowGroup
+                                | crate::formatting::DisplayKind::Header
+                                | crate::formatting::DisplayKind::Footer
+                                | crate::formatting::DisplayKind::Column
+                                | crate::formatting::DisplayKind::ColumnGroup
+                        );
+                    if !collapsed_internal {
+                        let mut shadows = crate::box_decoration::shadow_shapes(
+                            source,
+                            &node.style,
+                            node.color,
+                            crate::box_decoration::ShadowPosition::Outset,
+                            paint.geometry.stroke,
+                            paint.geometry.padding,
+                            paint.geometry.margin,
+                        );
+                        if !shadows.is_empty() {
+                            let destination = source.translate(slice.offset);
+                            let shadow_clip = if node.style.format.clone_decoration {
+                                Some(paint.clip)
+                            } else {
+                                fragment_shadow_clip(
+                                    destination,
+                                    paint.clip,
+                                    !node.style.format.writing.vertical(),
+                                    !node.style.format.writing.reverse(),
+                                    slice_index,
+                                    slices.len(),
+                                    crate::box_decoration::ShadowPosition::Outset,
+                                    0.0,
+                                    paint.geometry.stroke,
+                                )
+                            };
+                            if let Some(shadow_clip) = shadow_clip {
+                                let mut shadow = egui::Shape::Vec(std::mem::take(&mut shadows));
+                                shadow.transform(egui::emath::TSTransform::from_translation(
+                                    slice.offset,
+                                ));
+                                for shadow in
+                                    clip_fragment_shadows(context, vec![shadow], Some(shadow_clip))
+                                {
+                                    grouped[owner].extend(clip_painted_entry(
+                                        context,
+                                        egui::epaint::ClippedShape {
+                                            clip_rect: shadow_clip,
+                                            shape: shadow,
+                                        },
+                                        &clips,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
                 let clip = entry
                     .clip_rect
                     .intersect(source)
@@ -1267,7 +1394,15 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                     continue;
                 }
                 let mut shape = if decoration && node.style.format.clone_decoration {
-                    clone_decoration(&entry.shape, source, &node.style, node.color)
+                    clone_decoration(
+                        &entry.shape,
+                        source,
+                        &node.style,
+                        node.color,
+                        paint.geometry.stroke,
+                        paint.geometry.padding,
+                        paint.geometry.margin,
+                    )
                 } else {
                     entry.shape.clone()
                 };
@@ -1346,6 +1481,9 @@ fn clone_decoration(
     rect: Rect,
     style: &BoxStyle,
     color: Color32,
+    stroke: egui::epaint::MarginF32,
+    padding: egui::epaint::MarginF32,
+    margin: egui::epaint::MarginF32,
 ) -> egui::Shape {
     if let egui::Shape::Vec(shapes) = shape
         && let Some(egui::Shape::Rect(background)) = shapes.first()
@@ -1353,6 +1491,15 @@ fn clone_decoration(
         let mut background = background.clone();
         background.rect = rect;
         let mut shapes = vec![egui::Shape::Rect(background)];
+        shapes.extend(crate::box_decoration::shadow_shapes(
+            rect,
+            style,
+            color,
+            crate::box_decoration::ShadowPosition::Inset,
+            stroke,
+            padding,
+            margin,
+        ));
         shapes.extend(border_shapes(rect, style, color));
         egui::Shape::Vec(shapes)
     } else {
@@ -3245,6 +3392,74 @@ fn clip_shape_to_paths(
         .collect()
 }
 
+fn fragment_shadow_clip(
+    surface: Rect,
+    mut clip: Rect,
+    vertical: bool,
+    forward: bool,
+    index: usize,
+    count: usize,
+    position: crate::box_decoration::ShadowPosition,
+    inset_extent: f32,
+    stroke: egui::epaint::MarginF32,
+) -> Option<Rect> {
+    let axis = usize::from(vertical);
+    let (start_stroke, end_stroke) = if vertical {
+        (stroke.top, stroke.bottom)
+    } else {
+        (stroke.left, stroke.right)
+    };
+    let start_edge = surface.min[axis]
+        + if position == crate::box_decoration::ShadowPosition::Inset {
+            start_stroke + inset_extent
+        } else {
+            0.0
+        };
+    let end_edge = surface.max[axis]
+        - if position == crate::box_decoration::ShadowPosition::Inset {
+            end_stroke + inset_extent
+        } else {
+            0.0
+        };
+    if index > 0 {
+        if forward {
+            clip.min[axis] = clip.min[axis].max(start_edge);
+        } else {
+            clip.max[axis] = clip.max[axis].min(end_edge);
+        }
+    }
+    if index + 1 < count {
+        if forward {
+            clip.max[axis] = clip.max[axis].min(end_edge);
+        } else {
+            clip.min[axis] = clip.min[axis].max(start_edge);
+        }
+    }
+    clip.is_positive().then_some(clip)
+}
+
+fn clip_fragment_shadows(
+    context: &Context,
+    shapes: Vec<egui::Shape>,
+    clip: Option<Rect>,
+) -> Vec<egui::Shape> {
+    let Some(clip) = clip else {
+        return Vec::new();
+    };
+    let path = vec![
+        clip.left_top(),
+        clip.right_top(),
+        clip.right_bottom(),
+        clip.left_bottom(),
+    ];
+    let clip =
+        crate::box_decoration::path_clip(vec![path], crate::box_decoration::FillRule::Nonzero);
+    shapes
+        .into_iter()
+        .flat_map(|shape| clip_shape_to_paths(context, shape, &clip))
+        .collect()
+}
+
 fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
     let paint = node.paint.as_ref()?;
     let widths = node
@@ -3596,16 +3811,17 @@ fn border_image_shapes(
     if image_width <= 0.0 || image_height <= 0.0 {
         return None;
     }
-    let slice = std::array::from_fn::<_, 4, _>(|side| match image.slice[side] {
-        crate::box_decoration::ImageSlice::Number(value) => value,
-        crate::box_decoration::ImageSlice::Percentage(value) => {
-            value
-                * if side % 2 == 0 {
-                    image_height
-                } else {
-                    image_width
-                }
+    let slice = std::array::from_fn::<_, 4, _>(|side| {
+        let extent = if side % 2 == 0 {
+            image_height
+        } else {
+            image_width
+        };
+        match image.slice[side] {
+            crate::box_decoration::ImageSlice::Number(value) => value,
+            crate::box_decoration::ImageSlice::Percentage(value) => value * extent,
         }
+        .min(extent)
     });
     let width_for = |side: usize| match image.width[side] {
         crate::box_decoration::ImageWidth::NumberOne => widths[side],
@@ -3893,28 +4109,28 @@ fn image_tiles(
         return vec![(start, end, start)];
     }
     let span = end - start;
-    let (tile, count, gap, initial) = match repeat {
-        crate::box_decoration::ImageRepeat::Stretch => (span, 1, 0.0, start),
-        crate::box_decoration::ImageRepeat::Repeat => (
-            natural,
-            (span / natural).ceil() as usize + 2,
-            0.0,
-            start + (span - natural) * 0.5,
-        ),
+    let (tile, first_index, end_index, gap, initial) = match repeat {
+        crate::box_decoration::ImageRepeat::Stretch => (span, 0, 1, 0.0, start),
+        crate::box_decoration::ImageRepeat::Repeat => {
+            let initial = start + (span - natural) * 0.5;
+            let first = ((start - initial) / natural).floor() as isize;
+            let end = ((end - initial) / natural).ceil() as isize;
+            (natural, first, end, 0.0, initial)
+        }
         crate::box_decoration::ImageRepeat::Round => {
-            let count = (span / natural).round().max(1.0) as usize;
-            (span / count as f32, count, 0.0, start)
+            let count = (span / natural).round().max(1.0) as isize;
+            (span / count as f32, 0, count, 0.0, start)
         }
         crate::box_decoration::ImageRepeat::Space => {
-            let count = (span / natural).floor() as usize;
-            if count == 0 {
+            let count = (span / natural).floor() as isize;
+            if count <= 0 {
                 return Vec::new();
             }
             let gap = (span - count as f32 * natural) / (count + 1) as f32;
-            (natural, count, gap, start + gap)
+            (natural, 0, count, gap, start + gap)
         }
     };
-    (0..count)
+    (first_index..end_index)
         .filter_map(|index| {
             let tile_start = initial + index as f32 * (tile + gap);
             let left = tile_start.max(start);

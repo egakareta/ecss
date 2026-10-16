@@ -38,6 +38,51 @@ async fn collapsed_table_borders_choose_one_shared_edge_test() {
     assert_eq!(pixel(&pixels, x + 6.0, y), [255; 4]);
 }
 
+async fn collapsed_table_internal_cells_do_not_paint_outer_shadows_test() {
+    let stylesheet = Stylesheet::parse(
+        ".collapsed { display:table; table-layout:fixed; width:80px; border-collapse:collapse; box-shadow:0 0 0 6px green; }\
+         .separate { display:table; table-layout:fixed; width:80px; border-collapse:separate; }\
+         .row { display:table-row; }\
+         .collapsed-cell, .separate-cell { display:table-cell; height:40px; background:white; border:2px solid blue; box-shadow:0 0 0 6px red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        for (index, table, cell) in [
+            (0, ".collapsed", ".collapsed-cell"),
+            (1, ".separate", ".separate-cell"),
+        ] {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(
+                        (|ui: &mut egui::Ui| {
+                            capture.lock().unwrap()[index] =
+                                Some(ui.add(empty_box.selector(cell)).rect);
+                            ui.response()
+                        })
+                        .selector(".row"),
+                    );
+                    ui.response()
+                })
+                .selector(table),
+            );
+        }
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let collapsed = bounds[0].unwrap();
+    let separate = bounds[1].unwrap();
+    assert_eq!(
+        pixel(&pixels, collapsed.right() + 2.0, collapsed.center().y),
+        [0, 128, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, separate.right() + 2.0, separate.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
 async fn empty_table_cells_hide_borders_and_backgrounds_without_changing_tracks_test() {
     let stylesheet = Stylesheet::parse(".table {display:table; width:120px; table-layout:fixed; empty-cells:hide;} .row {display:table-row;} .cell {display:table-cell; height:30px; background-color:red; border:2px solid blue;} .visible {display:table-cell; height:30px; background-color:red; border:2px solid blue; empty-cells:show;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {

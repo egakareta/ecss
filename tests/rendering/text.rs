@@ -37,6 +37,39 @@ async fn inline_text_continues_across_selectors_and_paints_line_fragments_test()
     );
 }
 
+async fn inline_box_shadows_follow_box_decoration_break_test() {
+    async fn shadow_pixels(decoration_break: &str, shadow: &str) -> usize {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".flow {{ width:80px; }} .prefix, .fragment {{ display:inline; }} .fragment {{ background:white; box-shadow:{shadow}; box-decoration-break:{decoration_break}; }}"
+        ))
+        .unwrap();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new("prefix ").selector(".prefix"));
+                    ui.add(egui::Label::new("alpha beta gamma delta").selector(".fragment"));
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+        })
+        .await;
+        pixels
+            .iter()
+            .filter(|pixel| **pixel == [255, 0, 0, 255])
+            .count()
+    }
+
+    for shadow in ["0 0 0 3px red", "inset 0 0 0 3px red"] {
+        let sliced_shadow = shadow_pixels("slice", shadow).await;
+        let cloned_shadow = shadow_pixels("clone", shadow).await;
+        assert!(
+            cloned_shadow > sliced_shadow,
+            "clone should paint a shadow around each fragment for {shadow}: clone={cloned_shadow}, slice={sliced_shadow}"
+        );
+    }
+}
+
 async fn text_overflow_ellipsis_paints_at_the_clip_edge_test() {
     async fn render(overflow: &str) -> (Vec<[u8; 4]>, egui::Rect) {
         let stylesheet = Stylesheet::parse(&format!(

@@ -75,6 +75,68 @@ async fn border_shape_circle_clips_background_and_draws_its_stroke_test() {
     assert_eq!(pixel(&pixels, rect.left() + 1.0, rect.top() + 1.0), [255; 4]);
 }
 
+async fn border_shape_outer_shadow_spread_expands_the_shape_test() {
+    let stylesheet = Stylesheet::parse(
+        ".shape { box-sizing:border-box; width:80px; height:80px; border-shape:circle(20px) border-box; background:white; box-shadow:0 0 0 8px green; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    let expanded_edge = pixel(&pixels, rect.center().x + 24.0, rect.center().y);
+    assert_eq!(expanded_edge, [0, 128, 0, 255]);
+}
+
+async fn border_shape_outer_shadow_preserves_evenodd_holes_test() {
+    let stylesheet = Stylesheet::parse(
+        ".evenodd { box-sizing:border-box; width:60px; height:40px; border-shape:path(evenodd, \"M 0 0 H 60 V 40 H 0 Z M 15 10 H 45 V 30 H 15 Z\"); background:white; box-shadow:0 0 0 4px green; }\
+         .nonzero { box-sizing:border-box; width:60px; height:40px; border-shape:path(nonzero, \"M 0 0 H 60 V 40 H 0 Z M 15 10 V 30 H 45 V 10 Z\"); background:white; box-shadow:0 0 0 4px green; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".evenodd")).rect,
+            ui.add(empty_box.selector(".nonzero")).rect,
+        ];
+    })
+    .await;
+    for rect in bounds.lock().unwrap().iter() {
+        assert_eq!(
+            pixel(&pixels, rect.left() + 16.0, rect.center().y),
+            [0, 128, 0, 255]
+        );
+        assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
+    }
+}
+
+async fn border_shape_inset_shadow_uses_inner_path_subcontours_test() {
+    let stylesheet = Stylesheet::parse(
+        ".evenodd { box-sizing:border-box; width:80px; height:60px; border:5px solid blue; border-shape:path(\"M 0 0 H 80 V 60 H 0 Z\") path(evenodd, \"M 0 0 H 70 V 50 H 0 Z M 20 10 H 50 V 40 H 20 Z\"); background:white; box-shadow:inset 0 0 0 4px green; }\
+         .nonzero { box-sizing:border-box; width:80px; height:60px; border:5px solid blue; border-shape:path(\"M 0 0 H 80 V 60 H 0 Z\") path(nonzero, \"M 0 0 H 70 V 50 H 0 Z M 20 10 V 40 H 50 V 10 Z\"); background:white; box-shadow:inset 0 0 0 4px green; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".evenodd")).rect,
+            ui.add(empty_box.selector(".nonzero")).rect,
+        ];
+    })
+    .await;
+    for rect in bounds.lock().unwrap().iter() {
+        let shadow_at_inner_contour = pixel(&pixels, rect.left() + 23.0, rect.center().y);
+        assert_eq!(shadow_at_inner_contour, [0, 128, 0, 255]);
+        assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
+    }
+}
+
 async fn basic_shape_positions_support_edge_offsets_test() {
     let stylesheet = Stylesheet::parse(
         ".shape { box-sizing:border-box; width:40px; height:40px; border:2px solid blue; background-color:red; border-shape:ellipse(5px at right 10px bottom 10px) border-box; }",
@@ -677,6 +739,47 @@ async fn border_image_repeat_tiles_the_center_region_test() {
         repeated_tile[0] > 240 && repeated_tile[2] < 15,
         "expected the center source tile to repeat, got {repeated_tile:?}"
     );
+    let leading_tile = pixel(&pixels, rect.left() + 2.0, rect.center().y);
+    assert!(
+        leading_tile != [255; 4],
+        "expected the centered repeat sequence to cover the leading region, got {leading_tile:?}"
+    );
+}
+
+async fn border_image_slice_values_clamp_to_image_dimensions_test() {
+    let source = image::RgbaImage::from_pixel(6, 6, image::Rgba([0, 255, 0, 255]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(source)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        encoded.into_inner(),
+    );
+    let stylesheet = Stylesheet::load(&format!(
+        ".number {{ box-sizing:border-box; width:30px; height:30px; border:2px solid black; border-image-source:url(\"data:image/png;base64,{data}\"); border-image-slice:100; border-image-width:auto; }}\
+         .percentage {{ box-sizing:border-box; width:30px; height:30px; border:2px solid black; border-image-source:url(\"data:image/png;base64,{data}\"); border-image-slice:200%; border-image-width:auto; }}"
+    ))
+    .await
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".number")).rect,
+            ui.add(empty_box.selector(".percentage")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for rect in bounds.iter() {
+        assert_eq!(pixel(&pixels, rect.left() + 2.0, rect.top() + 2.0), [0, 255, 0, 255]);
+        assert_eq!(pixel(&pixels, rect.left() + 8.0, rect.top() + 8.0), [255; 4]);
+    }
+}
+
+async fn border_image_slice_rejects_duplicate_fill_keywords_test() {
+    assert!(Stylesheet::parse(".image { border-image-slice:1 fill fill; }").is_err());
 }
 
 async fn conic_gradient_paints_as_a_border_image_test() {
@@ -984,6 +1087,62 @@ async fn outer_and_inset_box_shadows_paint_on_their_respective_sides_test() {
     assert_eq!(pixel(&pixels, bounds[1].center().x, bounds[1].center().y), [255, 0, 0, 255]);
 }
 
+async fn inset_box_shadow_blur_follows_gaussian_edge_profile_test() {
+    let stylesheet = Stylesheet::parse(
+        ".box { box-sizing:border-box; width:220px; height:100px; border:8px solid blue; border-radius:20px; background-color:white; box-shadow:inset 0 0 20px red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    for (distance, expected_green) in [
+        (2.0, 153),
+        (5.0, 181),
+        (10.0, 218),
+        (15.0, 240),
+        (20.0, 250),
+        (25.0, 254),
+    ] {
+        let sample = pixel(&pixels, rect.center().x, rect.top() + 8.0 + distance);
+        let tolerance = (f32::from(expected_green) * 0.05).ceil() as u8;
+        assert_eq!(sample[0], 255);
+        assert!(
+            sample[1].abs_diff(expected_green) <= tolerance,
+            "inset blur differs from a Gaussian edge at {distance}px: expected green {expected_green}, got {sample:?}"
+        );
+    }
+}
+
+async fn inset_box_shadow_spread_and_offset_follow_padding_edge_test() {
+    let stylesheet = Stylesheet::parse(
+        ".spread { box-sizing:border-box; width:80px; height:60px; border:4px solid blue; background:white; box-shadow:inset 0 0 0 4px red; }\
+         .offset { box-sizing:border-box; width:80px; height:60px; border:4px solid blue; background:white; box-shadow:inset 0 5px 0 green; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".spread")).rect,
+            ui.add(empty_box.selector(".offset")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let spread = bounds[0];
+    assert_eq!(pixel(&pixels, spread.center().x, spread.top() + 6.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, spread.center().x, spread.top() + 9.0), [255; 4]);
+    assert_eq!(pixel(&pixels, spread.center().x, spread.top() + 2.0), [0, 0, 255, 255]);
+
+    let offset = bounds[1];
+    assert_eq!(pixel(&pixels, offset.center().x, offset.top() + 6.0), [0, 128, 0, 255]);
+    assert_eq!(pixel(&pixels, offset.center().x, offset.bottom() - 6.0), [255; 4]);
+}
+
 async fn box_shadow_offset_none_is_case_insensitive_test() {
     let stylesheet = Stylesheet::parse(
         ".box { box-sizing:border-box; width:20px; height:20px; box-shadow-offset:NONE; box-shadow-blur:4px; box-shadow-color:red; }",
@@ -1033,12 +1192,22 @@ async fn box_shadow_blur_approximates_gaussian_profile_test() {
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
-    let shadow = pixel(&pixels, rect.right() + 50.0, rect.center().y);
-    assert_eq!(shadow[0], 255);
-    assert!(
-        (210..=220).contains(&shadow[1]),
-        "blur profile differs from a Gaussian edge: {shadow:?}"
-    );
+    for (distance, expected_green) in [
+        (5.0, 138),
+        (20.0, 167),
+        (45.0, 208),
+        (70.0, 234),
+        (95.0, 248),
+        (120.0, 253),
+    ] {
+        let sample = pixel(&pixels, rect.right() + distance, rect.center().y);
+        assert_eq!(sample[0], 255);
+        let tolerance = (f32::from(expected_green) * 0.05).ceil() as u8;
+        assert!(
+            sample[1].abs_diff(expected_green) <= tolerance,
+            "blur profile differs from a Gaussian edge at {distance}px: expected green {expected_green}, got {sample:?}"
+        );
+    }
 }
 
 async fn percentages_auto_margins_and_min_max_use_the_containing_block_test() {
