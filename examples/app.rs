@@ -480,12 +480,17 @@ mod tests {
                 },
             ],
         );
+        let passes = output.platform_output.num_completed_passes;
+        let reasons = output.platform_output.request_discard_reasons.clone();
         output.textures_delta.clear();
+        assert_eq!(passes, 1, "scroll frame discarded passes: {reasons:?}");
 
         let mut final_bounds = None;
         for frame in 2..8 {
-            let output =
+            let mut output =
                 run_frame_with_size(&context, &mut app, frame as f64 * 0.1, viewport, Vec::new());
+            let passes = output.platform_output.num_completed_passes;
+            let reasons = output.platform_output.request_discard_reasons.clone();
             let mut text_bounds = Vec::new();
             for clipped in &output.shapes {
                 collect_text_bounds(&clipped.shape, &mut text_bounds);
@@ -494,6 +499,8 @@ mod tests {
                 .into_iter()
                 .find(|(text, _, _)| text == target)
                 .map(|(_, bounds, _)| bounds);
+            output.textures_delta.clear();
+            assert_eq!(passes, 1, "scroll frame discarded passes: {reasons:?}");
         }
         let final_bounds = final_bounds.expect("scrolling should reveal the lower page content");
         assert!(final_bounds.top() >= 0.0);

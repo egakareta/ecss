@@ -67,25 +67,25 @@ fn resizing_reflows_nested_percentage_and_flex_boxes() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn wheel_scroll_moves_descendants_and_clamps_at_the_scroll_extent() {
+fn wheel_scroll_moves_descendants_and_clamps_at_both_extents() {
     let context = Context::default();
     Stylesheet::parse(
         ".scroll { width:80px; height:40px; overflow:auto; } .child { width:20px; height:100px; }",
     )
     .unwrap()
     .install(&context);
-    let mut top = 0.0;
+    let top = std::cell::Cell::new(0.0);
     let mut build = |ui: &mut Ui| {
         ui.add(
             (|ui: &mut Ui| {
-                top = ui.add(empty.selector(".child")).rect.top();
+                top.set(ui.add(empty.selector(".child")).rect.top());
                 ui.response()
             })
             .selector(".scroll"),
         );
     };
     frame(&context, 200.0, 0.0, Vec::new(), &mut build);
-    frame(
+    let output = frame(
         &context,
         200.0,
         0.1,
@@ -100,12 +100,37 @@ fn wheel_scroll_moves_descendants_and_clamps_at_the_scroll_extent() {
         ],
         &mut build,
     );
+    assert_eq!(output.platform_output.num_completed_passes, 1);
     for i in 2..8 {
-        frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+        let output = frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+        assert_eq!(output.platform_output.num_completed_passes, 1);
     }
     assert!(
-        (-60.05..=-59.95).contains(&top),
-        "scrolled content top: {top}"
+        (-60.05..=-59.95).contains(&top.get()),
+        "scrolled content top: {}",
+        top.get()
+    );
+    let output = frame(
+        &context,
+        200.0,
+        0.8,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: vec2(0.0, 1000.0),
+            modifiers: Modifiers::NONE,
+        }],
+        &mut build,
+    );
+    assert_eq!(output.platform_output.num_completed_passes, 1);
+    for i in 9..16 {
+        let output = frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+        assert_eq!(output.platform_output.num_completed_passes, 1);
+    }
+    assert!(
+        top.get().abs() < 0.05,
+        "scrolled content top: {}",
+        top.get()
     );
 }
 
@@ -647,7 +672,7 @@ fn hover_specificity_overrides_later_base_layout_declarations() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn dragging_a_scrollbar_moves_content_once_per_input_frame() {
+fn dragging_a_scrollbar_moves_content_on_the_repaint_frame() {
     let context = Context::default();
     Stylesheet::parse(
         ".scroll { width:80px; height:40px; overflow:auto; } .child { width:80px; height:100px; }",
@@ -681,13 +706,16 @@ fn dragging_a_scrollbar_moves_content_once_per_input_frame() {
         ],
         &mut build,
     );
-    frame(
+    let dragged = frame(
         &context,
         200.0,
         0.2,
         vec![Event::PointerMoved(pos2(77.0, 15.0))],
         &mut build,
     );
+    assert_eq!(dragged.platform_output.num_completed_passes, 1);
+    let settled = frame(&context, 200.0, 0.3, Vec::new(), &mut build);
+    assert_eq!(settled.platform_output.num_completed_passes, 1);
     assert!((top + 25.0).abs() < 0.05, "scrolled content top: {top}");
 }
 

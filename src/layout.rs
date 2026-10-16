@@ -537,9 +537,23 @@ pub(crate) fn show(
             .get(&id)
             .unwrap()
             .translated(frame.origin.to_vec2() + frame.nodes[index].sticky);
+        let frame_nr = ui.ctx().cumulative_frame_nr();
+        // Scroll offsets are stored after descendants run, so defer geometry correction
+        // to the next frame.
+        let scroll_changed_last_frame = frame_nr.checked_sub(1).is_some_and(|previous_frame| {
+            ui.ctx().data(|data| {
+                frame.nodes.iter().any(|node| {
+                    data.get_temp::<u64>(node.id.with("scroll-updated")) == Some(previous_frame)
+                })
+            })
+        });
         ui.ctx().data_mut(|d| d.insert_temp(id, cache));
         if changed {
-            ui.ctx().request_discard("CSS selector layout changed");
+            if scroll_changed_last_frame {
+                ui.ctx().request_repaint();
+            } else {
+                ui.ctx().request_discard("CSS selector layout changed");
+            }
         }
         geometry
     } else if active.0.borrow().cache.boxes.contains_key(&id) {
@@ -1264,9 +1278,12 @@ fn scroll_box(
         responses.push(response);
     }
     if offset != previous {
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(id.with("scroll"), offset));
-        ui.ctx().request_discard("CSS scroll offset changed");
+        let frame_nr = ui.ctx().cumulative_frame_nr();
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(id.with("scroll"), offset);
+            data.insert_temp(id.with("scroll-updated"), frame_nr);
+        });
+        ui.ctx().request_repaint();
     }
     responses
 }
@@ -1275,15 +1292,21 @@ fn matching_rules<'a>(
     stylesheet: &'a Stylesheet,
     class: &'a str,
 ) -> impl Iterator<Item = &'a crate::css::Rule> {
-    let mut rules: Vec<_> = stylesheet
-        .rules
+    let rules = &stylesheet.rules;
+    rules
         .iter()
-        .filter(|rule| rule.class.is_none() || rule.class.as_deref() == Some(class))
-        .collect();
-    rules.sort_by_key(|rule| {
-        usize::from(rule.class.is_some()) + usize::from(rule.state != RuleState::Base)
-    });
-    rules.into_iter()
+        .filter(|rule| rule.class.is_none() && rule.state == RuleState::Base)
+        .chain(rules.iter().filter(move |rule| {
+            (rule.class.is_some()
+                && rule.class.as_deref() == Some(class)
+                && rule.state == RuleState::Base)
+                || (rule.class.is_none() && rule.state != RuleState::Base)
+        }))
+        .chain(rules.iter().filter(move |rule| {
+            rule.class.is_some()
+                && rule.class.as_deref() == Some(class)
+                && rule.state != RuleState::Base
+        }))
 }
 
 struct BackgroundPaint {
