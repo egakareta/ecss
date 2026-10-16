@@ -86,6 +86,7 @@
 - **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
     ~~`padding-right`~~, ~~`padding-top`~~.
+  - Partial because box geometry is integrated with egui widget measurement, so CSS box sizing and margin/padding interactions are not fully browser-equivalent across all content and layout contexts.
 - **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `margin-trim`, ~~`padding`~~, ~~`padding-bottom`~~,
     ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~.
@@ -95,6 +96,7 @@
 - **[CSS Multi-column Layout](https://www.w3.org/TR/css3-multicol/) - Partial.**
   - CSS properties: ~~`column-count`~~, ~~`column-fill`~~, ~~`column-rule`~~, ~~`column-rule-color`~~, ~~`column-rule-style`~~, ~~`column-rule-width`~~,
     ~~`column-span`~~, ~~`column-width`~~, ~~`columns`~~.
+  - Partial because column fragmentation and balancing are approximated from laid-out block content; the full CSS fragmentation algorithm is not implemented.
 - **[CSS Multi-column Layout Level 2](https://www.w3.org/TR/css-multicol-2/) - Partial.**
   - CSS properties: ~~`column-count`~~, ~~`column-fill`~~, `column-height`, ~~`column-rule`~~, ~~`column-rule-color`~~, ~~`column-rule-style`~~,
     ~~`column-rule-width`~~, ~~`column-span`~~, ~~`column-width`~~, `column-wrap`, ~~`columns`~~.
@@ -103,16 +105,19 @@
 - **[CSS Positioned Layout Level 3](https://www.w3.org/TR/css3-positioning/) - Partial.**
   - CSS properties: ~~`bottom`~~, ~~`inset`~~, ~~`inset-block`~~, ~~`inset-block-end`~~, ~~`inset-block-start`~~, ~~`inset-inline`~~, ~~`inset-inline-end`~~,
     ~~`inset-inline-start`~~, ~~`left`~~, ~~`position`~~, ~~`right`~~, ~~`top`~~.
+  - Partial because sticky positioning is approximated against the nearest scroll container or viewport, rather than implementing all of the specification's scrollport and containing-block rules.
 - **[CSS Positioned Layout Level 4](https://www.w3.org/TR/css-position-4/) - Unsupported.**
   - CSS properties: `overlay`.
 - **[Grid Layout](https://www.w3.org/TR/css-grid-1/) - Partial.**
   - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
     ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
     ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
+  - Partial because only a subset of CSS Grid's track-sizing and placement behavior is implemented; advanced intrinsic sizing and layout interactions remain incomplete.
 - **[Grid Layout Level 2](https://www.w3.org/TR/css-grid-2/) - Partial.**
   - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
     ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
     ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
+  - Partial because Level 2 inherits the incomplete Grid Level 1 sizing behavior, and subgrid interactions are not complete for every layout case.
 - **[Grid Layout Level 3](https://www.w3.org/TR/css-grid-3/) - Unsupported.**
   - CSS properties: `fit-tolerance`, `flow-tolerance`, `item-cross`, `item-direction`, `item-flow`, `item-pack`, `item-track`,
     `item-wrap`.
@@ -120,11 +125,14 @@
   - CSS properties: `break-after`, `break-before`, `break-inside`, `flow-from`, `flow-into`, `region-fragment`.
 - **CSS Tables Module - Partial.**
   - CSS properties: ~~`border-collapse`~~, ~~`border-spacing`~~, ~~`caption-side`~~, ~~`empty-cells`~~, ~~`table-layout`~~.
+  - Partial because tables are laid out through an internal grid model, which does not reproduce the complete CSS table sizing and formatting algorithms.
 - **[CSS Flexible Box Layout Level 1](https://www.w3.org/TR/css3-flexbox/) - Partial.**
   - CSS properties: ~~`align-content`~~, ~~`align-items`~~, ~~`align-self`~~, ~~`flex`~~, ~~`flex-basis`~~, ~~`flex-direction`~~, ~~`flex-flow`~~, ~~`flex-grow`~~,
     ~~`flex-shrink`~~, ~~`flex-wrap`~~, ~~`justify-content`~~.
+  - Partial because flex sizing depends on egui content measurements, so the full specification's intrinsic-size contributions and interactions are not covered.
 - **[CSS Fragmentation Module Level 3](https://www.w3.org/TR/css3-break/) - Partial.**
   - CSS properties: ~~`box-decoration-break`~~, ~~`break-after`~~, ~~`break-before`~~, ~~`break-inside`~~, ~~`orphans`~~, ~~`widows`~~.
+  - Partial because fragmentation is implemented for columns, but paged-media and region fragmentation are not supported.
 - **[CSS Fragmentation Module Level 4](https://www.w3.org/TR/css-break-4/) - Partial.**
   - CSS properties: ~~`box-decoration-break`~~, ~~`break-after`~~, ~~`break-before`~~, ~~`break-inside`~~, `margin-break`, ~~`orphans`~~, ~~`widows`~~.
 - **[CSS Exclusions](https://www.w3.org/TR/css3-exclusions/) - Unsupported.**
@@ -134,9 +142,11 @@
 - **[CSS Box Alignment Module Level 3](https://www.w3.org/TR/css3-align/) - Partial.**
   - CSS properties: ~~`align-content`~~, ~~`align-items`~~, ~~`align-self`~~, ~~`justify-content`~~, ~~`justify-items`~~, ~~`justify-self`~~, ~~`place-content`~~,
     ~~`place-items`~~, ~~`place-self`~~.
+  - Partial because alignment is applied in the supported flex and grid layouts, but not across every CSS layout context or the full set of alignment behaviors.
 - **[CSS Intrinsic & Extrinsic Sizing Module Level 3](https://www.w3.org/TR/css3-sizing/) - Partial.**
   - CSS properties: ~~`block-size`~~, ~~`box-sizing`~~, ~~`height`~~, ~~`inline-size`~~, ~~`max-block-size`~~, ~~`max-height`~~, ~~`max-inline-size`~~, ~~`max-width`~~,
     ~~`min-block-size`~~, ~~`min-height`~~, ~~`min-inline-size`~~, ~~`min-width`~~, ~~`width`~~.
+  - Partial because intrinsic sizing is based on egui widget and text measurements rather than the complete CSS min/max-content contribution rules for all content and layout modes.
 - **[CSS Box Sizing Module Level 4](https://www.w3.org/TR/css-sizing-4/) - Partial.**
   - CSS properties: ~~`aspect-ratio`~~, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
     `contain-intrinsic-size`, `contain-intrinsic-width`, `frame-sizing`, `max-size`, `min-intrinsic-sizing`, `min-size`,
