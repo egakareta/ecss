@@ -157,10 +157,18 @@ fn overflow_panel(ui: &mut egui::Ui) {
     ui.add((|ui: &mut egui::Ui| {
         ui.add(egui::Label::new("OVERFLOW").selector(".section-kicker"));
         ui.add(egui::Label::new("Single-line ellipsis").selector(".section-title"));
-        ui.add(egui::Label::new(
-            "This deliberately long line demonstrates clipped overflow with an ellipsis at the inline end.",
-        )
-        .selector(".truncate"));
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(
+                    egui::Label::new(
+                        "This deliberately long line demonstrates clipped overflow with an ellipsis at the inline end.",
+                    )
+                    .selector(".truncate-text"),
+                );
+                ui.response()
+            })
+            .selector(".truncate"),
+        );
         ui.response()
     })
     .selector(".panel"));
@@ -256,6 +264,34 @@ mod tests {
         }
     }
 
+    fn overflow_suffix_is_selected(shape: &egui::Shape, color: egui::Color32) -> bool {
+        match shape {
+            egui::Shape::Text(text) if text.galley.job.text.ends_with('…') => {
+                text.galley.rows.iter().any(|placed| {
+                    let row = &placed.row;
+                    let Some(index) = row.glyphs.iter().rposition(|glyph| glyph.chr != '…')
+                    else {
+                        return false;
+                    };
+                    let start = row.glyphs[index].first_vertex as usize;
+                    let end = row
+                        .glyphs
+                        .get(index + 1)
+                        .map_or(row.visuals.glyph_vertex_range.end, |next| {
+                            next.first_vertex as usize
+                        });
+                    row.visuals.mesh.vertices[start..end]
+                        .iter()
+                        .all(|vertex| vertex.color == color)
+                })
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .any(|shape| overflow_suffix_is_selected(shape, color)),
+            _ => false,
+        }
+    }
+
     fn run_frame(
         context: &egui::Context,
         app: &mut App,
@@ -289,7 +325,7 @@ mod tests {
         bounds: egui::Rect,
         rows: usize,
         start_time: f64,
-    ) -> (String, bool) {
+    ) -> (String, bool, bool, bool, Vec<(String, egui::Rect, usize)>) {
         let row_height = bounds.height() / rows as f32;
         let start = egui::pos2(
             egui::emath::lerp(bounds.left()..=bounds.right(), 0.2),
@@ -299,6 +335,16 @@ mod tests {
             egui::emath::lerp(bounds.left()..=bounds.right(), 0.8),
             bounds.bottom() - row_height * 0.5,
         );
+        drag_and_copy(context, app, start, end, start_time)
+    }
+
+    fn drag_and_copy(
+        context: &egui::Context,
+        app: &mut App,
+        start: egui::Pos2,
+        end: egui::Pos2,
+        start_time: f64,
+    ) -> (String, bool, bool, bool, Vec<(String, egui::Rect, usize)>) {
         let mut output = run_frame(
             context,
             app,
@@ -333,6 +379,7 @@ mod tests {
             }],
         );
         let selection_color = context.global_style().visuals.selection.bg_fill;
+        let selection_text_color = context.global_style().visuals.selection.stroke.color;
         let selection_visible = context
             .tessellate(output.shapes.clone(), output.pixels_per_point)
             .iter()
@@ -343,6 +390,15 @@ mod tests {
                     .any(|vertex| vertex.color == selection_color),
                 egui::epaint::Primitive::Callback(_) => false,
             });
+        let mut selected_text = Vec::new();
+        for clipped in &output.shapes {
+            collect_text_bounds(&clipped.shape, &mut selected_text);
+        }
+        let marker_visible = selected_text.iter().any(|(text, _, _)| text.ends_with('…'));
+        let selected_suffix = output
+            .shapes
+            .iter()
+            .any(|clipped| overflow_suffix_is_selected(&clipped.shape, selection_text_color));
         output.textures_delta.clear();
         let mut output = run_frame(context, app, start_time + 0.3, vec![egui::Event::Copy]);
         let copied = output
@@ -355,7 +411,13 @@ mod tests {
             })
             .unwrap_or_default();
         output.textures_delta.clear();
-        (copied, selection_visible)
+        (
+            copied,
+            selection_visible,
+            marker_visible,
+            selected_suffix,
+            selected_text,
+        )
     }
 
     fn collect_error_borders(
@@ -434,7 +496,7 @@ mod tests {
                 .iter()
                 .find(|(text, _, _)| text == target)
                 .unwrap_or_else(|| panic!("text shape for {target:?} was not rendered"));
-            let (copied, selection_visible) =
+            let (copied, selection_visible, _, _, _) =
                 select_and_copy(&context, &mut app, *bounds, *rows, 0.1 + index as f64 * 0.4);
             let copied = copied.split_whitespace().collect::<Vec<_>>().join(" ");
             let expected = target.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -540,5 +602,106 @@ mod tests {
         output.textures_delta.clear();
         assert!(field.left() >= panel.left());
         assert!(field.right() <= panel.right());
+    }
+
+    #[test]
+    fn demo_overflow_text_ellipsizes_on_one_line() {
+        let context = egui::Context::default();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        Stylesheet::parse(theme).unwrap().install(&context);
+        let mut app = App::default();
+        let mut output = run_frame(&context, &mut app, 0.0, Vec::new());
+        let mut text_bounds = Vec::new();
+        for clipped in &output.shapes {
+            collect_text_bounds(&clipped.shape, &mut text_bounds);
+        }
+        output.textures_delta.clear();
+
+        let start = text_bounds
+            .iter()
+            .position(|(text, _, _)| text == "This")
+            .unwrap_or_else(|| panic!("overflow text missing: {text_bounds:?}"));
+        let marker = text_bounds[start..]
+            .iter()
+            .position(|(text, _, _)| text.ends_with('…'))
+            .map(|index| start + index)
+            .unwrap_or_else(|| panic!("overflow marker missing: {text_bounds:?}"));
+        let first_top = text_bounds[start].1.top();
+        assert!(
+            text_bounds[start..=marker]
+                .iter()
+                .all(|(_, bounds, rows)| *rows == 1 && (bounds.top() - first_top).abs() < 8.0),
+            "overflow text occupied more than one line: {:?}",
+            &text_bounds[start..=marker]
+        );
+    }
+
+    #[test]
+    fn demo_overflow_text_remains_selectable() {
+        let context = egui::Context::default();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        Stylesheet::parse(theme).unwrap().install(&context);
+        let mut app = App::default();
+        let mut output = run_frame(&context, &mut app, 0.0, Vec::new());
+        let mut text_bounds = Vec::new();
+        for clipped in &output.shapes {
+            collect_text_bounds(&clipped.shape, &mut text_bounds);
+        }
+        output.textures_delta.clear();
+
+        let start = text_bounds
+            .iter()
+            .position(|(text, _, _)| text == "This")
+            .expect("the visible overflow prefix should be rendered");
+        let marker = text_bounds[start..]
+            .iter()
+            .position(|(text, _, _)| text.ends_with('…'))
+            .map(|index| start + index)
+            .expect("the overflow marker should be rendered");
+        let (_, bounds, _) = text_bounds
+            .iter()
+            .find(|(text, _, _)| text == "This")
+            .expect("the visible overflow prefix should be rendered");
+        let start_pos = egui::pos2(bounds.left() + 1.0, bounds.center().y);
+        let end_pos = egui::pos2(bounds.left() + 359.0, bounds.center().y);
+        let (copied, selection_visible, marker_visible, selected_suffix, selected_text) =
+            drag_and_copy(&context, &mut app, start_pos, end_pos, 0.5);
+        assert!(!copied.is_empty(), "overflow text selection copied no text");
+        assert!(
+            copied.trim_end().ends_with("ov"),
+            "selection did not reach the visible overflow text: {copied:?}"
+        );
+        assert!(
+            selection_visible,
+            "overflow text selection was not highlighted"
+        );
+        assert!(marker_visible, "ellipsis disappeared while selecting text");
+        assert!(
+            selected_suffix,
+            "the overflow suffix was not highlighted: {selected_text:?}"
+        );
+        let selected_start = selected_text
+            .iter()
+            .position(|(text, _, _)| text == "This")
+            .unwrap();
+        let selected_marker = selected_text[selected_start..]
+            .iter()
+            .position(|(text, _, _)| text.ends_with('…'))
+            .map(|index| selected_start + index)
+            .unwrap();
+        let normal_fragments = &text_bounds[start..=marker];
+        let selected_fragments = &selected_text[selected_start..=selected_marker];
+        assert_eq!(normal_fragments.len(), selected_fragments.len());
+        for (normal, selected) in normal_fragments.iter().zip(selected_fragments) {
+            assert_eq!(normal.0, selected.0);
+            assert_eq!(normal.2, selected.2);
+            assert!(
+                normal.1.min.distance(selected.1.min) < 0.05
+                    && normal.1.max.distance(selected.1.max) < 0.05,
+                "selection changed overflow text geometry: {:?} -> {:?}",
+                normal.1,
+                selected.1
+            );
+        }
     }
 }

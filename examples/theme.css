@@ -178,3 +178,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.truncate-text {
+  display: inline;
+}

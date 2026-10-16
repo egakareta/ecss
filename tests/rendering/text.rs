@@ -37,6 +37,43 @@ async fn inline_text_continues_across_selectors_and_paints_line_fragments_test()
     );
 }
 
+async fn text_overflow_ellipsis_paints_at_the_clip_edge_test() {
+    async fn render(overflow: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".box {{ width:60px; height:20px; overflow:hidden; white-space:nowrap; text-overflow:{overflow}; }} .text {{ display:inline; color:red; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let response = ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new("The overflow text is clipped").selector(".text"));
+                    ui.response()
+                })
+                .selector(".box"),
+            );
+            *capture.lock().unwrap() = Some(response.rect);
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    let (ellipsis, bounds) = render("ellipsis").await;
+    let (clipped, _) = render("clip").await;
+    let mut changed_edge_pixels = 0;
+    for x in bounds.right().floor() as i32 - 12..bounds.right().floor() as i32 {
+        for y in bounds.top().floor() as i32..bounds.bottom().ceil() as i32 {
+            let index = y as usize * WIDTH as usize + x as usize;
+            changed_edge_pixels += usize::from(ellipsis[index] != clipped[index]);
+        }
+    }
+    assert!(
+        changed_edge_pixels > 0,
+        "ellipsis did not change pixels near the inline clip edge"
+    );
+}
+
 async fn font_size_resizes_text_and_inherits_through_nested_selectors_test() {
     let stylesheet = Stylesheet::parse(
         ".small { font-size: 8px; }\

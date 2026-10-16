@@ -370,6 +370,9 @@ pub(crate) fn show(
         font.family =
             crate::fonts::FontAssets::family_for_kerning(ui.ctx(), &font.family, disable_kerning);
     }
+    if matches!(style.format.white_space.as_str(), "nowrap" | "pre") {
+        content_ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    }
     if style.format.font_size_set {
         for font in content_ui.style_mut().text_styles.values_mut() {
             font.size = style.format.em;
@@ -475,6 +478,7 @@ pub(crate) fn show(
                 &geometry,
                 &text.job,
                 &style.format,
+                content_ui.visuals(),
             );
         }
     } else if text_vertical {
@@ -2283,16 +2287,10 @@ fn reflow_text(
     }
 
     let galley = context.fonts_mut(|fonts| fonts.layout_job(job.clone()));
-    if current.as_ref().is_some_and(|current| {
-        current.rows.iter().any(|row| {
-            row.row
-                .visuals
-                .mesh
-                .vertices
-                .iter()
-                .any(|vertex| vertex.color == selection_color)
-        })
-    }) {
+    if current
+        .as_ref()
+        .is_some_and(|current| galley_has_selection(current, selection_color))
+    {
         // Replacing a selected galley here would discard egui's selection vertices.
         return galley.size();
     }
@@ -2312,6 +2310,17 @@ fn reflow_text(
         }
     });
     galley.size()
+}
+
+fn galley_has_selection(galley: &egui::Galley, selection_color: Color32) -> bool {
+    galley.rows.iter().any(|row| {
+        row.row
+            .visuals
+            .mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.color == selection_color)
+    })
 }
 
 fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Shape> {
@@ -2491,6 +2500,7 @@ fn replace_fragmented_text(
     geometry: &Geometry,
     job: &egui::text::LayoutJob,
     format: &crate::formatting::Formatting,
+    selection_visuals: &egui::Visuals,
 ) {
     let original = context.graphics(|layers| {
         layers
@@ -2509,6 +2519,12 @@ fn replace_fragmented_text(
     let Some((template, clip)) = original else {
         return;
     };
+    let selection_color = selection_visuals.selection.bg_fill;
+    let selection_by_range = template.galley.job.text == job.text;
+    let selected_ranges = selection_by_range
+        .then(|| galley_selection_ranges(&template.galley, selection_color))
+        .unwrap_or_default();
+    let selection_rects = galley_selection_rects(&template.galley, template.pos, selection_color);
     context.graphics_mut(|layers| {
         let list = layers.entry(layer);
         for index in start.0..end.0 {
@@ -2520,9 +2536,13 @@ fn replace_fragmented_text(
         }
     });
     let painter = egui::Painter::new(context.clone(), layer, clip);
+    for rect in &selection_rects {
+        painter.rect_filled(*rect, 0.0, selection_color);
+    }
     for fragment in &geometry.fragments {
         if let Some(range) = &fragment.range {
             let mut text = template.clone();
+            let mut visible_range = range.clone();
             let mut layout = if let Some(marker) = &fragment.marker {
                 let content_width = (fragment.text_rect.width() - fragment.marker_width).max(0.0);
                 let mut fitting = slice_job(job, range.clone());
@@ -2541,6 +2561,7 @@ fn replace_fragmented_text(
                     .nth(visible_chars)
                     .map_or(source.len(), |(offset, _)| offset);
                 let visible_end = egui::text::ByteIndex(range.start.0 + visible_bytes);
+                visible_range.end = visible_end;
                 let mut layout = slice_job(job, range.start..visible_end);
                 if let Some(section) = layout.sections.last().or_else(|| {
                     job.sections
@@ -2558,10 +2579,154 @@ fn replace_fragmented_text(
             }
             text.galley = context.fonts_mut(|fonts| fonts.layout_job(layout));
             text.pos = geometry.border.min + fragment.text_rect.min.to_vec2();
+            if selection_by_range {
+                let source_start = job.text[..visible_range.start.0].chars().count();
+                let source_end = job.text[..visible_range.end.0].chars().count();
+                for selected in &selected_ranges {
+                    let start = selected.start.max(source_start);
+                    let end = selected.end.min(source_end);
+                    if start < end {
+                        paint_galley_selection_range(
+                            &mut text.galley,
+                            start - source_start..end - source_start,
+                            selection_visuals.selection.stroke.color,
+                        );
+                    }
+                }
+            } else {
+                paint_galley_selection(
+                    &mut text.galley,
+                    text.pos,
+                    &selection_rects,
+                    selection_visuals.selection.stroke.color,
+                );
+            }
             if format.writing.vertical() {
                 vertical_text(&mut text, fragment.text_rect.size(), format);
             }
             painter.add(egui::Shape::Text(text));
+        }
+    }
+}
+
+fn paint_galley_selection_range(
+    galley: &mut std::sync::Arc<egui::Galley>,
+    selected: std::ops::Range<usize>,
+    selection_text_color: Color32,
+) {
+    let galley = std::sync::Arc::make_mut(galley);
+    let mut char_offset = 0;
+    for placed in &mut galley.rows {
+        let row = std::sync::Arc::make_mut(&mut placed.row);
+        for (index, glyph) in row.glyphs.iter().enumerate() {
+            if !selected.contains(&(char_offset + index)) {
+                continue;
+            }
+            let start = glyph.first_vertex as usize;
+            let end = row
+                .glyphs
+                .get(index + 1)
+                .map_or(row.visuals.glyph_vertex_range.end, |next| {
+                    next.first_vertex as usize
+                });
+            for vertex in &mut row.visuals.mesh.vertices[start..end] {
+                vertex.color = selection_text_color;
+            }
+        }
+        char_offset += row.glyphs.len() + usize::from(placed.ends_with_newline);
+    }
+}
+
+fn galley_selection_ranges(
+    galley: &egui::Galley,
+    selection_color: Color32,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut char_offset = 0;
+    for placed in &galley.rows {
+        let row = &placed.row;
+        let selected = row
+            .visuals
+            .mesh
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.color == selection_color)
+            .fold(Rect::NOTHING, |rect, vertex| {
+                rect.union(Rect::from_min_size(vertex.pos, Vec2::ZERO))
+            });
+        if selected.is_positive() {
+            let start = char_offset + row.char_at(selected.left()).0;
+            let end = char_offset + row.char_at(selected.right()).0;
+            if start < end {
+                if let Some(previous) = ranges.last_mut()
+                    && previous.end == start
+                {
+                    previous.end = end;
+                } else {
+                    ranges.push(start..end);
+                }
+            }
+        }
+        char_offset += row.glyphs.len() + usize::from(placed.ends_with_newline);
+    }
+    ranges
+}
+
+fn galley_selection_rects(
+    galley: &egui::Galley,
+    pos: egui::Pos2,
+    selection_color: Color32,
+) -> Vec<Rect> {
+    galley
+        .rows
+        .iter()
+        .filter_map(|placed| {
+            let rect = placed
+                .row
+                .visuals
+                .mesh
+                .vertices
+                .iter()
+                .filter(|vertex| vertex.color == selection_color)
+                .fold(Rect::NOTHING, |rect, vertex| {
+                    rect.union(Rect::from_min_size(vertex.pos, Vec2::ZERO))
+                });
+            rect.is_positive()
+                .then_some(rect.translate(pos.to_vec2() + placed.pos.to_vec2()))
+        })
+        .collect()
+}
+
+fn paint_galley_selection(
+    galley: &mut std::sync::Arc<egui::Galley>,
+    pos: egui::Pos2,
+    selection_rects: &[Rect],
+    selection_text_color: Color32,
+) {
+    if selection_rects.is_empty() {
+        return;
+    }
+    let galley = std::sync::Arc::make_mut(galley);
+    for placed in &mut galley.rows {
+        let row = std::sync::Arc::make_mut(&mut placed.row);
+        for (index, glyph) in row.glyphs.iter().enumerate() {
+            let glyph_center = pos + placed.pos.to_vec2() + glyph.logical_rect().center().to_vec2();
+            if !selection_rects
+                .iter()
+                .any(|rect| rect.contains(glyph_center))
+            {
+                continue;
+            }
+            let start = glyph.first_vertex as usize;
+            let end = row
+                .glyphs
+                .get(index + 1)
+                .map_or(row.visuals.glyph_vertex_range.end, |next| {
+                    next.first_vertex as usize
+                });
+            for vertex in &mut row.visuals.mesh.vertices[start..end] {
+                vertex.color = selection_text_color;
+            }
         }
     }
 }
