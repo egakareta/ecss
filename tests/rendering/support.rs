@@ -13,6 +13,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 #[cfg(not(target_arch = "wasm32"))]
 struct RenderRequest {
     stylesheet: Stylesheet,
+    pixels_per_point: f32,
     build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
     pixels_tx: mpsc::Sender<Vec<[u8; 4]>>,
 }
@@ -116,6 +117,15 @@ async fn render_ui_pixels(
     stylesheet: Stylesheet,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale(stylesheet, 1.0, build_ui).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn render_ui_pixels_at_scale(
+    stylesheet: Stylesheet,
+    pixels_per_point: f32,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
     let (pixels_tx, pixels_rx) = mpsc::channel();
     let requests = RENDERER_THREAD.get_or_init(|| {
         let (requests_tx, requests_rx) = mpsc::channel::<RenderRequest>();
@@ -127,6 +137,7 @@ async fn render_ui_pixels(
                     let pixels = pollster::block_on(render_ui_frame(
                         &mut renderer,
                         request.stylesheet,
+                        request.pixels_per_point,
                         request.build_ui,
                     ));
                     let _ = request.pixels_tx.send(pixels);
@@ -138,6 +149,7 @@ async fn render_ui_pixels(
     requests
         .send(RenderRequest {
             stylesheet,
+            pixels_per_point,
             build_ui: Box::new(build_ui),
             pixels_tx,
         })
@@ -152,22 +164,52 @@ async fn render_ui_pixels(
     stylesheet: Stylesheet,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale(stylesheet, 1.0, build_ui).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn render_ui_pixels_at_scale(
+    stylesheet: Stylesheet,
+    pixels_per_point: f32,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
     let mut renderer = OffscreenRenderer::new().await;
-    render_ui_frame(&mut renderer, stylesheet, Box::new(build_ui)).await
+    render_ui_frame(
+        &mut renderer,
+        stylesheet,
+        pixels_per_point,
+        Box::new(build_ui),
+    )
+    .await
 }
 
 async fn render_ui_frame(
     renderer: &mut OffscreenRenderer,
     stylesheet: Stylesheet,
+    pixels_per_point: f32,
     mut build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
 ) -> Vec<[u8; 4]> {
     let context = egui::Context::default();
     stylesheet.install(&context);
+    let viewport_id = egui::ViewportId::ROOT;
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        viewport_id,
+        egui::ViewportInfo {
+            native_pixels_per_point: Some(pixels_per_point),
+            ..Default::default()
+        },
+    );
     let mut output = context.run_ui(
         egui::RawInput {
+            viewport_id,
+            viewports,
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(WIDTH as f32, HEIGHT as f32),
+                egui::vec2(
+                    WIDTH as f32 / pixels_per_point,
+                    HEIGHT as f32 / pixels_per_point,
+                ),
             )),
             ..Default::default()
         },

@@ -29,6 +29,7 @@ use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals
 use fonts::{FontAssets, FontRequest};
 
 mod background;
+mod box_decoration;
 mod css;
 mod fonts;
 mod format_layout;
@@ -133,13 +134,20 @@ impl Stylesheet {
     fn background_image_urls(&self) -> Vec<String> {
         let mut urls = Vec::new();
         for declaration in self.rules.iter().flat_map(|rule| &rule.declarations) {
+            if let Declaration::Layout(layout) = declaration
+                && layout.name.starts_with("border-image")
+            {
+                urls.extend(crate::box_decoration::border_image_urls(&layout.value));
+            }
             let image = match declaration {
-                Declaration::BackgroundImage(image) => Some(image),
-                Declaration::BackgroundShorthand(background) => Some(&background.image),
+                Declaration::BackgroundImage(images) => Some(images.as_slice()),
+                Declaration::BackgroundShorthand(background) => Some(background.images.as_slice()),
                 _ => None,
             };
-            if let Some(crate::css::BackgroundImage::Url(url)) = image {
-                urls.push(url.to_owned());
+            if let Some(images) = image {
+                for image in images {
+                    image.collect_urls(&mut urls);
+                }
             }
         }
         urls.sort();
@@ -674,6 +682,11 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         }
         Declaration::BorderRadius(radius) => {
             visuals.corner_radius = CornerRadius::same(*radius);
+        }
+        Declaration::Layout(declaration) if declaration.name == "border-radius" => {
+            if let Some(radius) = crate::box_decoration::simple_visual_radius(&declaration.value) {
+                visuals.corner_radius = CornerRadius::same(radius);
+            }
         }
         Declaration::Layout(_)
         | Declaration::BackgroundImage(_)

@@ -72,6 +72,10 @@ impl ImageAssets {
         self.0.images.read().ok()?.get(url).map(|image| image.size)
     }
 
+    pub(crate) fn image(&self, url: &str) -> Option<Arc<ColorImage>> {
+        self.0.images.read().ok()?.get(url).cloned()
+    }
+
     pub(crate) fn contains_all(&self, urls: &[String]) -> bool {
         self.0
             .images

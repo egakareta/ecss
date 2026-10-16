@@ -5,7 +5,7 @@ use taffy::{Overflow, prelude::*};
 #[derive(Clone, Debug)]
 pub(crate) struct Declaration {
     pub(crate) name: String,
-    value: String,
+    pub(crate) value: String,
 }
 
 #[derive(Clone, Debug)]
@@ -30,8 +30,10 @@ pub(crate) struct BoxStyle {
     pub padding_set: bool,
     pub border_set: bool,
     pub border_colors: [Option<Color32>; 4],
+    pub border_stripes: [Option<Vec<crate::box_decoration::BorderStripe>>; 4],
     pub border_styles: [BorderStyle; 4],
     pub border_widths: [f32; 4],
+    pub decorations: crate::box_decoration::DecorationStyle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -104,8 +106,10 @@ impl Default for BoxStyle {
             padding_set: false,
             border_set: false,
             border_colors: [None; 4],
+            border_stripes: std::array::from_fn(|_| None),
             border_styles: [BorderStyle::None; 4],
             border_widths: [3.0; 4],
+            decorations: crate::box_decoration::DecorationStyle::default(),
         }
     }
 }
@@ -153,6 +157,7 @@ pub(crate) fn parse(
 
 fn supported(name: &str) -> bool {
     crate::formatting::supported(name)
+        || crate::box_decoration::supported(name)
         || matches!(
             name,
             "display"
@@ -356,6 +361,9 @@ impl Declaration {
             return Err("CSS-wide value requires its computed parent style");
         }
         if crate::formatting::apply(name, value, output, units)? {
+            return Ok(());
+        }
+        if crate::box_decoration::apply(name, value, output, units)? {
             return Ok(());
         }
         let parts = components(value)?;
@@ -824,6 +832,9 @@ fn inherited(name: &str) -> bool {
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if crate::box_decoration::copy_property(name, out, source) {
+        return;
+    }
     if crate::formatting::supported(name) {
         copy_format_property(name, &mut out.format, &source.format);
         return;
@@ -1112,6 +1123,7 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
                 }
                 if property == "color" || !matches!(property, "style" | "width") {
                     out.border_colors[i] = source.border_colors[i];
+                    out.border_stripes[i] = source.border_stripes[i].clone();
                 }
             }
         }
@@ -1657,6 +1669,23 @@ pub(crate) fn border_color(value: &str) -> Result<Option<Color32>, &'static str>
         .map(Some)
         .map_err(|_| "invalid border color")
 }
+
+fn border_paint(
+    value: &str,
+    units: Units,
+) -> Result<
+    (
+        Option<Color32>,
+        Option<Vec<crate::box_decoration::BorderStripe>>,
+    ),
+    &'static str,
+> {
+    if value.to_ascii_lowercase().starts_with("stripes(") && value.ends_with(')') {
+        let stripes = crate::box_decoration::parse_border_stripes(value, units)?;
+        return Ok((None, Some(stripes)));
+    }
+    Ok((border_color(value)?, None))
+}
 fn apply_border(
     s: &mut BoxStyle,
     name: &str,
@@ -1664,13 +1693,20 @@ fn apply_border(
     units: Units,
 ) -> Result<(), &'static str> {
     s.border_set = true;
+    if name == "border" {
+        s.decorations.border_image = crate::box_decoration::BorderImage::default();
+    }
     let suffix = name.strip_prefix("border-").unwrap_or("");
     if matches!(suffix, "width" | "style" | "color") {
         for (i, v) in quad(parts)?.iter().enumerate() {
             match suffix {
                 "width" => s.border_widths[i] = border_width(v, units)?,
                 "style" => s.border_styles[i] = border_style(v)?,
-                _ => s.border_colors[i] = border_color(v)?,
+                _ => {
+                    let (color, stripes) = border_paint(v, units)?;
+                    s.border_colors[i] = color;
+                    s.border_stripes[i] = stripes;
+                }
             }
         }
     } else if let Some((edge, property)) = suffix.split_once('-') {
@@ -1681,13 +1717,20 @@ fn apply_border(
         match property {
             "width" => s.border_widths[i] = border_width(&parts[0], units)?,
             "style" => s.border_styles[i] = border_style(&parts[0])?,
-            "color" => s.border_colors[i] = border_color(&parts[0])?,
+            "color" => {
+                let (color, stripes) = border_paint(&parts[0], units)?;
+                s.border_colors[i] = color;
+                s.border_stripes[i] = stripes;
+            }
             _ => return Err("invalid border property"),
         }
     } else {
         let mut width = None;
         let mut style = None;
-        let mut color = None;
+        let mut color: Option<(
+            Option<Color32>,
+            Option<Vec<crate::box_decoration::BorderStripe>>,
+        )> = None;
         for value in parts {
             if let Ok(v) = border_style(value) {
                 if style.replace(v).is_some() {
@@ -1697,8 +1740,11 @@ fn apply_border(
                 if width.replace(v).is_some() {
                     return Err("duplicate border width");
                 }
-            } else if color.replace(border_color(value)?).is_some() {
-                return Err("duplicate border color");
+            } else {
+                let (parsed, stripes) = border_paint(value, units)?;
+                if color.replace((parsed, stripes)).is_some() {
+                    return Err("duplicate border color");
+                }
             }
         }
         if parts.is_empty() {
@@ -1708,7 +1754,13 @@ fn apply_border(
             if suffix.is_empty() || side(suffix) == Some(i) {
                 s.border_widths[i] = width.unwrap_or(3.0);
                 s.border_styles[i] = style.unwrap_or_default();
-                s.border_colors[i] = color.unwrap_or(None);
+                if let Some((color, stripes)) = &color {
+                    s.border_colors[i] = *color;
+                    s.border_stripes[i] = stripes.clone();
+                } else {
+                    s.border_colors[i] = None;
+                    s.border_stripes[i] = None;
+                }
             }
         }
     }
