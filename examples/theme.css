@@ -8,8 +8,122 @@
 .page {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 920px;
+  max-height: 100vh;
+  margin-inline: auto;
+  padding: 18px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px;
+  border: 1px solid #294a78;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #173760, #345ca4);
+  background-attachment: scroll;
+  background-clip: padding-box;
+}
+
+.eyebrow,
+.feature-kicker,
+.section-kicker {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.eyebrow {
+  color: #d4e2ff;
+}
+
+.title {
+  color: #fff;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.hero-copy {
+  max-width: 520px;
+  color: #e0eaff;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
-  padding: 16px;
+}
+
+.feature-card,
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 15px;
+  border: 1px solid #dce4ef;
+  border-radius: 9px;
+  background-color: #fff;
+}
+
+.feature-kicker,
+.section-kicker {
+  color: #65758d;
+}
+
+.feature-title {
+  color: #1c2a41;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.feature-copy {
+  color: #5c6b82;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.type-sample {
+  color: #244f91;
+  font-family: "SUSE Mono", monospace;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.meter-track {
+  width: 100%;
+  height: 8px;
+  margin-block: 4px;
+  overflow: hidden;
+  background-color: #e6edf7;
+}
+
+.meter-fill {
+  width: 68%;
+  height: 100%;
+  background-image: linear-gradient(to right, #2d6cdf, #7b61d1);
+}
+
+.section-title {
+  color: #1c2a41;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.field {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: #25324a;
+  background-color: #fff;
 }
 
 .actions {
@@ -19,11 +133,17 @@
   align-items: start;
 }
 
+.primary,
+.secondary {
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
 .primary {
   color: #fff;
   background-color: #2d6cdf;
-  padding: 8px 12px;
-  border-radius: 6px;
 }
 
 .primary:hover {
@@ -37,10 +157,24 @@
 .secondary {
   color: #25324a;
   background-color: #e8edf5;
-  padding: 8px 12px;
-  border-radius: 6px;
 }
 
 .secondary:hover {
   background-color: #d3dcea;
+}
+
+.status {
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: #1b6a47;
+  background-color: #e4f6ec;
+}
+
+.truncate {
+  width: 360px;
+  max-width: 100%;
+  overflow: hidden;
+  color: #5c6b82;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }

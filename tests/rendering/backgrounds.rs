@@ -30,6 +30,56 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
+async fn background_shorthand_gradient_and_content_clip_render_correctly_test() {
+    let stylesheet = Stylesheet::parse(
+        ".gradient { width: 60px; height: 24px; padding: 4px; border: 4px solid black; background: linear-gradient(to right, red, blue); background-clip: content-box; background-attachment: scroll; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let response = ui.add(empty_box.selector(".gradient"));
+        *rect_from_ui.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    let center_y = rect.center().y;
+    assert_eq!(pixel(&pixels, rect.min.x + 5.5, center_y), [255, 255, 255, 255]);
+    assert_eq!(pixel(&pixels, rect.min.x + 1.5, center_y), [0, 0, 0, 255]);
+
+    let left = pixel(&pixels, rect.min.x + 9.5, center_y);
+    let right = pixel(&pixels, rect.max.x - 9.5, center_y);
+    assert!(left[0] > left[2], "left gradient pixel was {left:?}");
+    assert!(right[2] > right[0], "right gradient pixel was {right:?}");
+}
+
+async fn background_image_data_url_is_decoded_and_tiled_test() {
+    let source = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(source)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        encoded.into_inner(),
+    );
+    let css = format!(
+        ".image {{ width: 16px; height: 12px; background-image: url(\"data:image/png;base64,{data}\"); }}"
+    );
+    let stylesheet = Stylesheet::load(&css).await.unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let response = ui.add(empty_box.selector(".image"));
+        *rect_from_ui.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255, 0, 255, 255]);
+}
+
 async fn functional_colors_render_rgb_rgba_hsl_and_hsla_values_test() {
     let stylesheet = Stylesheet::parse(
         ".rgb-comma { background-color: rgb(255, 0, 0); }\

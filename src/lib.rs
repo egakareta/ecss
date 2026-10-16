@@ -28,6 +28,7 @@ use css::{Declaration, Rule, RuleState};
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
 use fonts::{FontAssets, FontRequest};
 
+mod background;
 mod css;
 mod fonts;
 mod format_layout;
@@ -66,38 +67,45 @@ pub struct Stylesheet {
     imports: Vec<String>,
     fonts: Arc<RwLock<FontAssets>>,
     font_revision: Arc<AtomicU64>,
+    background_images: background::ImageAssets,
 }
 
 impl Stylesheet {
-    /// Reads and parses a UTF-8 CSS file, then loads imported fonts in the background.
+    /// Reads and parses a UTF-8 CSS file, loading fonts and preparing background images.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, CssFileError> {
         let source = std::fs::read_to_string(path).map_err(CssFileError::Read)?;
         Self::parse(&source).map_err(CssFileError::Parse)
     }
 
-    /// Parses CSS synchronously and loads fonts referenced by `@import` in the background.
+    /// Parses CSS synchronously and starts remote font loading in the background.
     ///
     /// Imported stylesheets must contain supported `@font-face` rules. TTF, OTF,
     /// WOFF, and WOFF2 font files are supported. Network access is required for
-    /// remote imports. Loaded fonts update contexts where this stylesheet is
-    /// installed. Font loading errors are ignored; use [`Stylesheet::load`] to
-    /// wait for fonts and receive loading errors.
+    /// remote imports and HTTP(S) background images. Background images also
+    /// support base64 data URLs and PNG, JPEG, GIF, and WebP data. Loaded assets
+    /// update contexts where this stylesheet is installed. [`Stylesheet::parse`]
+    /// ignores asset-loading errors; use this method to wait for assets and
+    /// receive loading errors.
     pub async fn load(source: &str) -> Result<Self, StylesheetLoadError> {
         let stylesheet = Self::parse_unloaded(source).map_err(StylesheetLoadError::Parse)?;
         let imports = stylesheet.imports.clone();
         let requests = stylesheet.font_requests();
         let fonts = FontAssets::load(&imports, &requests).await?;
         stylesheet.replace_fonts(fonts);
+        stylesheet
+            .background_images
+            .load(&stylesheet.background_image_urls())
+            .await?;
         Ok(stylesheet)
     }
 
-    /// Reads a UTF-8 CSS file and asynchronously loads fonts referenced by `@import`.
+    /// Reads a UTF-8 CSS file and asynchronously loads its remote assets.
     pub async fn load_file(path: impl AsRef<Path>) -> Result<Self, StylesheetLoadError> {
         let source = std::fs::read_to_string(path).map_err(StylesheetLoadError::Read)?;
         Self::load(&source).await
     }
 
-    /// Parses universal and class rules from CSS text and starts background font loading.
+    /// Parses universal and class rules from CSS text and starts remote font loading.
     ///
     /// Supported selectors are `*`, `.class`, `.class:hover`, and `.class:active`.
     /// Nested selector-wrapped widgets form a CSS layout tree, supporting block,
@@ -118,7 +126,41 @@ impl Stylesheet {
             imports,
             fonts: Arc::default(),
             font_revision: Arc::default(),
+            background_images: background::ImageAssets::default(),
         })
+    }
+
+    fn background_image_urls(&self) -> Vec<String> {
+        let mut urls = Vec::new();
+        for declaration in self.rules.iter().flat_map(|rule| &rule.declarations) {
+            let image = match declaration {
+                Declaration::BackgroundImage(image) => Some(image),
+                Declaration::BackgroundShorthand(background) => Some(&background.image),
+                _ => None,
+            };
+            if let Some(crate::css::BackgroundImage::Url(url)) = image {
+                urls.push(url.to_owned());
+            }
+        }
+        urls.sort();
+        urls.dedup();
+        urls
+    }
+
+    fn start_background_image_load(&self, context: &egui::Context) {
+        let urls = self.background_image_urls();
+        if urls.is_empty()
+            || self.background_images.contains_all(&urls)
+            || !self.background_images.mark_load_started(context)
+        {
+            return;
+        }
+        let images = self.background_images.clone();
+        let context = context.clone();
+        spawn_background(async move {
+            let _ = images.load(&urls).await;
+            context.request_repaint();
+        });
     }
 
     fn start_font_load(&self) {
@@ -241,6 +283,7 @@ impl Stylesheet {
     /// Installs this stylesheet on an egui context for selector-wrapped widgets to use.
     pub fn install(&self, context: &egui::Context) {
         self.apply_w3c_defaults(context);
+        self.start_background_image_load(context);
         context.options_mut(|options| {
             options.max_passes = options
                 .max_passes
@@ -345,7 +388,7 @@ impl fmt::Display for CssError {
 
 impl Error for CssError {}
 
-/// An error encountered while parsing a stylesheet or loading its imported fonts.
+/// An error encountered while parsing a stylesheet or loading its assets.
 #[derive(Debug)]
 pub enum StylesheetLoadError {
     /// A CSS file could not be read as UTF-8 text.
@@ -354,6 +397,13 @@ pub enum StylesheetLoadError {
     Parse(CssError),
     /// An imported font stylesheet or font file could not be fetched or decoded.
     Font {
+        /// The URL that could not be loaded.
+        url: String,
+        /// A short description of the loading failure.
+        message: String,
+    },
+    /// A background image could not be fetched or decoded.
+    Image {
         /// The URL that could not be loaded.
         url: String,
         /// A short description of the loading failure.
@@ -369,6 +419,12 @@ impl fmt::Display for StylesheetLoadError {
             Self::Font { url, message } => {
                 write!(formatter, "could not load font from {url}: {message}")
             }
+            Self::Image { url, message } => {
+                write!(
+                    formatter,
+                    "could not load background image from {url}: {message}"
+                )
+            }
         }
     }
 }
@@ -378,7 +434,7 @@ impl Error for StylesheetLoadError {
         match self {
             Self::Read(error) => Some(error),
             Self::Parse(error) => Some(error),
-            Self::Font { .. } => None,
+            Self::Font { .. } | Self::Image { .. } => None,
         }
     }
 }
@@ -612,10 +668,17 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
             visuals.bg_fill = *color;
             visuals.weak_bg_fill = *color;
         }
+        Declaration::BackgroundShorthand(background) => {
+            visuals.bg_fill = background.color;
+            visuals.weak_bg_fill = background.color;
+        }
         Declaration::BorderRadius(radius) => {
             visuals.corner_radius = CornerRadius::same(*radius);
         }
         Declaration::Layout(_)
+        | Declaration::BackgroundImage(_)
+        | Declaration::BackgroundAttachment(_)
+        | Declaration::BackgroundClip(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_) => {}

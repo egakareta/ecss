@@ -30,6 +30,15 @@ fn empty(ui: &mut Ui) -> egui::Response {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn example_theme_uses_supported_css() {
+    let (_, theme) = include_str!("../examples/theme.css")
+        .split_once('\n')
+        .unwrap();
+    Stylesheet::parse(theme).unwrap();
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn resizing_reflows_nested_percentage_and_flex_boxes() {
     let context = Context::default();
     Stylesheet::parse(

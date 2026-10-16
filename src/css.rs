@@ -33,11 +33,58 @@ pub(crate) enum RuleState {
 pub(crate) enum Declaration {
     Color(Color32),
     Background(Color32),
+    BackgroundShorthand(BackgroundShorthand),
+    BackgroundImage(BackgroundImage),
+    BackgroundAttachment(BackgroundAttachment),
+    BackgroundClip(BackgroundClip),
     Layout(crate::layout_style::Declaration),
     BorderRadius(u8),
     FontFamily(Vec<String>),
     FontWeight(u16),
     FontStyle(bool),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BackgroundShorthand {
+    pub(crate) color: Color32,
+    pub(crate) image: BackgroundImage,
+    pub(crate) attachment: BackgroundAttachment,
+    pub(crate) clip: BackgroundClip,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BackgroundImage {
+    None,
+    Url(String),
+    LinearGradient(LinearGradient),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LinearGradient {
+    pub(crate) angle: f32,
+    pub(crate) stops: Vec<GradientStop>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GradientStop {
+    pub(crate) color: Color32,
+    pub(crate) position: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BackgroundAttachment {
+    #[default]
+    Scroll,
+    Fixed,
+    Local,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BackgroundClip {
+    #[default]
+    Border,
+    Padding,
+    Content,
 }
 
 enum ParsedRule {
@@ -259,6 +306,18 @@ impl<'i> DeclarationParser<'i> for Declarations {
             Some(Declaration::Color(parse_color(input)?))
         } else if name.eq_ignore_ascii_case("background-color") {
             Some(Declaration::Background(parse_color(input)?))
+        } else if name.eq_ignore_ascii_case("background") {
+            Some(Declaration::BackgroundShorthand(parse_background(input)?))
+        } else if name.eq_ignore_ascii_case("background-image") {
+            Some(Declaration::BackgroundImage(parse_background_image_value(
+                input,
+            )?))
+        } else if name.eq_ignore_ascii_case("background-attachment") {
+            Some(Declaration::BackgroundAttachment(
+                parse_background_attachment(input)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-clip") {
+            Some(Declaration::BackgroundClip(parse_background_clip(input)?))
         } else if name.eq_ignore_ascii_case("border-radius") {
             let radius = parse_length(input, "unsupported border radius")?;
             Some(Declaration::BorderRadius(
@@ -276,6 +335,248 @@ impl<'i> DeclarationParser<'i> for Declarations {
         };
         Ok(declaration)
     }
+}
+
+fn parse_background<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<BackgroundShorthand, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    let components = crate::layout_style::components(&value).map_err(ParseError::custom)?;
+    let mut background = BackgroundShorthand {
+        color: Color32::TRANSPARENT,
+        image: BackgroundImage::None,
+        attachment: BackgroundAttachment::Scroll,
+        clip: BackgroundClip::Border,
+    };
+
+    for component in components {
+        if let Ok(color) = parse_color(&mut CssParser::new(&component)) {
+            background.color = color;
+        } else if let Ok(image) = parse_background_image(&component) {
+            background.image = image;
+        } else if let Ok(attachment) = parse_background_attachment_value(&component) {
+            background.attachment = attachment;
+        } else if let Ok(clip) = parse_background_clip_value(&component) {
+            background.clip = clip;
+        } else if !is_background_extra(&component) {
+            return Err(ParseError::custom("unsupported background value"));
+        }
+    }
+    Ok(background)
+}
+
+fn is_background_extra(value: &str) -> bool {
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "/" | "repeat"
+            | "no-repeat"
+            | "repeat-x"
+            | "repeat-y"
+            | "space"
+            | "round"
+            | "left"
+            | "right"
+            | "top"
+            | "bottom"
+            | "center"
+            | "cover"
+            | "contain"
+    ) {
+        return true;
+    }
+    let mut input = CssParser::new(value);
+    matches!(
+        input.next(),
+        Ok(Token::Number { .. } | Token::Percentage { .. } | Token::Dimension { .. })
+    ) && input.expect_exhausted().is_ok()
+}
+
+fn parse_background_image_value<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<BackgroundImage, ParseError<&'static str>> {
+    parse_background_image(&consume_value(input)?)
+}
+
+fn parse_background_image(value: &str) -> Result<BackgroundImage, ParseError<&'static str>> {
+    let mut input = CssParser::new(value);
+    let image = match input.next()? {
+        Token::Ident(name) if name.eq_ignore_ascii_case("none") => BackgroundImage::None,
+        Token::UnquotedUrl(url) => BackgroundImage::Url(url.to_string()),
+        Token::Function(name) if name.eq_ignore_ascii_case("url") => {
+            let url = input.parse_nested_block(|url| {
+                let value = match url.next()? {
+                    Token::QuotedString(value) | Token::UnquotedUrl(value) => value.to_string(),
+                    _ => return Err(ParseError::custom("unsupported background image")),
+                };
+                url.expect_exhausted()?;
+                Ok(value)
+            })?;
+            BackgroundImage::Url(url)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("linear-gradient") => {
+            let args = input.parse_nested_block(|args| {
+                let start = args.position();
+                while args.next().is_ok() {}
+                Ok::<_, ParseError<&'static str>>(args.slice_from(start).trim().to_owned())
+            })?;
+            BackgroundImage::LinearGradient(parse_linear_gradient(&args)?)
+        }
+        _ => return Err(ParseError::custom("unsupported background image")),
+    };
+    input.expect_exhausted()?;
+    Ok(image)
+}
+
+fn parse_background_attachment<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<BackgroundAttachment, ParseError<&'static str>> {
+    parse_background_attachment_value(&consume_value(input)?)
+}
+
+fn parse_background_attachment_value(
+    value: &str,
+) -> Result<BackgroundAttachment, ParseError<&'static str>> {
+    let mut input = CssParser::new(value);
+    let attachment = match input.expect_ident()?.to_ascii_lowercase().as_str() {
+        "scroll" => BackgroundAttachment::Scroll,
+        "fixed" => BackgroundAttachment::Fixed,
+        "local" => BackgroundAttachment::Local,
+        _ => return Err(ParseError::custom("unsupported background attachment")),
+    };
+    input.expect_exhausted()?;
+    Ok(attachment)
+}
+
+fn parse_background_clip<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<BackgroundClip, ParseError<&'static str>> {
+    parse_background_clip_value(&consume_value(input)?)
+}
+
+fn parse_background_clip_value(value: &str) -> Result<BackgroundClip, ParseError<&'static str>> {
+    let mut input = CssParser::new(value);
+    let clip = match input.expect_ident()?.to_ascii_lowercase().as_str() {
+        "border-box" => BackgroundClip::Border,
+        "padding-box" => BackgroundClip::Padding,
+        "content-box" => BackgroundClip::Content,
+        _ => return Err(ParseError::custom("unsupported background clip")),
+    };
+    input.expect_exhausted()?;
+    Ok(clip)
+}
+
+fn consume_value<'i>(input: &mut CssParser<'i>) -> Result<String, ParseError<&'static str>> {
+    let start = input.position();
+    while input.next().is_ok() {}
+    Ok(input.slice_from(start).trim().to_owned())
+}
+
+fn parse_linear_gradient(value: &str) -> Result<LinearGradient, ParseError<&'static str>> {
+    let mut parts = split_top_level_commas(value);
+    if parts.len() < 2 {
+        return Err(ParseError::custom("invalid linear gradient"));
+    }
+    let mut angle = 180.0;
+    if let Some(first) = parts.first()
+        && let Some(parsed) = parse_gradient_angle(first)
+    {
+        angle = parsed;
+        parts.remove(0);
+    }
+    let stops = parts
+        .iter()
+        .map(|part| parse_gradient_stop(part))
+        .collect::<Result<Vec<_>, _>>()?;
+    if stops.len() < 2 {
+        return Err(ParseError::custom(
+            "a linear gradient needs two color stops",
+        ));
+    }
+    Ok(LinearGradient { angle, stops })
+}
+
+fn split_top_level_commas(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut start = 0;
+    for (index, character) in value.char_indices() {
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            }
+        } else {
+            match character {
+                '\'' | '"' => quote = Some(character),
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    parts.push(value[start..index].trim());
+                    start = index + character.len_utf8();
+                }
+                _ => {}
+            }
+        }
+    }
+    parts.push(value[start..].trim());
+    parts
+}
+
+fn parse_gradient_angle(value: &str) -> Option<f32> {
+    let lower = value.to_ascii_lowercase();
+    if let Some(direction) = lower.strip_prefix("to ") {
+        return Some(match direction.trim() {
+            "top" => 0.0,
+            "right" => 90.0,
+            "bottom" => 180.0,
+            "left" => 270.0,
+            "top right" | "right top" => 45.0,
+            "bottom right" | "right bottom" => 135.0,
+            "bottom left" | "left bottom" => 225.0,
+            "top left" | "left top" => 315.0,
+            _ => return None,
+        });
+    }
+    let mut input = CssParser::new(value);
+    let angle = match input.next().ok()? {
+        Token::Number { value, .. } if *value == 0.0 => 0.0,
+        Token::Dimension { value, unit, .. } => match unit.to_ascii_lowercase().as_str() {
+            "deg" => *value,
+            "grad" => *value * 0.9,
+            "rad" => value.to_degrees(),
+            "turn" => *value * 360.0,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    input.expect_exhausted().ok()?;
+    Some(angle.rem_euclid(360.0))
+}
+
+fn parse_gradient_stop(value: &str) -> Result<GradientStop, ParseError<&'static str>> {
+    let mut input = CssParser::new(value);
+    let start = input.position();
+    let token = input.next()?.clone();
+    if matches!(token, Token::Function(_) | Token::ParenthesisBlock) {
+        input.parse_nested_block(|args| {
+            while args.next().is_ok() {}
+            Ok::<_, ParseError<&'static str>>(())
+        })?;
+    }
+    let color_text = input.slice_from(start).trim().to_owned();
+    let color = parse_color(&mut CssParser::new(&color_text))?;
+    input.skip_whitespace();
+    let position = if input.is_exhausted() {
+        None
+    } else {
+        let position = match input.next()? {
+            Token::Percentage { unit_value, .. } => *unit_value,
+            _ => return Err(ParseError::custom("unsupported gradient stop")),
+        };
+        input.expect_exhausted()?;
+        Some(position)
+    };
+    Ok(GradientStop { color, position })
 }
 
 impl<'i> AtRuleParser<'i> for Declarations {

@@ -179,7 +179,8 @@
 ## Color, backgrounds, images, and effects
 
 - **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Partial.**
-  - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
+  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-clip`~~,
+    ~~`background-color`~~, ~~`background-image`~~,
     `background-origin`, `background-position`, `background-repeat`, `background-size`, ~~`border`~~, ~~`border-bottom`~~,
     ~~`border-bottom-color`~~, `border-bottom-left-radius`, `border-bottom-right-radius`, ~~`border-bottom-style`~~,
     ~~`border-bottom-width`~~, ~~`border-color`~~, `border-image`, `border-image-outset`, `border-image-repeat`,
@@ -189,7 +190,8 @@
     `border-top-left-radius`, `border-top-right-radius`, ~~`border-top-style`~~, ~~`border-top-width`~~, ~~`border-width`~~,
     `box-shadow`.
 - **CSS Backgrounds Level 4 - Unsupported.**
-  - CSS properties: `background`, `background-attachment`, `background-clip`, ~~`background-color`~~, `background-image`,
+  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-clip`~~,
+    ~~`background-color`~~, ~~`background-image`~~,
     `background-origin`, `background-position`, `background-position-block`, `background-position-inline`,
     `background-position-x`, `background-position-y`, `background-repeat`, `background-repeat-block`,
     `background-repeat-inline`, `background-repeat-x`, `background-repeat-y`, `background-size`, `background-tbd`.

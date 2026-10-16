@@ -8,6 +8,8 @@ include!("rendering/text.rs");
 
 rendering_test!(installed_white_background_renders_every_pixel_white);
 rendering_test!(selector_background_color_is_visible_in_rendered_widget_pixels);
+rendering_test!(background_shorthand_gradient_and_content_clip_render_correctly);
+rendering_test!(background_image_data_url_is_decoded_and_tiled);
 rendering_test!(functional_colors_render_rgb_rgba_hsl_and_hsla_values);
 rendering_test!(button_frame_stroke_tracks_the_css_padding_box);
 rendering_test!(asymmetric_box_model_is_visible_in_rendered_pixels);

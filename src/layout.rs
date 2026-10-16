@@ -15,6 +15,7 @@ use crate::{
 };
 
 const ACTIVE: &str = "ecss.layout.active";
+const LABEL_SELECTION_PRESS: &str = "ecss.text_selection.press";
 
 #[derive(Clone, Debug, PartialEq)]
 struct Geometry {
@@ -123,9 +124,13 @@ pub(crate) fn show(
     class: &str,
 ) -> Response {
     let id = ui.next_auto_id().with("ecss.layout");
+    ui.skip_ahead_auto_ids(1);
     let active = ui.ctx().data(|d| d.get_temp::<u64>(Id::new(ACTIVE)));
     let active = active.and_then(|key| FRAMES.with(|frames| frames.borrow().get(&key).cloned()));
     let root = active.is_none();
+    if root {
+        clear_previous_label_selection(ui.ctx());
+    }
     let active = active.unwrap_or_else(|| {
         let available = ui.available_rect_before_wrap();
         let cache = ui
@@ -308,7 +313,6 @@ pub(crate) fn show(
         .layout(egui::Layout::top_down(egui::Align::Min));
     let mut content_ui =
         if parent_style.hidden && !style.hidden && !absent && active.0.borrow().enabled {
-            ui.skip_ahead_auto_ids(1);
             let mut host = Ui::new(
                 ui.ctx().clone(),
                 id.with("visible"),
@@ -450,7 +454,16 @@ pub(crate) fn show(
     let content_size = active.0.borrow().nodes[index]
         .text
         .as_ref()
-        .map(|text| reflow_text(ui.ctx(), layer, start, end, &text.job))
+        .map(|text| {
+            reflow_text(
+                ui.ctx(),
+                layer,
+                start,
+                end,
+                &text.job,
+                content_ui.visuals().selection.bg_fill,
+            )
+        })
         .unwrap_or(measured);
     if !geometry.fragments.is_empty() {
         if let Some(text) = active.0.borrow().nodes[index].text.as_ref() {
@@ -566,9 +579,10 @@ pub(crate) fn show(
     let mut response = if absent {
         response.with_new_rect(Rect::from_min_size(border.min, Vec2::ZERO))
     } else {
-        response
-            .union(content_ui.interact(visual, response.id, response.sense))
-            .with_new_rect(visual)
+        let interaction = without_id_clash_warning(ui.ctx(), || {
+            content_ui.interact(visual, response.id, response.sense)
+        });
+        response.union(interaction).with_new_rect(visual)
     };
     response.interact_rect = if absent || style.hidden {
         Rect::NOTHING
@@ -608,14 +622,7 @@ pub(crate) fn show(
             .visuals
             .widgets
             .state(response.widget_state());
-        let has_background = matching_rules(stylesheet, class).any(|r| {
-            (r.state == RuleState::Base
-                || r.state == RuleState::Hovered && current_state & 1 != 0
-                || r.state == RuleState::Active && current_state & 2 != 0)
-                && r.declarations
-                    .iter()
-                    .any(|d| matches!(d, Declaration::Background(_)))
-        });
+        let background_style = resolved_background(stylesheet, class, current_state);
         let corner_radius = if frame_stroke.is_some()
             || matching_rules(stylesheet, class).any(|r| {
                 (r.state == RuleState::Base
@@ -629,12 +636,8 @@ pub(crate) fn show(
         } else {
             egui::CornerRadius::ZERO
         };
-        let fill = if has_background {
-            visuals.weak_bg_fill
-        } else {
-            Color32::TRANSPARENT
-        };
-        let stroke = if style.border_set || final_geometry.collapsed.is_some() {
+        let fill = background_style.color;
+        let frame_stroke = if style.border_set || final_geometry.collapsed.is_some() {
             egui::Stroke::NONE
         } else {
             frame_stroke.unwrap_or(egui::Stroke::NONE)
@@ -659,13 +662,84 @@ pub(crate) fn show(
         let mut shapes = Vec::new();
         let surface_count = surfaces.len();
         for (surface_index, surface) in surfaces.into_iter().enumerate() {
+            let background_surface = match background_style.clip {
+                crate::css::BackgroundClip::Border => surface,
+                crate::css::BackgroundClip::Padding => surface - final_geometry.stroke,
+                crate::css::BackgroundClip::Content => {
+                    surface - final_geometry.stroke - final_geometry.padding
+                }
+            };
             shapes.push(egui::Shape::Rect(egui::epaint::RectShape::new(
-                surface,
+                background_surface,
                 corner_radius,
                 fill,
-                stroke,
+                egui::Stroke::NONE,
                 egui::StrokeKind::Inside,
             )));
+            if let crate::css::BackgroundImage::LinearGradient(gradient) = &background_style.image {
+                let paint_area = match background_style.attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
+                };
+                shapes.push(egui::Shape::Mesh(
+                    linear_gradient_mesh(background_surface, paint_area, gradient).into(),
+                ));
+            }
+            if let crate::css::BackgroundImage::Url(url) = &background_style.image
+                && let Some(texture) = stylesheet.background_images.texture(ui.ctx(), url)
+                && let Some(size) = stylesheet.background_images.size(url)
+            {
+                let image_size = vec2(size[0].max(1) as f32, size[1].max(1) as f32);
+                let viewport = ui.ctx().viewport_rect();
+                let origin = match background_style.attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface.min,
+                    crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
+                    crate::css::BackgroundAttachment::Fixed => viewport.min,
+                };
+                let min_x = ((background_surface.left() - origin.x) / image_size.x).floor() as i32;
+                let max_x = ((background_surface.right() - origin.x) / image_size.x).ceil() as i32;
+                let min_y = ((background_surface.top() - origin.y) / image_size.y).floor() as i32;
+                let max_y = ((background_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
+                for y in min_y..max_y {
+                    for x in min_x..max_x {
+                        let tile = Rect::from_min_size(
+                            origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
+                            image_size,
+                        );
+                        let visible = tile.intersect(background_surface);
+                        if visible.is_positive() {
+                            let uv = Rect::from_min_max(
+                                pos2(
+                                    (visible.left() - tile.left()) / tile.width(),
+                                    (visible.top() - tile.top()) / tile.height(),
+                                ),
+                                pos2(
+                                    (visible.right() - tile.left()) / tile.width(),
+                                    (visible.bottom() - tile.top()) / tile.height(),
+                                ),
+                            );
+                            shapes.push(egui::Shape::image(
+                                texture.id(),
+                                visible,
+                                uv,
+                                Color32::WHITE,
+                            ));
+                        }
+                    }
+                }
+            }
+            if frame_stroke.width > 0.0 {
+                shapes.push(egui::Shape::Rect(egui::epaint::RectShape::new(
+                    surface,
+                    corner_radius,
+                    Color32::TRANSPARENT,
+                    frame_stroke,
+                    egui::StrokeKind::Inside,
+                )));
+            }
             if let Some(edges) = final_geometry.collapsed {
                 let mut paint_style = style.clone();
                 let widths = edges.map(|edge| edge.width);
@@ -776,6 +850,52 @@ fn same_line(a: Rect, b: Rect, vertical: bool) -> bool {
     } else {
         (a.top() - b.top()).abs() < 0.01 && (a.height() - b.height()).abs() < 0.01
     }
+}
+
+fn without_id_clash_warning<R>(context: &Context, f: impl FnOnce() -> R) -> R {
+    // Selector boxes intentionally re-register their child's ID over the CSS box rect.
+    let warn_on_id_clash = context.options(|options| options.warn_on_id_clash);
+    if warn_on_id_clash {
+        context.options_mut(|options| options.warn_on_id_clash = false);
+    }
+    let result = f();
+    if warn_on_id_clash {
+        context.options_mut(|options| options.warn_on_id_clash = true);
+    }
+    result
+}
+
+fn clear_previous_label_selection(context: &Context) {
+    let press_time = context.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if !modifiers.shift
+                )
+            })
+            .then_some(input.time.to_bits())
+    });
+    let Some(press_time) = press_time else {
+        return;
+    };
+    let last_press = context.data(|data| data.get_temp::<u64>(Id::new(LABEL_SELECTION_PRESS)));
+    // egui can rerun this input frame for additional layout passes.
+    if last_press == Some(press_time) {
+        return;
+    }
+    context.data_mut(|data| data.insert_temp(Id::new(LABEL_SELECTION_PRESS), press_time));
+    context
+        .plugin::<egui::text_selection::LabelSelectionState>()
+        .lock()
+        .clear_selection();
 }
 
 fn reorder_paint(frame: &Frame, context: &Context) {
@@ -947,12 +1067,14 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             && !node.style.contents
             && let Some(paint) = &node.paint
         {
-            paint.ui.interact_opt(
-                paint.response.rect,
-                paint.response.id,
-                paint.response.sense,
-                egui::InteractOptions { move_to_top: true },
-            );
+            without_id_clash_warning(context, || {
+                paint.ui.interact_opt(
+                    paint.response.rect,
+                    paint.response.id,
+                    paint.response.sense,
+                    egui::InteractOptions { move_to_top: true },
+                );
+            });
         }
     }
     for index in &order {
@@ -1162,6 +1284,154 @@ fn matching_rules<'a>(
         usize::from(rule.class.is_some()) + usize::from(rule.state != RuleState::Base)
     });
     rules.into_iter()
+}
+
+struct BackgroundPaint {
+    color: Color32,
+    image: crate::css::BackgroundImage,
+    attachment: crate::css::BackgroundAttachment,
+    clip: crate::css::BackgroundClip,
+}
+
+fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> BackgroundPaint {
+    let mut background = BackgroundPaint {
+        color: Color32::TRANSPARENT,
+        image: crate::css::BackgroundImage::None,
+        attachment: crate::css::BackgroundAttachment::Scroll,
+        clip: crate::css::BackgroundClip::Border,
+    };
+    for rule in matching_rules(stylesheet, class) {
+        if rule.state != RuleState::Base
+            && !(rule.state == RuleState::Hovered && state & 1 != 0)
+            && !(rule.state == RuleState::Active && state & 2 != 0)
+        {
+            continue;
+        }
+        for declaration in &rule.declarations {
+            match declaration {
+                Declaration::Background(color) => background.color = *color,
+                Declaration::BackgroundShorthand(value) => {
+                    background.color = value.color;
+                    background.image = value.image.clone();
+                    background.attachment = value.attachment;
+                    background.clip = value.clip;
+                }
+                Declaration::BackgroundImage(image) => background.image = image.clone(),
+                Declaration::BackgroundAttachment(attachment) => {
+                    background.attachment = *attachment;
+                }
+                Declaration::BackgroundClip(clip) => background.clip = *clip,
+                _ => {}
+            }
+        }
+    }
+    background
+}
+
+fn linear_gradient_mesh(
+    clip: Rect,
+    paint_area: Rect,
+    gradient: &crate::css::LinearGradient,
+) -> egui::epaint::Mesh {
+    use egui::epaint::{Mesh, Vertex};
+
+    let steps = 32;
+    let radians = gradient.angle.to_radians();
+    let direction = vec2(radians.sin(), -radians.cos());
+    let corners = [
+        paint_area.left_top(),
+        paint_area.right_top(),
+        paint_area.right_bottom(),
+        paint_area.left_bottom(),
+    ];
+    let min = corners
+        .iter()
+        .map(|point| point.to_vec2().dot(direction))
+        .fold(f32::INFINITY, f32::min);
+    let max = corners
+        .iter()
+        .map(|point| point.to_vec2().dot(direction))
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mut mesh = Mesh::default();
+    for y in 0..=steps {
+        for x in 0..=steps {
+            let point = pos2(
+                egui::emath::lerp(clip.left()..=clip.right(), x as f32 / steps as f32),
+                egui::emath::lerp(clip.top()..=clip.bottom(), y as f32 / steps as f32),
+            );
+            let t = ((point.to_vec2().dot(direction) - min) / (max - min).max(f32::EPSILON))
+                .clamp(0.0, 1.0);
+            mesh.vertices.push(Vertex {
+                pos: point,
+                uv: Pos2::ZERO,
+                color: gradient_color(gradient, t),
+            });
+        }
+    }
+    for y in 0..steps {
+        for x in 0..steps {
+            let top_left = y * (steps + 1) + x;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + steps + 1;
+            let bottom_right = bottom_left + 1;
+            mesh.add_triangle(top_left as u32, top_right as u32, bottom_right as u32);
+            mesh.add_triangle(top_left as u32, bottom_right as u32, bottom_left as u32);
+        }
+    }
+    mesh
+}
+
+fn gradient_color(gradient: &crate::css::LinearGradient, position: f32) -> Color32 {
+    let mut positions = gradient
+        .stops
+        .iter()
+        .map(|stop| stop.position)
+        .collect::<Vec<_>>();
+    if positions[0].is_none() {
+        positions[0] = Some(0.0);
+    }
+    let last = positions.len() - 1;
+    if positions[last].is_none() {
+        positions[last] = Some(1.0);
+    }
+    let mut previous_fixed = 0;
+    for index in 1..positions.len() {
+        if let Some(value) = positions[index] {
+            let previous = positions[previous_fixed].unwrap_or(0.0);
+            let value = value.max(previous);
+            positions[index] = Some(value);
+            let gap = index - previous_fixed;
+            for missing in 1..gap {
+                let amount = missing as f32 / gap as f32;
+                positions[previous_fixed + missing] =
+                    Some(egui::emath::lerp(previous..=value, amount));
+            }
+            previous_fixed = index;
+        }
+    }
+
+    let stops = gradient
+        .stops
+        .iter()
+        .zip(positions)
+        .map(|(stop, position)| (position.unwrap_or(0.0), stop.color))
+        .collect::<Vec<_>>();
+    let after = stops
+        .iter()
+        .position(|(stop_position, _)| *stop_position >= position)
+        .unwrap_or(stops.len() - 1);
+    if after == 0 {
+        return stops[0].1;
+    }
+    let (start, start_color) = stops[after - 1];
+    let (end, end_color) = stops[after];
+    let amount = ((position - start) / (end - start).max(f32::EPSILON)).clamp(0.0, 1.0);
+    let start = start_color.to_array();
+    let end = end_color.to_array();
+    let channels: [u8; 4] = std::array::from_fn(|index| {
+        egui::emath::lerp(f32::from(start[index])..=f32::from(end[index]), amount).round() as u8
+    });
+    Color32::from_rgba_unmultiplied(channels[0], channels[1], channels[2], channels[3])
 }
 
 fn shape_index(ctx: &Context, layer: egui::LayerId) -> egui::layers::ShapeIdx {
@@ -1968,6 +2238,7 @@ fn reflow_text(
     start: egui::layers::ShapeIdx,
     end: egui::layers::ShapeIdx,
     job: &egui::text::LayoutJob,
+    selection_color: Color32,
 ) -> Vec2 {
     fn find_galley(shape: &egui::Shape) -> Option<&std::sync::Arc<egui::Galley>> {
         match shape {
@@ -1984,11 +2255,24 @@ fn reflow_text(
             .take(end.0 - start.0)
             .find_map(|entry| find_galley(&entry.shape).cloned())
     });
-    if let Some(current) = current.filter(|galley| galley.job.as_ref() == job) {
+    if let Some(current) = current.as_ref().filter(|galley| galley.job.as_ref() == job) {
         return current.size();
     }
 
     let galley = context.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+    if current.as_ref().is_some_and(|current| {
+        current.rows.iter().any(|row| {
+            row.row
+                .visuals
+                .mesh
+                .vertices
+                .iter()
+                .any(|vertex| vertex.color == selection_color)
+        })
+    }) {
+        // Replacing a selected galley here would discard egui's selection vertices.
+        return galley.size();
+    }
     fn replace(shape: &mut egui::Shape, galley: &std::sync::Arc<egui::Galley>) {
         match shape {
             egui::Shape::Text(text) => text.galley = galley.clone(),
