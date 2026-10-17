@@ -26,6 +26,7 @@ pub(crate) struct Node {
     pub layout: Layout,
     pub details: DetailedLayoutInfo,
     pub format: crate::formatting::Formatting,
+    pub flow_name: Option<String>,
     pub inline_context: bool,
     pub runs: Vec<TextRun>,
     pub fragments: Vec<Fragment>,
@@ -38,6 +39,16 @@ pub(crate) struct Node {
     pub subgrid_proxies: bool,
     pub column_regions: Option<Vec<NodeId>>,
     pub atomic: bool,
+    pub fragmentable_text: bool,
+    pub flow_source: bool,
+    pub flow_element: bool,
+    pub flow_region: bool,
+    pub flow_region_auto_height: bool,
+    pub flow_region_auto_target: Option<f32>,
+    pub flow_region_content: bool,
+    pub flow_remainder: bool,
+    pub flow_overset: bool,
+    pub flow_clip: Option<(egui::Rect, usize)>,
     pub edges: [crate::formatting::CollapsedBorder; 4],
     pub collapsed: Option<[crate::formatting::CollapsedBorder; 4]>,
     pub collapsed_segments: Vec<crate::formatting::CollapsedBorderSegment>,
@@ -59,6 +70,7 @@ pub(crate) struct Fragment {
     pub marker_width: f32,
     pub rect: egui::Rect,
     pub text_rect: egui::Rect,
+    pub clip: Option<egui::Rect>,
 }
 #[derive(Clone)]
 pub(crate) struct TextRun {
@@ -118,6 +130,7 @@ impl<'a> Tree<'a> {
             layout: Layout::with_order(0),
             details: DetailedLayoutInfo::None,
             format: Default::default(),
+            flow_name: None,
             inline_context: false,
             runs: Vec::new(),
             fragments: Vec::new(),
@@ -130,6 +143,16 @@ impl<'a> Tree<'a> {
             subgrid_proxies: false,
             column_regions: None,
             atomic: false,
+            fragmentable_text: false,
+            flow_source: false,
+            flow_element: false,
+            flow_region: false,
+            flow_region_auto_height: false,
+            flow_region_auto_target: None,
+            flow_region_content: false,
+            flow_remainder: false,
+            flow_overset: false,
+            flow_clip: None,
             edges: Default::default(),
             collapsed: None,
             collapsed_segments: Vec::new(),
@@ -183,7 +206,7 @@ impl<'a> Tree<'a> {
         Ok(())
     }
 
-    pub fn compute_layout_with_measure<F>(
+    pub(crate) fn compute_layout_with_measure_and_regions<F>(
         &mut self,
         root: NodeId,
         available: Size<AvailableSpace>,
@@ -203,6 +226,15 @@ impl<'a> Tree<'a> {
             self.nodes[index].cache.clear();
         }
         compute_root_layout(self, root, available);
+        for _ in 0..8 {
+            if !self.layout_named_regions(root) {
+                break;
+            }
+            for node in &mut self.nodes {
+                node.cache.clear();
+            }
+            compute_root_layout(self, root, available);
+        }
         self.measure = None;
         Ok(())
     }
@@ -420,9 +452,496 @@ impl<'a> Tree<'a> {
         ))
     }
 
+    fn layout_flow_text(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+        regions: &[egui::Rect],
+        clip_regions: &[bool],
+        region_used_bottom: &mut [f32],
+        last_region_break: bool,
+        region_index: &mut usize,
+        cursor: &mut f32,
+    ) -> bool {
+        let index = usize::from(child);
+        let node = &self.nodes[index];
+        if node.runs.is_empty()
+            || !node.fragmentable_text
+            || node.format.writing.vertical()
+            || !node.children.is_empty()
+            || !node.slices.is_empty()
+            || matches!(
+                node.format.inside,
+                crate::formatting::Break::Avoid | crate::formatting::Break::AvoidRegion
+            )
+            || node.style.overflow.x.is_scroll_container()
+            || node.style.overflow.y.is_scroll_container()
+        {
+            return false;
+        }
+
+        let runs = node.runs.clone();
+        let style = node.style.clone();
+        let format = node.format.clone();
+        let initial = node.layout;
+        let margin = initial.margin;
+        let box_width = initial.size.width;
+        let nowrap = matches!(format.white_space.as_str(), "nowrap" | "pre");
+        let mut fragments = Vec::new();
+        let mut run_index = 0;
+        let mut started = false;
+
+        while run_index < runs.len() {
+            let region = regions[*region_index];
+            let width = if style.size.width.is_auto() {
+                (region.width() - margin.left - margin.right).max(0.0)
+            } else {
+                box_width.min((region.width() - margin.left - margin.right).max(0.0))
+            };
+            let content_width = (width
+                - initial.border.left
+                - initial.border.right
+                - initial.padding.left
+                - initial.padding.right)
+                .max(0.0);
+            let line_start = run_index;
+            let mut line_width = 0.0;
+            let mut line_height: f32 = 0.0;
+            while run_index < runs.len() {
+                let run = &runs[run_index];
+                let next_width = if run_index == line_start {
+                    run.width
+                } else {
+                    line_width + runs[run_index - 1].gap + run.width
+                };
+                if !nowrap && run_index > line_start && next_width > content_width + 0.001 {
+                    break;
+                }
+                line_width = next_width;
+                line_height = line_height.max(run.height);
+                run_index += 1;
+                if run.newline {
+                    break;
+                }
+            }
+
+            if run_index == line_start {
+                run_index += 1;
+                line_width = runs[line_start].width;
+                line_height = runs[line_start].height;
+            }
+
+            let top_margin = if started { 0.0 } else { margin.top };
+            let line_y = *cursor + top_margin;
+            if line_y + line_height > region.bottom() + 0.01 && *region_index + 1 < regions.len() {
+                *region_index += 1;
+                *cursor = regions[*region_index].top();
+                run_index = line_start;
+                continue;
+            }
+            if line_y + line_height > region.bottom() + 0.01
+                && *region_index + 1 == regions.len()
+                && last_region_break
+            {
+                break;
+            }
+
+            let free = (content_width - line_width).max(0.0);
+            let rtl = style.direction == taffy::Direction::Rtl;
+            let align = match (format.text_align.as_str(), rtl) {
+                ("center", _) => free * 0.5,
+                ("right" | "end", false) => free,
+                ("left" | "end", true) => -free,
+                _ => 0.0,
+            };
+            let box_left = region.left() + margin.left;
+            let content_left = box_left + initial.border.left + initial.padding.left;
+            let text_x = if rtl {
+                content_left + content_width - line_width + align
+            } else {
+                content_left + align
+            };
+            let first = &runs[line_start];
+            let last = &runs[run_index - 1];
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(box_left, line_y),
+                egui::vec2(width, line_height),
+            );
+            fragments.push(Fragment {
+                range: Some(first.range.start..last.range.end),
+                marker: None,
+                marker_width: 0.0,
+                rect,
+                text_rect: egui::Rect::from_min_size(
+                    egui::pos2(text_x, line_y + initial.border.top + initial.padding.top),
+                    egui::vec2(line_width, line_height),
+                ),
+                clip: clip_regions
+                    .get(*region_index)
+                    .copied()
+                    .unwrap_or(false)
+                    .then_some(region),
+            });
+            region_used_bottom[*region_index] =
+                region_used_bottom[*region_index].max(line_y + line_height);
+            *cursor = line_y + line_height;
+            started = true;
+        }
+
+        if fragments.is_empty() && !last_region_break {
+            return false;
+        }
+        if !fragments.is_empty() {
+            *cursor += margin.bottom;
+            region_used_bottom[*region_index] = region_used_bottom[*region_index].max(*cursor);
+        }
+        let bounds = fragments
+            .iter()
+            .fold(egui::Rect::NOTHING, |bounds, fragment| {
+                bounds.union(fragment.rect)
+            });
+        let node = &mut self.nodes[index];
+        if bounds.is_finite() {
+            node.layout.location = taffy::Point {
+                x: bounds.min.x,
+                y: bounds.min.y,
+            };
+            node.layout.size = Size {
+                width: bounds.width(),
+                height: bounds.height(),
+            };
+        } else {
+            node.layout.location = taffy::Point::ZERO;
+            node.layout.size = Size::ZERO;
+        }
+        for fragment in &mut fragments {
+            fragment.rect = fragment.rect.translate(-bounds.min.to_vec2());
+            fragment.text_rect = fragment.text_rect.translate(-bounds.min.to_vec2());
+            fragment.clip = fragment
+                .clip
+                .map(|clip| clip.translate(-bounds.min.to_vec2()));
+        }
+        node.fragments = fragments;
+        node.layout_parent = Some(parent);
+        node.layout_axes = self.axes.last().copied().unwrap_or_default();
+        node.flow_remainder = run_index < runs.len();
+        true
+    }
+
+    fn suppress_flow_subtree(&mut self, id: NodeId) {
+        let index = usize::from(id);
+        let children = self.nodes[index].children.clone();
+        self.nodes[index].flow_overset = true;
+        for child in children {
+            self.suppress_flow_subtree(child);
+        }
+    }
+
+    fn set_flow_clip_subtree(&mut self, id: NodeId, clip: (egui::Rect, usize)) {
+        let index = usize::from(id);
+        let children = self.nodes[index].children.clone();
+        self.nodes[index].flow_clip = Some(clip);
+        for child in children {
+            self.set_flow_clip_subtree(child, clip);
+        }
+    }
+
+    fn layout_named_regions(&mut self, root: NodeId) -> bool {
+        let mut auto_region_resized = false;
+        let mut flow_names = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if belongs_to_visible_layout_root(&self.nodes, NodeId::from(index), root)
+                && node.flow_element
+                && let Some(name) = node.flow_name.as_ref()
+                && !flow_names.contains(name)
+            {
+                flow_names.push(name.clone());
+            }
+        }
+
+        for flow in flow_names {
+            let sources: Vec<_> = self
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, node)| {
+                    belongs_to_visible_layout_root(&self.nodes, NodeId::from(*index), root)
+                        && node.flow_element
+                        && node.flow_name.as_deref() == Some(&flow)
+                })
+                .map(|(index, _)| NodeId::from(index))
+                .collect();
+            let regions: Vec<_> = self
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, node)| {
+                    belongs_to_visible_layout_root(&self.nodes, NodeId::from(*index), root)
+                        && node.flow_region
+                        && node.format.flow_from.as_deref() == Some(&flow)
+                        && !node.format.writing.vertical()
+                        && !node.flow_region_content
+                        && !sources.contains(&NodeId::from(*index))
+                })
+                .map(|(index, _)| NodeId::from(index))
+                .collect();
+            if sources.is_empty() || regions.is_empty() {
+                continue;
+            }
+
+            let mut active_regions = Vec::with_capacity(regions.len());
+            let mut region_rects = Vec::with_capacity(regions.len());
+            let mut region_clips = Vec::with_capacity(regions.len());
+            let mut auto_region_heights = Vec::with_capacity(regions.len());
+            let mut region_used_bottom = Vec::with_capacity(regions.len());
+            for region in &regions {
+                let node = &self.nodes[usize::from(*region)];
+                let layout = self.absolute_layout(*region);
+                let left = layout.location.x + layout.border.left + layout.padding.left;
+                let top = layout.location.y + layout.border.top + layout.padding.top;
+                let right = layout.location.x + layout.size.width
+                    - layout.border.right
+                    - layout.padding.right;
+                let bottom = layout.location.y + layout.size.height
+                    - layout.border.bottom
+                    - layout.padding.bottom;
+                let mut rect = egui::Rect::from_min_max(
+                    egui::pos2(left, top),
+                    egui::pos2(right.max(left), bottom.max(top)),
+                );
+                let auto_height = node.flow_region_auto_height;
+                if auto_height && node.style.size.height.is_auto() {
+                    rect.max.y = f32::MAX / 4.0;
+                }
+                active_regions.push(*region);
+                auto_region_heights.push(auto_height);
+                region_used_bottom.push(rect.top());
+                region_rects.push(rect);
+                region_clips.push(
+                    node.style.overflow.x != taffy::Overflow::Visible
+                        || node.style.overflow.y != taffy::Overflow::Visible,
+                );
+            }
+            if region_rects.is_empty() {
+                continue;
+            }
+            let last_region_break = self.nodes[usize::from(*active_regions.last().unwrap())]
+                .format
+                .region_fragment
+                == crate::formatting::RegionFragment::Break;
+            let mut region_index = 0;
+            let mut cursor = region_rects[0].top();
+            let mut exhausted = false;
+
+            for source in sources {
+                if exhausted {
+                    self.suppress_flow_subtree(source);
+                    continue;
+                }
+                let source_index = usize::from(source);
+                let before = self.nodes[source_index].format.before;
+                if forced_region_break(before)
+                    && cursor > region_rects[region_index].top() + 0.01
+                    && region_index + 1 < region_rects.len()
+                {
+                    region_index += 1;
+                    cursor = region_rects[region_index].top();
+                } else if forced_region_break(before) && last_region_break {
+                    exhausted = true;
+                    self.suppress_flow_subtree(source);
+                    continue;
+                }
+
+                loop {
+                    let auto_height = auto_region_heights[region_index]
+                        && self.nodes[usize::from(active_regions[region_index])]
+                            .style
+                            .size
+                            .height
+                            .is_auto();
+                    let region = region_rects[region_index];
+                    let margin = self.nodes[source_index].layout.margin;
+                    let width = (region.width() - margin.left - margin.right).max(0.0);
+                    let known_width = self.nodes[source_index]
+                        .style
+                        .size
+                        .width
+                        .is_auto()
+                        .then_some(width);
+                    CacheTree::cache_clear(self, source);
+                    let output = self.compute_child_layout(
+                        source,
+                        LayoutInput {
+                            run_mode: RunMode::PerformLayout,
+                            sizing_mode: taffy::SizingMode::InherentSize,
+                            axis: taffy::RequestedAxis::Both,
+                            known_dimensions: Size {
+                                width: known_width,
+                                height: None,
+                            },
+                            known_dimensions_are_definite: Size {
+                                width: true,
+                                height: true,
+                            },
+                            parent_size: Size {
+                                width: Some(region.width()),
+                                height: (!auto_region_heights[region_index])
+                                    .then_some(region.height()),
+                            },
+                            available_space: Size {
+                                width: AvailableSpace::Definite(width),
+                                height: AvailableSpace::MaxContent,
+                            },
+                            vertical_margins_are_collapsible: taffy::Line::FALSE,
+                        },
+                    );
+                    let margin = self.nodes[source_index].layout.margin;
+                    let needed = margin.top + output.size.height + margin.bottom;
+                    let avoid_region = matches!(
+                        self.nodes[source_index].format.inside,
+                        crate::formatting::Break::Avoid | crate::formatting::Break::AvoidRegion
+                    );
+                    let fits = auto_height || cursor + needed <= region.bottom() + 0.01;
+                    let fits_later = region_rects.iter().enumerate().skip(region_index + 1).any(
+                        |(index, region)| {
+                            let later_is_auto = auto_region_heights[index]
+                                && self.nodes[usize::from(active_regions[index])]
+                                    .style
+                                    .size
+                                    .height
+                                    .is_auto();
+                            later_is_auto || needed <= region.height() + 0.01
+                        },
+                    );
+                    if !fits
+                        && region_index + 1 < region_rects.len()
+                        && (avoid_region || cursor > region.top() + 0.01 || fits_later)
+                    {
+                        region_index += 1;
+                        cursor = region_rects[region_index].top();
+                        continue;
+                    }
+
+                    if self.layout_flow_text(
+                        root,
+                        source,
+                        &region_rects,
+                        &region_clips,
+                        &mut region_used_bottom,
+                        last_region_break,
+                        &mut region_index,
+                        &mut cursor,
+                    ) {
+                        exhausted |= self.nodes[source_index].flow_remainder;
+                        break;
+                    }
+
+                    if !fits && last_region_break && region_index + 1 == region_rects.len() {
+                        self.suppress_flow_subtree(source);
+                        exhausted = true;
+                        break;
+                    }
+
+                    let flow_clip = region_clips[region_index]
+                        .then_some(region)
+                        .and_then(|rect| {
+                            self.nodes[usize::from(active_regions[region_index])]
+                                .context
+                                .map(|context| (rect, context))
+                        });
+                    {
+                        let node = &mut self.nodes[source_index];
+                        node.layout.location = taffy::Point {
+                            x: region.left() + margin.left,
+                            y: cursor + margin.top,
+                        };
+                        node.layout.size = output.size;
+                        node.layout_parent = Some(root);
+                    }
+                    if let Some(flow_clip) = flow_clip {
+                        self.set_flow_clip_subtree(source, flow_clip);
+                    }
+                    cursor += needed;
+                    region_used_bottom[region_index] = region_used_bottom[region_index].max(cursor);
+                    break;
+                }
+
+                if forced_region_break(self.nodes[source_index].format.after)
+                    && cursor > region_rects[region_index].top() + 0.01
+                    && region_index + 1 < region_rects.len()
+                {
+                    region_index += 1;
+                    cursor = region_rects[region_index].top();
+                } else if forced_region_break(self.nodes[source_index].format.after)
+                    && last_region_break
+                    && cursor > region_rects[region_index].top() + 0.01
+                {
+                    exhausted = true;
+                }
+            }
+
+            for index in 0..active_regions.len() {
+                if !auto_region_heights[index] {
+                    continue;
+                }
+                let region_index = usize::from(active_regions[index]);
+                let node = &mut self.nodes[region_index];
+                let layout = node.layout;
+                let content_height =
+                    (region_used_bottom[index] - region_rects[index].top()).max(0.0);
+                let edge_height = layout.border.top
+                    + layout.border.bottom
+                    + layout.padding.top
+                    + layout.padding.bottom;
+                let requested_height = if node.style.box_sizing == taffy::BoxSizing::ContentBox {
+                    content_height
+                } else {
+                    content_height + edge_height
+                };
+                let requested_height =
+                    requested_height.max(node.flow_region_auto_target.unwrap_or(0.0));
+                if requested_height.is_finite()
+                    && requested_height > node.flow_region_auto_target.unwrap_or(0.0) + 0.01
+                {
+                    node.style.size.height = taffy::Dimension::length(requested_height);
+                    node.flow_region_auto_target = Some(requested_height);
+                    auto_region_resized = true;
+                }
+            }
+        }
+        auto_region_resized
+    }
+
     fn layout_chained_flows(&mut self, id: NodeId, input: LayoutInput) {
         let index = usize::from(id);
-        let chains = self.nodes[index].format.chains.clone();
+        let style = self.nodes[index].style.clone();
+        let areas = style
+            .grid_template_areas
+            .as_ref()
+            .map(|areas| areas.areas.clone())
+            .unwrap_or_default();
+        let chains: Vec<_> = self.nodes[index]
+            .format
+            .chains
+            .iter()
+            .filter_map(|chain| {
+                let mut chain: Vec<_> = chain
+                    .iter()
+                    .filter(|name| areas.iter().any(|area| area.name == **name))
+                    .cloned()
+                    .collect();
+                if chain.is_empty()
+                    || chain
+                        .iter()
+                        .take(chain.len() - 1)
+                        .any(|name| !grid_area_size_independent(&style, &areas, name))
+                {
+                    None
+                } else {
+                    Some(std::mem::take(&mut chain))
+                }
+            })
+            .collect();
         let children = self.nodes[index].children.clone();
         let mut flows = Vec::new();
         for child in &children {
@@ -433,12 +952,6 @@ impl<'a> Tree<'a> {
             }
         }
         for flow in flows {
-            if chains
-                .iter()
-                .any(|chain| chain.iter().skip(1).any(|name| name == &flow))
-            {
-                continue;
-            }
             let chain = chains
                 .iter()
                 .find(|chain| chain.first() == Some(&flow))
@@ -468,6 +981,22 @@ impl<'a> Tree<'a> {
             if items.len() == 1 {
                 let child = items[0];
                 let child_index = usize::from(child);
+                if regions.len() > 1 {
+                    let mut region_index = 0;
+                    let mut cursor = regions[0].top();
+                    if self.layout_flow_text(
+                        id,
+                        child,
+                        &regions,
+                        &[],
+                        &mut vec![regions[0].top(); regions.len()],
+                        false,
+                        &mut region_index,
+                        &mut cursor,
+                    ) {
+                        continue;
+                    }
+                }
                 let initial = self.nodes[child_index].layout;
                 let initial_margin = initial.margin;
                 if initial_margin.top + initial.size.height + initial_margin.bottom
@@ -535,9 +1064,34 @@ impl<'a> Tree<'a> {
             let mut region_index = 0;
             let mut cursor = regions[0].top();
             for child in items {
+                let child_index = usize::from(child);
+                if forced_chain_break(self.nodes[child_index].format.before)
+                    && cursor > regions[region_index].top() + 0.01
+                    && region_index + 1 < regions.len()
+                {
+                    region_index += 1;
+                    cursor = regions[region_index].top();
+                }
+                if self.layout_flow_text(
+                    id,
+                    child,
+                    &regions,
+                    &[],
+                    &mut vec![regions[0].top(); regions.len()],
+                    false,
+                    &mut region_index,
+                    &mut cursor,
+                ) {
+                    if forced_chain_break(self.nodes[child_index].format.after)
+                        && region_index + 1 < regions.len()
+                    {
+                        region_index += 1;
+                        cursor = regions[region_index].top();
+                    }
+                    continue;
+                }
                 loop {
                     let region = regions[region_index];
-                    let child_index = usize::from(child);
                     let margin = self.nodes[child_index].layout.margin;
                     let width = (region.width() - margin.left - margin.right).max(0.0);
                     let known_width = self.nodes[child_index]
@@ -590,6 +1144,12 @@ impl<'a> Tree<'a> {
                     node.layout_parent = Some(id);
                     node.layout_axes = self.axes.last().copied().unwrap_or_default();
                     cursor += needed;
+                    if forced_chain_break(self.nodes[child_index].format.after)
+                        && region_index + 1 < regions.len()
+                    {
+                        region_index += 1;
+                        cursor = regions[region_index].top();
+                    }
                     break;
                 }
             }
@@ -724,6 +1284,113 @@ impl<'a> Tree<'a> {
         };
         layout
     }
+}
+
+fn grid_area_size_independent(
+    style: &Style,
+    areas: &[taffy::GridTemplateArea<String>],
+    name: &str,
+) -> bool {
+    let Some(area) = areas.iter().find(|area| area.name == name) else {
+        return false;
+    };
+    (area.column_start.saturating_sub(1)..area.column_end.saturating_sub(1))
+        .all(|column| grid_track_is_size_independent(style, 0, usize::from(column)))
+        && (area.row_start.saturating_sub(1)..area.row_end.saturating_sub(1))
+            .all(|row| grid_track_is_size_independent(style, 1, usize::from(row)))
+}
+
+fn grid_track_is_size_independent(style: &Style, axis: usize, index: usize) -> bool {
+    let tracks = if axis == 0 {
+        &style.grid_template_columns
+    } else {
+        &style.grid_template_rows
+    };
+    let mut position = 0;
+    for component in tracks {
+        match component {
+            taffy::GridTemplateComponent::Single(track) => {
+                if position == index {
+                    return track_is_size_independent(*track);
+                }
+                position += 1;
+            }
+            taffy::GridTemplateComponent::Repeat(repeat) => {
+                let repeat_len = repeat.tracks.len();
+                if repeat_len == 0 {
+                    return false;
+                }
+                let count = match repeat.count {
+                    taffy::RepetitionCount::Count(count) => usize::from(count),
+                    taffy::RepetitionCount::AutoFit | taffy::RepetitionCount::AutoFill => {
+                        if index >= position && index < position + repeat_len {
+                            return track_is_size_independent(repeat.tracks[index - position]);
+                        }
+                        if index >= position + repeat_len {
+                            return false;
+                        }
+                        continue;
+                    }
+                };
+                let end = position + repeat_len * count;
+                if index >= position && index < end {
+                    return track_is_size_independent(
+                        repeat.tracks[(index - position) % repeat_len],
+                    );
+                }
+                position = end;
+            }
+        }
+    }
+    false
+}
+
+fn track_is_size_independent(track: taffy::TrackSizingFunction) -> bool {
+    use taffy::style::{
+        ExpandedMaxTrackSizingFunction as Max, ExpandedMinTrackSizingFunction as Min,
+    };
+
+    matches!(
+        (
+            track.min_sizing_function().expand(),
+            track.max_sizing_function().expand()
+        ),
+        (
+            Min::Length(_) | Min::Calc(_),
+            Max::Length(_) | Max::Fr(_) | Max::Calc(_)
+        )
+    )
+}
+
+fn forced_chain_break(value: crate::formatting::Break) -> bool {
+    matches!(
+        value,
+        crate::formatting::Break::Column
+            | crate::formatting::Break::Page
+            | crate::formatting::Break::Region
+            | crate::formatting::Break::Always
+    )
+}
+
+fn forced_region_break(value: crate::formatting::Break) -> bool {
+    matches!(
+        value,
+        crate::formatting::Break::Region | crate::formatting::Break::Always
+    )
+}
+
+fn belongs_to_visible_layout_root(nodes: &[Node], id: NodeId, root: NodeId) -> bool {
+    let mut current = Some(id);
+    while let Some(node) = current {
+        if nodes[usize::from(node)].style.display == Display::None {
+            return false;
+        }
+        if node == root {
+            return true;
+        }
+        current = nodes[usize::from(node)].parent;
+    }
+    false
 }
 
 impl TraversePartialTree for Tree<'_> {

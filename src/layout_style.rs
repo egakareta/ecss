@@ -2412,6 +2412,12 @@ fn copy_format_property(
         "font-kerning" => to.font_kerning = from.font_kerning,
         "writing-mode" => to.writing = from.writing,
         "text-orientation" => to.text_orientation = from.text_orientation.clone(),
+        "flow-from" => to.flow_from = from.flow_from.clone(),
+        "flow-into" => {
+            to.flow_into = from.flow_into.clone();
+            to.flow_into_content = from.flow_into_content;
+        }
+        "region-fragment" => to.region_fragment = from.region_fragment,
         "column-count" => to.column_count = from.column_count,
         "column-width" => to.column_width = from.column_width,
         "columns" => {

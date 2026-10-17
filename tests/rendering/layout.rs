@@ -83,6 +83,40 @@ async fn grid_tracks_spans_and_gaps_control_selector_boxes_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn chained_grid_slots_continue_text_at_a_line_break_test() {
+    let stylesheet = Stylesheet::parse(
+        ".grid { display:grid; width:100px; height:20px; grid-template-columns:30px 70px; grid-template-rows:20px; grid-template-areas:\"first second\"; chains:first second; } .text { flow:first; font-size:12px; color:#f00; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let grid = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("one two").selector(".text"));
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+        *capture.lock().unwrap() = Some(grid.rect);
+    })
+    .await;
+    let grid = bounds.lock().unwrap().unwrap();
+    let second_slot_has_text = ((grid.left() + 31.0).floor() as i32..grid.right().ceil() as i32)
+        .any(|x| {
+            (grid.top().floor() as i32..grid.bottom().ceil() as i32).any(|y| {
+                let pixel = pixel(&pixels, x as f32, y as f32);
+                pixel[0] > 150 && pixel[1] < 100 && pixel[2] < 100
+            })
+        });
+    assert!(
+        second_slot_has_text,
+        "text did not continue into slot two: grid={grid:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn overflow_and_display_none_clip_paint_and_remove_layout_space_test() {
     let stylesheet=Stylesheet::parse(
         ".parent { display: flex; width: 60px; height: 30px; overflow: hidden; background-color: #00f; }\
@@ -396,4 +430,361 @@ async fn subgrid_inherits_tracks_gaps_and_named_lines_on_both_axes_test() {
     assert_eq!(pixel(&pixels, 105.0, 10.0), [255; 4]);
     assert_eq!(pixel(&pixels, 50.0, 25.0), [255; 4]);
     assert_eq!(pixel(&pixels, 50.0, 40.0), [255; 4]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn named_flow_text_continues_across_document_ordered_regions_test() {
+    let stylesheet = Stylesheet::parse(
+        ".first { display:block; width:50px; height:14px; flow-from:article; background-color:#00f; }\
+         .second { display:block; width:80px; height:28px; flow-from:article; background-color:#00f; }\
+         .region-child { width:50px; height:14px; background-color:#0f0; }\
+         .source { flow-into:article content; font-size:12px; color:#f00; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("one two three four five six seven").selector(".source"));
+                *capture.lock().unwrap() = vec![
+                    ui.add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(empty_response.selector(".region-child"));
+                            ui.response()
+                        })
+                        .selector(".first"),
+                    )
+                    .rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let regions = bounds.lock().unwrap();
+    for x in regions[0].left().floor() as i32..regions[0].right().ceil() as i32 {
+        for y in regions[0].top().floor() as i32..regions[0].bottom().ceil() as i32 {
+            assert_ne!(pixel(&pixels, x as f32, y as f32), [0, 255, 0, 255]);
+        }
+    }
+    for region in regions.iter() {
+        let has_red_text = (region.left().floor() as i32..region.right().ceil() as i32).any(|x| {
+            (region.top().floor() as i32..region.bottom().ceil() as i32).any(|y| {
+                let color = pixel(&pixels, x as f32, y as f32);
+                color[0] > 150 && color[1] < 100 && color[2] < 100
+            })
+        });
+        assert!(has_red_text, "region received no text: {region:?}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn anonymous_text_in_content_flow_continues_across_regions_test() {
+    let stylesheet = Stylesheet::parse(
+        ".first { display:block; width:60px; height:14px; flow-from:article; overflow:hidden; background-color:#00f; }\
+         .second { display:block; width:60px; height:14px; flow-from:article; overflow:hidden; background-color:#00f; }\
+         .source { display:block; width:60px; flow-into:article content; font-size:12px; color:#f00; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(
+                    (|ui: &mut egui::Ui| {
+                        ui.label("anonymous one");
+                        ui.label("anonymous two");
+                        ui.response()
+                    })
+                    .selector(".source"),
+                );
+                *capture.lock().unwrap() = vec![
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let regions = bounds.lock().unwrap();
+    for region in regions.iter() {
+        let has_red_text = (region.left().floor() as i32..region.right().ceil() as i32).any(|x| {
+            (region.top().floor() as i32..region.bottom().ceil() as i32).any(|y| {
+                let color = pixel(&pixels, x as f32, y as f32);
+                color[0] > 150 && color[1] < 100 && color[2] < 100
+            })
+        });
+        assert!(
+            has_red_text,
+            "region received no anonymous text: {region:?}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn auto_height_region_expands_to_flow_content_test() {
+    let stylesheet = Stylesheet::parse(
+        ".region { display:block; width:55px; flow-from:article; box-sizing:content-box; padding:2px; border:1px solid black; background-color:#00f; }\
+         .after { display:block; width:55px; height:5px; background-color:#0f0; }\
+         .source { flow-into:article; font-size:12px; color:#f00; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(
+                    egui::Label::new("one two three four five six seven eight nine")
+                        .selector(".source"),
+                );
+                let region = ui.add(empty_response.selector(".region")).rect;
+                let after = ui.add(empty_response.selector(".after")).rect;
+                *capture.lock().unwrap() = Some((region, after));
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let (region, after) = bounds.lock().unwrap().unwrap();
+    assert!(
+        region.height() > 14.0,
+        "auto region did not grow: {region:?}"
+    );
+    assert!(
+        after.top() >= region.bottom() - 0.01,
+        "following block overlaps region: {region:?} {after:?}"
+    );
+    let has_red_text = (region.left().floor() as i32..region.right().ceil() as i32).any(|x| {
+        (region.top().floor() as i32..region.bottom().ceil() as i32).any(|y| {
+            let color = pixel(&pixels, x as f32, y as f32);
+            color[0] > 150 && color[1] < 100 && color[2] < 100
+        })
+    });
+    assert!(
+        has_red_text,
+        "auto region did not receive flow content: {region:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn region_fragment_break_discards_overflow_from_the_last_region_test() {
+    async fn render(fragment: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".first {{ display:block; width:40px; height:14px; flow-from:article; }}\
+             .last {{ display:block; width:40px; height:14px; flow-from:article; region-fragment:{fragment}; }}\
+             .source {{ flow-into:article; font-size:12px; color:#f00; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(empty_response.selector(".first"));
+                    let last = ui.add(empty_response.selector(".last")).rect;
+                    ui.add(egui::Label::new("one two three four five six").selector(".source"));
+                    ui.add(egui::Label::new("continued").selector(".source"));
+                    *capture.lock().unwrap() = Some(last);
+                    ui.response()
+                })
+                .selector(".container"),
+            );
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    let (auto_pixels, last) = render("auto").await;
+    let (break_pixels, _) = render("break").await;
+    let overflow_has_text = (last.left().floor() as i32..last.right().ceil() as i32).any(|x| {
+        (last.bottom().floor() as i32..(last.bottom() + 14.0).ceil() as i32).any(|y| {
+            let color = pixel(&auto_pixels, x as f32, y as f32);
+            color[0] > 150 && color[1] < 100 && color[2] < 100
+        })
+    });
+    let break_overflow_has_text =
+        (last.left().floor() as i32..last.right().ceil() as i32).any(|x| {
+            (last.bottom().floor() as i32..(last.bottom() + 14.0).ceil() as i32).any(|y| {
+                let color = pixel(&break_pixels, x as f32, y as f32);
+                color[0] > 150 && color[1] < 100 && color[2] < 100
+            })
+        });
+    assert!(overflow_has_text);
+    assert!(!break_overflow_has_text);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn region_break_before_advances_to_the_next_region_test() {
+    let stylesheet = Stylesheet::parse(
+        ".first { display:block; width:50px; height:28px; flow-from:article; }\
+         .second { display:block; width:50px; height:14px; flow-from:article; }\
+         .source { flow-into:article; font-size:12px; color:#f00; }\
+         .next { flow-into:article; font-size:12px; color:#f00; break-before:region; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                *capture.lock().unwrap() = vec![
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                ];
+                ui.add(egui::Label::new("one").selector(".source"));
+                ui.add(egui::Label::new("two").selector(".next"));
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let regions = bounds.lock().unwrap();
+    for region in regions.iter() {
+        let has_red_text = (region.left().floor() as i32..region.right().ceil() as i32).any(|x| {
+            (region.top().floor() as i32..region.bottom().ceil() as i32).any(|y| {
+                let color = pixel(&pixels, x as f32, y as f32);
+                color[0] > 150 && color[1] < 100 && color[2] < 100
+            })
+        });
+        assert!(has_red_text, "region received no text: {region:?}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn region_break_after_advances_following_content_test() {
+    let stylesheet = Stylesheet::parse(
+        ".first { display:block; width:50px; height:28px; flow-from:article; }\
+         .second { display:block; width:50px; height:14px; flow-from:article; }\
+         .source { flow-into:article; font-size:12px; color:#f00; }\
+         .previous { flow-into:article; font-size:12px; color:#f00; break-after:region; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                *capture.lock().unwrap() = vec![
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                ];
+                ui.add(egui::Label::new("one").selector(".previous"));
+                ui.add(egui::Label::new("two").selector(".source"));
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let regions = bounds.lock().unwrap();
+    for region in regions.iter() {
+        let has_red_text = (region.left().floor() as i32..region.right().ceil() as i32).any(|x| {
+            (region.top().floor() as i32..region.bottom().ceil() as i32).any(|y| {
+                let color = pixel(&pixels, x as f32, y as f32);
+                color[0] > 150 && color[1] < 100 && color[2] < 100
+            })
+        });
+        assert!(has_red_text, "region received no text: {region:?}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn compound_flow_elements_move_to_regions_in_document_order_test() {
+    let stylesheet = Stylesheet::parse(
+        ".first { display:block; width:50px; height:14px; flow-from:story; background-color:#00f; }\
+         .second { display:block; width:50px; height:14px; flow-from:story; background-color:#00f; }\
+         .source { display:block; width:50px; flow-into:story; }\
+         .content-source { display:block; width:50px; flow-into:story content; }\
+         .red { display:block; width:30px; height:14px; background-color:#f00; }\
+         .green { display:block; width:30px; height:14px; background-color:#0f0; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                for (child, source) in [(".red", ".source"), (".green", ".content-source")] {
+                    ui.add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(empty_response.selector(child));
+                            ui.response()
+                        })
+                        .selector(source),
+                    );
+                }
+                *capture.lock().unwrap() = vec![
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let regions = bounds.lock().unwrap();
+    assert_eq!(
+        pixel(&pixels, regions[0].left() + 5.0, regions[0].top() + 5.0),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, regions[1].left() + 5.0, regions[1].top() + 5.0),
+        [0, 255, 0, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn region_overflow_clips_compound_flow_content_test() {
+    let stylesheet = Stylesheet::parse(
+        ".region { display:block; width:40px; height:14px; flow-from:story; overflow:hidden; }\
+         .source { display:block; width:60px; flow-into:story; }\
+         .child { display:block; width:60px; height:14px; background-color:#f00; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(
+                    (|ui: &mut egui::Ui| {
+                        ui.add(empty_response.selector(".child"));
+                        ui.response()
+                    })
+                    .selector(".source"),
+                );
+                *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".region")).rect);
+                ui.response()
+            })
+            .selector(".container"),
+        );
+    })
+    .await;
+    let region = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, region.left() + 35.0, region.top() + 5.0),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, region.right() + 5.0, region.top() + 5.0),
+        [255; 4]
+    );
 }

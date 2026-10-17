@@ -31,6 +31,8 @@ struct Geometry {
     margin: egui::epaint::MarginF32,
     extent: Vec2,
     fragments: Vec<crate::layout_tree::Fragment>,
+    flow_source: bool,
+    flow_region_content: bool,
     slices: Vec<crate::layout_tree::Slice>,
     rules: Vec<egui::Rect>,
     text_vertical: bool,
@@ -69,6 +71,8 @@ struct Node {
     style: Rc<BoxStyle>,
     children: smallvec::SmallVec<[usize; 4]>,
     parent: Option<usize>,
+    flow_source: bool,
+    flow_clip: Option<Rect>,
     measured: Vec2,
     used: Geometry,
     scroll: Vec2,
@@ -351,6 +355,8 @@ pub(crate) fn show(
             style: style.clone(),
             children: smallvec::SmallVec::new(),
             parent,
+            flow_source: false,
+            flow_clip: None,
             measured: Vec2::ZERO,
             used: geometry.clone(),
             scroll,
@@ -521,7 +527,15 @@ pub(crate) fn show(
             .color;
         if frame.nodes[index].children.is_empty() {
             let color = frame.nodes[index].color;
-            let mut text = measure_text(ui.ctx(), layer, start, end, measured, &style.format);
+            let mut text = measure_text(
+                ui.ctx(),
+                layer,
+                start,
+                end,
+                measured,
+                &style.format,
+                style.format.flow_into_content,
+            );
             if let Some(text) = &mut text
                 && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
                     stylesheet,
@@ -643,7 +657,16 @@ pub(crate) fn show(
             )
         })
         .unwrap_or(measured);
-    if !geometry.fragments.is_empty() {
+    if geometry.flow_region_content {
+        ui.ctx().graphics_mut(|layers| {
+            let list = layers.entry(layer);
+            for index in start.0..end.0 {
+                list.mutate_shape(egui::layers::ShapeIdx(index), |entry| {
+                    entry.shape = egui::Shape::Noop;
+                });
+            }
+        });
+    } else if !geometry.flow_source && !geometry.fragments.is_empty() {
         if let Some(text) = active.0.borrow().nodes[index].text.as_ref() {
             replace_fragmented_text(FragmentedTextInput {
                 context: ui.ctx(),
@@ -1572,6 +1595,10 @@ pub(crate) fn show(
         }
     }
     if root {
+        if let Some(cache) = ui.ctx().data(|data| data.get_temp::<Cache>(id)) {
+            let frame = active.0.borrow();
+            paint_named_flow_texts(&frame, &cache, ui.ctx());
+        }
         reorder_paint(&active.0.borrow(), ui.ctx());
         let mut frame = active.0.borrow_mut();
         frame.nodes.clear();
@@ -1896,6 +1923,7 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             && node.style.layout.position != Position::Sticky
             && !node.style.layout.float.is_floated()
             && !node.style.inline
+            && !node.flow_source
             && node.paint.as_ref().is_none_or(|paint| {
                 paint.overlay == paint.end
                     && paint.geometry.slices.is_empty()
@@ -1929,6 +1957,24 @@ fn reorder_paint(frame: &Frame, context: &Context) {
         }
     }
     rank(frame, 0, &mut 0, &mut ranks);
+    let mut named_flow_content = vec![false; count];
+    for (index, node) in frame.nodes.iter().enumerate() {
+        if !node.flow_source {
+            continue;
+        }
+        let mut pending = vec![index];
+        while let Some(index) = pending.pop() {
+            if std::mem::replace(&mut named_flow_content[index], true) {
+                continue;
+            }
+            pending.extend(frame.nodes[index].children.iter().copied());
+        }
+    }
+    for (rank, in_named_flow) in ranks.iter_mut().zip(named_flow_content) {
+        if in_named_flow {
+            *rank += count;
+        }
+    }
     for (i, node) in frame.nodes.iter().enumerate() {
         let parent_context = node.parent.map_or_else(Path::new, |p| contexts[p].clone());
         let parent_group = node.parent.map_or_else(Path::new, |p| groups[p].clone());
@@ -2002,6 +2048,17 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             })
             .unwrap_or_default()
     });
+    let trailing_entries = context.graphics(|layers| {
+        layers
+            .get(layer)
+            .map(|list| {
+                list.all_entries()
+                    .skip(root.end.0)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
     let mut owners = vec![0; entries.len()];
     for (i, node) in frame.nodes.iter().enumerate() {
         if let Some(paint) = &node.paint
@@ -2033,6 +2090,11 @@ fn reorder_paint(frame: &Frame, context: &Context) {
         let Some(paint) = node.paint.as_ref() else {
             continue;
         };
+        let paint_clip = node
+            .flow_clip
+            .map_or(paint.clip, |flow_clip| paint.clip.intersect(flow_clip));
+        let mut entry = entry;
+        entry.clip_rect = entry.clip_rect.intersect(paint_clip);
         let decoration = index + root.start.0 == paint.start.0;
         let mut clips = ancestor_clips[owner]
             .iter()
@@ -2075,11 +2137,11 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                         if !shadows.is_empty() {
                             let destination = source.translate(slice.offset);
                             let shadow_clip = if node.style.format.clone_decoration {
-                                Some(paint.clip)
+                                Some(paint_clip)
                             } else {
                                 fragment_shadow_clip(
                                     destination,
-                                    paint.clip,
+                                    paint_clip,
                                     FragmentPosition {
                                         vertical: !node.style.format.writing.vertical(),
                                         forward: !node.style.format.writing.reverse(),
@@ -2122,7 +2184,7 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                     .clip_rect
                     .intersect(source_clip)
                     .translate(slice.offset)
-                    .intersect(paint.clip);
+                    .intersect(paint_clip);
                 if !clip.is_positive() {
                     continue;
                 }
@@ -2164,7 +2226,8 @@ fn reorder_paint(frame: &Frame, context: &Context) {
     }
     context.graphics_mut(|layers| {
         let list = layers.entry(layer);
-        for index in root.start.0..root.end.0 {
+        let end = list.next_idx().0;
+        for index in root.start.0..end {
             list.reset_shape(egui::layers::ShapeIdx(index));
         }
         for index in &order {
@@ -2176,6 +2239,9 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             for entry in overlays[*index].drain(..) {
                 list.add(entry.clip_rect, entry.shape);
             }
+        }
+        for entry in trailing_entries {
+            list.add(entry.clip_rect, entry.shape);
         }
     });
     for index in &order {
@@ -4795,6 +4861,8 @@ fn guess(style: &BoxStyle, available: Rect) -> Geometry {
         margin: outer,
         extent: Vec2::ZERO,
         fragments: Vec::new(),
+        flow_source: false,
+        flow_region_content: false,
         slices: Vec::new(),
         rules: Vec::new(),
         text_vertical: false,
@@ -5040,6 +5108,22 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
     let mut cache = std::mem::take(&mut frame.cache);
     frame.cache.paint_order = cache.paint_order.clone();
     cache.boxes.clear();
+    let mut measurements = frame
+        .nodes
+        .iter()
+        .map(|node| {
+            let measured = if node.style.format.writing.vertical() && node.text.is_none() {
+                vec2(node.measured.y, node.measured.x)
+            } else {
+                node.measured
+            };
+            let text = node
+                .text
+                .as_ref()
+                .map(|text| (text.job.clone(), text.extra, text.minimum));
+            (measured, text)
+        })
+        .collect::<Vec<_>>();
     let mut tree = crate::layout_tree::Tree::new(crate::math::resolve);
     let mut ids = Vec::new();
     for index in 0..frame.nodes.len() {
@@ -5186,18 +5270,82 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 },
             });
 
-        tree.nodes[usize::from(id)].atomic = node.paint.as_ref().is_some_and(|paint| {
+        let interactive = node.paint.as_ref().is_some_and(|paint| {
             paint.response.sense.senses_click() || paint.response.sense.senses_drag()
-        }) || node.style.inline
-            && node.style.format.display != crate::formatting::DisplayKind::Inline;
+        });
+        tree.nodes[usize::from(id)].atomic = interactive
+            || node.style.inline
+                && node.style.format.display != crate::formatting::DisplayKind::Inline;
+        tree.nodes[usize::from(id)].fragmentable_text = node.text.is_some()
+            && node.paint.as_ref().is_some_and(|paint| {
+                context.graphics(|layers| {
+                    let Some(list) = layers.get(paint.ui.layer_id()) else {
+                        return false;
+                    };
+                    let mut text_shapes = 0;
+                    let only_text = list
+                        .all_entries()
+                        .skip(paint.start.0)
+                        .take(paint.end.0 - paint.start.0)
+                        .all(|entry| collect_fragmentable_text(&entry.shape, &mut text_shapes));
+                    only_text
+                        && (text_shapes == 1
+                            || node.style.format.flow_into_content && text_shapes > 0)
+                })
+            });
+        tree.nodes[usize::from(id)].flow_region = node.style.format.flow_from.is_some()
+            && !node.style.contents
+            && tree.nodes[usize::from(id)].style.display != Display::None
+            && matches!(
+                tree.nodes[usize::from(id)].style.display,
+                Display::Block | Display::FlowRoot
+            )
+            && node.style.format.display != crate::formatting::DisplayKind::Inline
+            && !node.style.format.writing.vertical();
+        tree.nodes[usize::from(id)].flow_region_auto_height = tree.nodes[usize::from(id)]
+            .flow_region
+            && tree.nodes[usize::from(id)].style.size.height.is_auto();
+        let flow_name = if let Some(name) = node.style.format.flow_into.as_ref() {
+            (!node.style.format.flow_into_content
+                || node.children.is_empty() && node.text.is_some())
+            .then(|| name.clone())
+        } else {
+            node.parent.and_then(|parent| {
+                let parent_format = &frame.nodes[parent].style.format;
+                (parent_format.flow_into_content)
+                    .then(|| parent_format.flow_into.clone())
+                    .flatten()
+            })
+        };
+        tree.nodes[usize::from(id)].flow_name = flow_name.clone();
+        tree.nodes[usize::from(id)].flow_element = flow_name.is_some()
+            && tree.nodes[usize::from(id)].style.display != Display::None
+            && !node.style.layout.position.is_out_of_flow()
+            && !node.style.format.writing.vertical();
+        tree.nodes[usize::from(id)].flow_source = tree.nodes[usize::from(id)].flow_element
+            && node.children.is_empty()
+            && tree.nodes[usize::from(id)].fragmentable_text;
+        let mut ancestor = node.parent;
+        while let Some(parent) = ancestor {
+            if tree.nodes[usize::from(ids[parent])].flow_region {
+                tree.nodes[usize::from(id)].flow_region_content =
+                    !tree.nodes[usize::from(id)].flow_element;
+                break;
+            }
+            ancestor = frame.nodes[parent].parent;
+        }
         if let Some((runs, minimum)) = node
             .text
             .as_ref()
             .map(|text| text_runs(context, &text.job, &node.style.format))
         {
             frame.nodes[index].text.as_mut().unwrap().minimum = minimum;
+            if let Some((_, _, snapshot_minimum)) = &mut measurements[index].1 {
+                *snapshot_minimum = minimum;
+            }
             tree.nodes[usize::from(id)].runs = runs;
         }
+        frame.nodes[index].flow_source = tree.nodes[usize::from(id)].flow_element;
         ids.push(id);
     }
     let mut children = vec![Vec::new(); frame.nodes.len()];
@@ -5205,7 +5353,21 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
     let mut fixed = Vec::new();
     let mut layout_parents = vec![None; frame.nodes.len()];
     for (i, node) in frame.nodes.iter().enumerate() {
-        if node.style.contents {
+        if node.style.contents
+            || tree.nodes[usize::from(ids[i])].flow_element
+            || tree.nodes[usize::from(ids[i])].flow_region_content
+        {
+            if tree.nodes[usize::from(ids[i])].flow_element {
+                let mut parent = node.parent;
+                while let Some(index) = parent {
+                    if frame.nodes[index].style.contents {
+                        parent = frame.nodes[index].parent;
+                    } else {
+                        tree.nodes[usize::from(ids[i])].parent = Some(ids[index]);
+                        break;
+                    }
+                }
+            }
             continue;
         }
         if node.style.fixed {
@@ -5257,26 +5419,22 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
     let root = tree.new_with_children_owned(holder, root_children).unwrap();
     let measure =
         |input: taffy::LayoutInput, _: NodeId, index: Option<&mut usize>, style: &Style| {
-            let node = index.map(|index| &frame.nodes[*index]);
-            let measured = node.map_or(Vec2::ZERO, |node| {
-                if node.style.format.writing.vertical() && node.text.is_none() {
-                    vec2(node.measured.y, node.measured.x)
-                } else {
-                    node.measured
-                }
-            });
+            let measurement = index.map(|index| &measurements[*index]);
+            let measured = measurement.map_or(Vec2::ZERO, |measurement| measurement.0);
             taffy::compute_leaf_layout(input, style, crate::math::resolve, |known, available| {
-                let measured = if let Some(text) = node.and_then(|node| node.text.as_ref()) {
-                    let mut job = text.job.clone();
+                let measured = if let Some((job, extra, minimum)) =
+                    measurement.and_then(|measurement| measurement.1.as_ref())
+                {
+                    let mut job = job.clone();
                     job.wrap.max_width = known
                         .width
-                        .map(|w| (w - text.extra.x).max(0.0))
+                        .map(|w| (w - extra.x).max(0.0))
                         .unwrap_or_else(|| match available.width {
-                            AvailableSpace::Definite(width) => (width - text.extra.x).max(0.0),
-                            AvailableSpace::MinContent => text.minimum,
+                            AvailableSpace::Definite(width) => (width - extra.x).max(0.0),
+                            AvailableSpace::MinContent => *minimum,
                             AvailableSpace::MaxContent => f32::INFINITY,
                         });
-                    context.fonts_mut(|fonts| fonts.layout_job(job).size()) + text.extra
+                    context.fonts_mut(|fonts| fonts.layout_job(job).size()) + *extra
                 } else {
                     measured
                 };
@@ -5286,7 +5444,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 }
             })
         };
-    tree.compute_layout_with_measure(
+    tree.compute_layout_with_measure_and_regions(
         root,
         Size {
             width: AvailableSpace::Definite(frame.available.x),
@@ -5309,7 +5467,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 fixed.iter().map(|i| ids[*i]).collect(),
             )
             .unwrap();
-        tree.compute_layout_with_measure(
+        tree.compute_layout_with_measure_and_regions(
             viewport,
             Size {
                 width: AvailableSpace::Definite(frame.viewport.width()),
@@ -5342,7 +5500,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
         for index in 0..tree.nodes.len() {
             taffy::CacheTree::cache_clear(&mut tree, NodeId::from(index));
         }
-        tree.compute_layout_with_measure(
+        tree.compute_layout_with_measure_and_regions(
             root,
             Size {
                 width: AvailableSpace::Definite(frame.available.x),
@@ -5352,7 +5510,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
         )
         .unwrap();
         if let Some(viewport) = fixed_root {
-            tree.compute_layout_with_measure(
+            tree.compute_layout_with_measure_and_regions(
                 viewport,
                 Size {
                     width: AvailableSpace::Definite(frame.viewport.width()),
@@ -5362,6 +5520,29 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
             )
             .unwrap();
         }
+    }
+    for index in 0..frame.nodes.len() {
+        frame.nodes[index].flow_clip =
+            tree.nodes[usize::from(ids[index])]
+                .flow_clip
+                .map(|(clip, region_index)| {
+                    let region = &frame.nodes[region_index];
+                    let mut ancestor = Some(region_index);
+                    let mut fixed = false;
+                    while let Some(parent) = ancestor {
+                        if frame.nodes[parent].style.fixed {
+                            fixed = true;
+                            break;
+                        }
+                        ancestor = frame.nodes[parent].parent;
+                    }
+                    let offset = if fixed {
+                        frame.viewport.min.to_vec2()
+                    } else {
+                        frame.origin.to_vec2() - region.ancestor_scroll
+                    };
+                    clip.translate(offset + region.sticky)
+                });
     }
     let absolute_layouts = tree.absolute_layouts();
     for (i, node) in frame.nodes.iter().enumerate() {
@@ -5409,8 +5590,16 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
                         text_rect: tree.nodes[usize::from(ids[i])]
                             .layout_axes
                             .rect(fragment.text_rect, layout.size.width),
+                        clip: fragment.clip.map(|clip| {
+                            tree.nodes[usize::from(ids[i])]
+                                .layout_axes
+                                .rect(clip, layout.size.width)
+                        }),
                     })
                     .collect(),
+                flow_source: tree.nodes[usize::from(ids[i])].flow_source,
+                flow_region_content: tree.nodes[usize::from(ids[i])].flow_region_content
+                    || tree.nodes[usize::from(ids[i])].flow_overset,
                 slices: tree.nodes[usize::from(ids[i])]
                     .slices
                     .iter()
@@ -5480,45 +5669,96 @@ fn measure_text(
     end: egui::layers::ShapeIdx,
     measured: Vec2,
     format: &crate::formatting::Formatting,
+    allow_anonymous_content: bool,
 ) -> Option<TextMeasurement> {
-    fn collect(shape: &egui::Shape, text: &mut Option<Arc<egui::Galley>>, multiple: &mut bool) {
-        if *multiple {
-            return;
-        }
+    fn collect(shape: &egui::Shape, texts: &mut Vec<Arc<egui::Galley>>, supported: &mut bool) {
         match shape {
             egui::Shape::Text(shape) if shape.angle == 0.0 => {
-                if text.replace(shape.galley.clone()).is_some() {
-                    *multiple = true;
-                }
+                texts.push(shape.galley.clone());
             }
             egui::Shape::Vec(shapes) => shapes
                 .iter()
-                .for_each(|shape| collect(shape, text, multiple)),
+                .for_each(|shape| collect(shape, texts, supported)),
+            egui::Shape::Text(_) => *supported = false,
             _ => {}
         }
     }
-    let galley = context.graphics(|layers| {
+    let (galleys, fragmentable) = context.graphics(|layers| {
         let list = layers.get(layer)?;
-        let mut text = None;
-        let mut multiple = false;
+        let mut texts = Vec::new();
+        let mut fragmentable = true;
         for clipped in list.all_entries().skip(start.0).take(end.0 - start.0) {
-            collect(&clipped.shape, &mut text, &mut multiple);
-            if multiple {
-                return None;
-            }
+            let mut text_shapes = 0;
+            fragmentable &= collect_fragmentable_text(&clipped.shape, &mut text_shapes);
+            collect(&clipped.shape, &mut texts, &mut fragmentable);
         }
-        if multiple {
-            return None;
-        }
-        text
+        Some((texts, fragmentable))
     })?;
-    let source = prepare_text_job(context, &galley.job, format);
-    let extra = (measured - galley.size()).max(Vec2::ZERO);
+    if galleys.is_empty() || galleys.len() > 1 && (!allow_anonymous_content || !fragmentable) {
+        return None;
+    }
+    let (source_job, natural_size) = if let [galley] = galleys.as_slice() {
+        (galley.job.as_ref().clone(), galley.size())
+    } else {
+        let mut job = galleys[0].job.as_ref().clone();
+        job.text.clear();
+        job.sections.clear();
+        for (index, galley) in galleys.iter().enumerate() {
+            if index > 0 && !job.text.ends_with('\n') {
+                let format = job
+                    .sections
+                    .last()
+                    .or_else(|| galley.job.sections.first())
+                    .map(|section| section.format.clone())
+                    .unwrap_or_default();
+                job.append("\n", 0.0, format);
+            }
+            let offset = job.text.len();
+            job.text.push_str(&galley.job.text);
+            job.sections
+                .extend(
+                    galley
+                        .job
+                        .sections
+                        .iter()
+                        .map(|section| egui::text::LayoutSection {
+                            byte_range: (offset + section.byte_range.start.0).into()
+                                ..(offset + section.byte_range.end.0).into(),
+                            ..section.clone()
+                        }),
+                );
+        }
+        let size = context.fonts_mut(|fonts| fonts.layout_job(job.clone()).size());
+        (job, size)
+    };
+    let source = prepare_text_job(context, &source_job, format);
+    let extra = (measured - natural_size).max(Vec2::ZERO);
     Some(TextMeasurement {
         job: source,
         extra,
         minimum: 0.0,
     })
+}
+
+fn collect_fragmentable_text(shape: &egui::Shape, text_shapes: &mut usize) -> bool {
+    match shape {
+        egui::Shape::Text(text) if text.angle == 0.0 => {
+            *text_shapes += 1;
+            true
+        }
+        egui::Shape::Vec(shapes) => shapes
+            .iter()
+            .all(|shape| collect_fragmentable_text(shape, text_shapes)),
+        egui::Shape::Noop => true,
+        egui::Shape::Rect(rect)
+            if rect.fill == egui::Color32::TRANSPARENT
+                && rect.stroke.width == 0.0
+                && rect.stroke.color == egui::Color32::TRANSPARENT =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 fn first_letter_range(text: &str) -> Option<std::ops::Range<usize>> {
@@ -7270,6 +7510,34 @@ struct FragmentedTextInput<'a> {
     selection_visuals: &'a egui::Visuals,
 }
 
+fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Context) {
+    for node in &frame.nodes {
+        let Some(geometry) = cache
+            .boxes
+            .get(&node.id)
+            .filter(|geometry| geometry.flow_source)
+        else {
+            continue;
+        };
+        let (Some(paint), Some(text)) = (node.paint.as_ref(), node.text.as_ref()) else {
+            continue;
+        };
+        let geometry =
+            geometry.translated(frame.origin.to_vec2() - node.ancestor_scroll + node.sticky);
+        let selection_visuals = paint.ui.visuals().clone();
+        replace_fragmented_text(FragmentedTextInput {
+            context,
+            layer: paint.ui.layer_id(),
+            start: paint.start,
+            end: paint.end,
+            geometry: &geometry,
+            job: &text.job,
+            format: &node.style.format,
+            selection_visuals: &selection_visuals,
+        });
+    }
+}
+
 fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
     let FragmentedTextInput {
         context,
@@ -7322,6 +7590,10 @@ fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
     }
     for fragment in &geometry.fragments {
         if let Some(range) = &fragment.range {
+            let fragment_clip = fragment.clip.map_or(clip, |fragment_clip| {
+                clip.intersect(fragment_clip.translate(geometry.border.min.to_vec2()))
+            });
+            let fragment_painter = egui::Painter::new(context.clone(), layer, fragment_clip);
             let mut text = template.clone();
             let mut visible_range = range.clone();
             let mut layout = if let Some(marker) = &fragment.marker {
@@ -7385,7 +7657,7 @@ fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
             if format.writing.vertical() {
                 vertical_text(&mut text, fragment.text_rect.size(), format);
             }
-            painter.add(egui::Shape::Text(text));
+            fragment_painter.add(egui::Shape::Text(text));
         }
     }
 }

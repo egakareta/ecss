@@ -83,7 +83,7 @@
 
 - **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Partial.**
   - CSS properties: `chains`, `flow`, ~~`grid`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~, ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
-  - Partial because chained flows advance at widget boundaries; a widget is not fragmented between slots, and anonymous content does not flow through template slots.
+  - Partial because splitting is limited to horizontal text-only widgets at line breaks, other widgets remain atomic, anonymous content is not represented as flowable nodes, and the full fragmentation rules are not implemented.
 - **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
     ~~`padding-right`~~, ~~`padding-top`~~.
@@ -122,8 +122,9 @@
 - **[Grid Layout Level 3](https://www.w3.org/TR/css-grid-3/) - Unsupported.**
   - CSS properties: `fit-tolerance`, `flow-tolerance`, `item-cross`, `item-direction`, `item-flow`, `item-pack`, `item-track`,
     `item-wrap`.
-- **[Regions](https://www.w3.org/TR/css3-regions/) - Unsupported.**
+- **[Regions](https://www.w3.org/TR/css3-regions/) - Partial.**
   - CSS properties: `break-after`, `break-before`, `break-inside`, `flow-from`, `flow-into`, `region-fragment`.
+  - Supports horizontal flows through explicitly sized or flow-sized (auto-height) block regions, including compound element sources, direct child elements selected with `flow-into: ... content`, anonymous text emitted by content-flow containers, and clipping when a region has non-visible overflow. Compound sources remain atomic between regions. Anonymous non-text content, auto-sized non-block regions, and complete fragmentation/overset behavior remain unsupported.
 - **CSS Tables Module - Partial.**
   - CSS properties: ~~`border-collapse`~~, ~~`border-spacing`~~, ~~`caption-side`~~, ~~`empty-cells`~~, ~~`table-layout`~~.
   - Partial because tables are laid out through an internal grid model, which does not reproduce the complete CSS table sizing and formatting algorithms.

@@ -28,7 +28,7 @@ fn template_flow_places_a_widget_in_its_named_slot() {
 fn chains_continue_each_flow_in_the_next_slot_when_the_current_slot_is_full() {
     let context = Context::default();
     Stylesheet::parse(
-        ".grid { display:grid; width:200px; height:50px; grid-template-columns:50px 50px 50px 50px; grid-template-rows:50px; grid-template-areas:\"* a b c\"; chains:* a, b c; } .first-item, .second-item { width:50px; height:30px; } .third-item, .fourth-item { width:50px; height:30px; flow:b; }",
+        ".grid { display:grid; width:200px; height:50px; grid-template-columns:50px 50px 50px 50px; grid-template-rows:50px; grid-template-areas:\"* a b c\"; chains:missing * a, missing-third b c; } .first-item, .second-item { width:50px; height:30px; } .third-item, .fourth-item { width:50px; height:30px; flow:b; }",
     )
     .unwrap()
     .install(&context);
@@ -53,6 +53,91 @@ fn chains_continue_each_flow_in_the_next_slot_when_the_current_slot_is_full() {
     assert_eq!(rects[2].left(), 100.0, "{rects:?}");
     assert_eq!(rects[3].left(), 150.0, "{rects:?}");
     assert_eq!(rects[2].top(), rects[3].top(), "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_chain_is_ignored_when_a_nonfinal_slot_depends_on_content_size() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; width:100px; height:50px; grid-template-columns:50px 50px; grid-template-rows:auto; grid-template-areas:\"first second\"; chains:first second; } .item { width:50px; height:20px; flow:first; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = vec![
+                    ui.add(empty_response.selector(".item")).rect,
+                    ui.add(empty_response.selector(".item")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert_eq!(rects[0].left(), rects[1].left(), "{rects:?}");
+    assert!(rects[1].top() >= rects[0].bottom(), "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_chain_is_ignored_when_a_nonfinal_slot_uses_percentage_tracks() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; width:100px; height:50px; grid-template-columns:50% 50%; grid-template-rows:50px; grid-template-areas:\"first second\"; chains:first second; } .item { width:40px; height:20px; flow:first; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = vec![
+                    ui.add(empty_response.selector(".item")).rect,
+                    ui.add(empty_response.selector(".item")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert_eq!(rects[0].left(), rects[1].left(), "{rects:?}");
+    assert!(rects[1].top() >= rects[0].bottom(), "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn forced_breaks_advance_to_the_next_chained_slot() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; width:90px; height:50px; grid-template-columns:30px 30px 30px; grid-template-rows:50px; grid-template-areas:\"first second third\"; chains:first second third; } .item { width:30px; height:10px; flow:first; } .before { width:30px; height:10px; flow:first; break-before:column; } .after { width:30px; height:10px; flow:first; break-after:column; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = vec![
+                    ui.add(empty_response.selector(".item")).rect,
+                    ui.add(empty_response.selector(".before")).rect,
+                    ui.add(empty_response.selector(".after")).rect,
+                    ui.add(empty_response.selector(".item")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert_eq!(rects[0].left(), 0.0, "{rects:?}");
+    assert_eq!(rects[1].left(), 30.0, "{rects:?}");
+    assert_eq!(rects[1].top(), 0.0, "{rects:?}");
+    assert_eq!(rects[2].left(), 30.0, "{rects:?}");
+    assert_eq!(rects[2].top(), 10.0, "{rects:?}");
+    assert_eq!(rects[3].left(), 60.0, "{rects:?}");
+    assert_eq!(rects[3].top(), 0.0, "{rects:?}");
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

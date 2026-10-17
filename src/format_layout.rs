@@ -1783,6 +1783,7 @@ impl Tree<'_> {
                         ),
                         token.text_size,
                     ),
+                    clip: None,
                 });
                 node.layout_parent = Some(id);
                 if token.gap > 0.0 {
@@ -1849,6 +1850,9 @@ impl Tree<'_> {
                             text_rect: fragment
                                 .text_rect
                                 .translate(vec2(node.layout.location.x, node.layout.location.y)),
+                            clip: fragment.clip.map(|clip| {
+                                clip.translate(vec2(node.layout.location.x, node.layout.location.y))
+                            }),
                         })
                     })
                     .collect();

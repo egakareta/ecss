@@ -84,9 +84,18 @@ pub(crate) enum Break {
     #[default]
     Auto,
     Avoid,
+    AvoidRegion,
     Column,
     Page,
+    Region,
     Always,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RegionFragment {
+    #[default]
+    Auto,
+    Break,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -132,6 +141,10 @@ pub(crate) struct Formatting {
     pub subgrid: [bool; 2],
     pub subgrid_names: [Vec<Vec<String>>; 2],
     pub flow: Option<String>,
+    pub flow_from: Option<String>,
+    pub flow_into: Option<String>,
+    pub flow_into_content: bool,
+    pub region_fragment: RegionFragment,
     pub chains: Vec<Vec<String>>,
     pub column_count: Option<usize>,
     pub column_width: Option<f32>,
@@ -178,6 +191,10 @@ impl Default for Formatting {
             subgrid: [false; 2],
             subgrid_names: Default::default(),
             flow: None,
+            flow_from: None,
+            flow_into: None,
+            flow_into_content: false,
+            region_fragment: RegionFragment::Auto,
             chains: Vec::new(),
             column_count: None,
             column_width: None,
@@ -225,9 +242,12 @@ pub(crate) fn supported(name: &str) -> bool {
             | "break-before"
             | "break-after"
             | "break-inside"
+            | "flow-from"
+            | "flow-into"
             | "page-break-before"
             | "page-break-after"
             | "page-break-inside"
+            | "region-fragment"
             | "orphans"
             | "widows"
             | "box-decoration-break"
@@ -388,9 +408,22 @@ pub(crate) fn apply(
         }
         "break-before" | "page-break-before" => f.before = parse_break(value)?,
         "break-after" | "page-break-after" => f.after = parse_break(value)?,
+        "flow-from" => f.flow_from = parse_flow_name(value)?,
+        "flow-into" => {
+            let (name, content) = parse_flow_into(value)?;
+            f.flow_into = name;
+            f.flow_into_content = content;
+        }
+        "region-fragment" => {
+            f.region_fragment = match value.to_ascii_lowercase().as_str() {
+                "auto" => RegionFragment::Auto,
+                "break" => RegionFragment::Break,
+                _ => return Err("invalid region-fragment"),
+            }
+        }
         "break-inside" | "page-break-inside" => {
             f.inside = parse_break(value)?;
-            if !matches!(f.inside, Break::Auto | Break::Avoid) {
+            if !matches!(f.inside, Break::Auto | Break::Avoid | Break::AvoidRegion) {
                 return Err("invalid break-inside");
             }
         }
@@ -571,11 +604,60 @@ fn parse_break(value: &str) -> Result<Break, &'static str> {
     Ok(match value {
         "auto" => Break::Auto,
         "avoid" | "avoid-page" | "avoid-column" => Break::Avoid,
+        "avoid-region" => Break::AvoidRegion,
         "column" => Break::Column,
         "page" | "left" | "right" | "recto" | "verso" => Break::Page,
+        "region" => Break::Region,
         "always" | "all" => Break::Always,
         _ => return Err("invalid break value"),
     })
+}
+
+fn parse_flow_name(value: &str) -> Result<Option<String>, &'static str> {
+    if value.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let mut parser = Parser::new(value);
+    let name = parser
+        .expect_ident_cloned()
+        .map_err(|_| "invalid flow name")?;
+    if [
+        "none", "inherit", "initial", "unset", "revert", "default", "auto",
+    ]
+    .iter()
+    .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    {
+        return Err("invalid flow name");
+    }
+    parser.expect_exhausted().map_err(|_| "invalid flow name")?;
+    Ok(Some(name.to_string()))
+}
+
+fn parse_flow_into(value: &str) -> Result<(Option<String>, bool), &'static str> {
+    if value.eq_ignore_ascii_case("none") {
+        return Ok((None, false));
+    }
+    let mut parser = Parser::new(value);
+    let name = parser
+        .expect_ident_cloned()
+        .map_err(|_| "invalid flow name")?;
+    if [
+        "none", "inherit", "initial", "unset", "revert", "default", "auto",
+    ]
+    .iter()
+    .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    {
+        return Err("invalid flow name");
+    }
+    let mode = parser.try_parse(|parser| parser.expect_ident_cloned()).ok();
+    parser.expect_exhausted().map_err(|_| "invalid flow-into")?;
+    let content = match mode.map(|mode| mode.to_string().to_ascii_lowercase()) {
+        None => false,
+        Some(mode) if mode == "element" => false,
+        Some(mode) if mode == "content" => true,
+        _ => return Err("invalid flow-into"),
+    };
+    Ok((Some(name.to_string()), content))
 }
 
 pub(crate) fn display(value: &str) -> Option<(DisplayKind, bool)> {
