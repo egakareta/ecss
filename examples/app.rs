@@ -111,7 +111,7 @@ fn hero(ui: &mut egui::Ui) {
             ui.add(egui::Label::new("CSS for egui").selector(".title"));
             ui.add(
                 egui::Label::new(
-                    "Layout, typography, sizing, and interactive states—all from a stylesheet.",
+                    "Layout, typography, sizing, and interactive states from a stylesheet.",
                 )
                 .selector(".hero-copy"),
             );
@@ -485,7 +485,7 @@ mod tests {
 
         let targets = [
             "CSS for egui",
-            "Layout, typography, sizing, and interactive states—all from a stylesheet.",
+            "Layout, typography, sizing, and interactive states from a stylesheet.",
             "A grid of cards with wrapping flex actions.",
             "Move over a button or press it to see state rules.",
             "Font family, size, weight, and line-height rules.",
