@@ -142,7 +142,8 @@ impl Drop for Scope {
         self.active.0.borrow_mut().stack.pop();
         if self.root {
             FRAMES.with(|frames| frames.borrow_mut().remove(&self.active.1));
-            self.context.data_mut(|d| d.remove::<u64>(Id::new(ACTIVE)));
+            self.context
+                .data_mut(|d| d.remove::<u64>(Id::unique(ACTIVE)));
         }
     }
 }
@@ -159,7 +160,7 @@ pub(crate) fn show(
         .is_none_or(|element_id| first_element_occurrence(ui.ctx(), element_id));
     let id = ui.next_auto_id().with("ecss.layout");
     ui.skip_ahead_auto_ids(1);
-    let active = ui.ctx().data(|d| d.get_temp::<u64>(Id::new(ACTIVE)));
+    let active = ui.ctx().data(|d| d.get_temp::<u64>(Id::unique(ACTIVE)));
     let active = active.and_then(|key| FRAMES.with(|frames| frames.borrow().get(&key).cloned()));
     let root = active.is_none();
     if root {
@@ -192,7 +193,7 @@ pub(crate) fn show(
         );
         FRAMES.with(|frames| frames.borrow_mut().insert(active.1, active.clone()));
         ui.ctx()
-            .data_mut(|d| d.insert_temp(Id::new(ACTIVE), active.1));
+            .data_mut(|d| d.insert_temp(Id::unique(ACTIVE), active.1));
         active
     });
     let state = ui
@@ -406,7 +407,7 @@ pub(crate) fn show(
         );
     }
     let builder = egui::UiBuilder::new()
-        .id(id)
+        .scope_id(id)
         .max_rect(widget_rect)
         .layout(egui::Layout::top_down(egui::Align::Min));
     let mut content_ui =
@@ -1676,9 +1677,12 @@ fn capture_element_image(
                 .take(end.0.saturating_sub(start.0))
                 .filter_map(|entry| {
                     let clip_rect = entry.clip_rect.intersect(bounds);
-                    clip_rect.is_positive().then(|| egui::epaint::ClippedShape {
-                        clip_rect,
-                        shape: entry.shape.clone(),
+                    clip_rect.is_positive().then(|| {
+                        let mut clipped_shape =
+                            egui::epaint::ClippedShape::new(clip_rect, entry.shape.clone());
+                        clipped_shape.transform_after_tessellation =
+                            entry.transform_after_tessellation;
+                        clipped_shape
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -1770,7 +1774,7 @@ fn element_image_fingerprint(
 
 fn publish_element_image(context: &Context, id: String, image: ElementImage) {
     let changed = context.data_mut(|data| {
-        let key = Id::new(ELEMENT_IMAGES);
+        let key = Id::unique(ELEMENT_IMAGES);
         let mut images = data
             .get_temp::<HashMap<String, Arc<ElementImage>>>(key)
             .unwrap_or_default();
@@ -1788,7 +1792,7 @@ fn publish_element_image(context: &Context, id: String, image: ElementImage) {
 
 fn remove_element_image(context: &Context, id: &str) {
     let removed = context.data_mut(|data| {
-        let key = Id::new(ELEMENT_IMAGES);
+        let key = Id::unique(ELEMENT_IMAGES);
         let Some(mut images) = data.get_temp::<HashMap<String, Arc<ElementImage>>>(key) else {
             return false;
         };
@@ -1804,7 +1808,7 @@ fn remove_element_image(context: &Context, id: &str) {
 fn first_element_occurrence(context: &Context, id: &str) -> bool {
     let pass = context.cumulative_pass_nr();
     context.data_mut(|data| {
-        let key = Id::new(ELEMENT_OCCURRENCES);
+        let key = Id::unique(ELEMENT_OCCURRENCES);
         let (seen_pass, mut seen) = data
             .get_temp::<(u64, HashSet<String>)>(key)
             .filter(|(seen_pass, _)| *seen_pass == pass)
@@ -1844,7 +1848,7 @@ fn element_source_is_eligible(frame: &Frame, index: usize) -> bool {
 
 fn element_image(context: &Context, id: &str) -> Option<Arc<ElementImage>> {
     let image = context.data(|data| {
-        data.get_temp::<HashMap<String, Arc<ElementImage>>>(Id::new(ELEMENT_IMAGES))
+        data.get_temp::<HashMap<String, Arc<ElementImage>>>(Id::unique(ELEMENT_IMAGES))
             .and_then(|images| images.get(id).cloned())
     })?;
     (context
@@ -1926,12 +1930,12 @@ fn clear_previous_label_selection(context: &Context) {
     let Some(press_time) = press_time else {
         return;
     };
-    let last_press = context.data(|data| data.get_temp::<u64>(Id::new(LABEL_SELECTION_PRESS)));
+    let last_press = context.data(|data| data.get_temp::<u64>(Id::unique(LABEL_SELECTION_PRESS)));
     // egui can rerun this input frame for additional layout passes.
     if last_press == Some(press_time) {
         return;
     }
-    context.data_mut(|data| data.insert_temp(Id::new(LABEL_SELECTION_PRESS), press_time));
+    context.data_mut(|data| data.insert_temp(Id::unique(LABEL_SELECTION_PRESS), press_time));
     context
         .plugin::<egui::text_selection::LabelSelectionState>()
         .lock()
@@ -2194,10 +2198,7 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                                 {
                                     append_painted_entry(
                                         context,
-                                        egui::epaint::ClippedShape {
-                                            clip_rect: shadow_clip,
-                                            shape: shadow,
-                                        },
+                                        egui::epaint::ClippedShape::new(shadow_clip, shadow),
                                         &clips,
                                         &mut grouped[owner],
                                     );
@@ -2219,7 +2220,7 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                 if !clip.is_positive() {
                     continue;
                 }
-                let mut shape = if decoration && node.style.format.clone_decoration {
+                let shape = if decoration && node.style.format.clone_decoration {
                     clone_decoration(
                         &entry.shape,
                         &BoxDecorationGeometry::new(
@@ -2242,16 +2243,11 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                 } else {
                     entry.shape.clone()
                 };
-                shape.transform(egui::emath::TSTransform::from_translation(slice.offset));
-                append_painted_entry(
-                    context,
-                    egui::epaint::ClippedShape {
-                        clip_rect: clip,
-                        shape,
-                    },
-                    &clips,
-                    &mut grouped[owner],
-                );
+                let mut clipped_shape = egui::epaint::ClippedShape::new(entry.clip_rect, shape);
+                clipped_shape.transform_after_tessellation = entry.transform_after_tessellation;
+                clipped_shape.transform(egui::emath::TSTransform::from_translation(slice.offset));
+                clipped_shape.clip_rect = clip;
+                append_painted_entry(context, clipped_shape, &clips, &mut grouped[owner]);
             }
         }
     }
@@ -2972,7 +2968,7 @@ fn gradient_paint_shape(
         clip: clip.cloned(),
     };
     let cache = context.data_mut(|data| {
-        let id = Id::new(GRADIENT_MESH_CACHE);
+        let id = Id::unique(GRADIENT_MESH_CACHE);
         if let Some(cache) = data.get_temp::<Arc<std::sync::Mutex<GradientMeshCache>>>(id) {
             cache
         } else {
@@ -3631,7 +3627,7 @@ fn cross_fade_texture(
     let width = (logical_size.x * scale).ceil().clamp(1.0, 4096.0) as usize;
     let height = (logical_size.y * scale).ceil().clamp(1.0, 4096.0) as usize;
     let source_revision = image_source_revision(image, context, scale, invalid_elements);
-    let key = egui::Id::new((
+    let key = egui::Id::unique((
         "ecss.cross-fade",
         format!("{image:?}:{scale}:{logical_size:?}:{source_revision}"),
     ));
@@ -6313,10 +6309,7 @@ fn clip_shape_to_paths(
 ) -> Vec<egui::Shape> {
     context
         .tessellate(
-            vec![egui::epaint::ClippedShape {
-                clip_rect: clip.bounds(),
-                shape,
-            }],
+            vec![egui::epaint::ClippedShape::new(clip.bounds(), shape)],
             context.pixels_per_point(),
         )
         .into_iter()
@@ -6591,10 +6584,10 @@ fn clip_painted_entry(
                             return None;
                         }
                     }
-                    Some(egui::epaint::ClippedShape {
+                    Some(egui::epaint::ClippedShape::new(
                         clip_rect,
-                        shape: egui::Shape::Mesh(mesh.into()),
-                    })
+                        egui::Shape::Mesh(mesh.into()),
+                    ))
                 }
                 egui::epaint::Primitive::Callback(callback) => {
                     for clip in clips {
@@ -6602,10 +6595,10 @@ fn clip_painted_entry(
                     }
                     clip_rect
                         .is_positive()
-                        .then_some(egui::epaint::ClippedShape {
+                        .then_some(egui::epaint::ClippedShape::new(
                             clip_rect,
-                            shape: egui::Shape::Callback(callback),
-                        })
+                            egui::Shape::Callback(callback),
+                        ))
                 }
             }
         })

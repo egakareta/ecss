@@ -13,7 +13,7 @@ const TEXTURE_IMAGES: &str = "ecss.texture-images";
 
 pub(crate) fn remember_texture_image(context: &Context, id: TextureId, image: ColorImage) {
     context.data_mut(|data| {
-        let key = Id::new(TEXTURE_IMAGES);
+        let key = Id::unique(TEXTURE_IMAGES);
         let mut images = data
             .get_temp::<HashMap<TextureId, Arc<ColorImage>>>(key)
             .unwrap_or_default();
@@ -24,7 +24,7 @@ pub(crate) fn remember_texture_image(context: &Context, id: TextureId, image: Co
 
 pub(crate) fn texture_image(context: &Context, id: TextureId) -> Option<Arc<ColorImage>> {
     context.data(|data| {
-        data.get_temp::<HashMap<TextureId, Arc<ColorImage>>>(Id::new(TEXTURE_IMAGES))
+        data.get_temp::<HashMap<TextureId, Arc<ColorImage>>>(Id::unique(TEXTURE_IMAGES))
             .and_then(|images| images.get(&id).cloned())
     })
 }
@@ -88,7 +88,7 @@ impl ImageAssets {
     }
 
     pub(crate) fn texture(&self, context: &Context, url: &str) -> Option<TextureHandle> {
-        let id = Id::new(("ecss.background-image", url));
+        let id = Id::unique(("ecss.background-image", url));
         if let Some(texture) = context.data(|data| data.get_temp::<TextureHandle>(id)) {
             return Some(texture);
         }
@@ -116,7 +116,7 @@ impl ImageAssets {
             return Some((texture.clone(), texture.size()));
         };
 
-        let id = Id::new((
+        let id = Id::unique((
             "ecss.border-image.svg",
             url,
             default_size.x.to_bits(),
@@ -149,7 +149,7 @@ impl ImageAssets {
     }
 
     pub(crate) fn mark_load_started(&self, context: &Context) -> bool {
-        let id = Id::new(("ecss.background-load", Arc::as_ptr(&self.0) as usize));
+        let id = Id::unique(("ecss.background-load", Arc::as_ptr(&self.0) as usize));
         if context
             .data(|data| data.get_temp::<bool>(id))
             .unwrap_or(false)

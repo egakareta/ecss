@@ -369,7 +369,7 @@ impl Stylesheet {
         });
 
         let background_registered = context
-            .data(|data| data.get_temp::<bool>(Id::new(BACKGROUND_ID)))
+            .data(|data| data.get_temp::<bool>(Id::unique(BACKGROUND_ID)))
             .unwrap_or(false);
         if !background_registered {
             context.on_begin_pass(
@@ -383,7 +383,7 @@ impl Stylesheet {
                 }),
             );
             context.data_mut(|data| {
-                data.insert_temp(Id::new(BACKGROUND_ID), true);
+                data.insert_temp(Id::unique(BACKGROUND_ID), true);
             });
         }
     }
@@ -399,7 +399,7 @@ impl Stylesheet {
         });
         let stylesheet = Arc::new(self.clone());
         context.data_mut(|data| {
-            data.insert_temp(Id::new(STYLESHEET_ID), stylesheet);
+            data.insert_temp(Id::unique(STYLESHEET_ID), stylesheet);
         });
         FontAssets::install_shared(
             self.fonts.clone(),
@@ -450,7 +450,7 @@ impl<W: Widget> Widget for StyledWidget<W> {
 
         let stylesheet = ui
             .ctx()
-            .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::new(STYLESHEET_ID)));
+            .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::unique(STYLESHEET_ID)));
         let Some(stylesheet) = stylesheet else {
             return widget.ui(ui);
         };

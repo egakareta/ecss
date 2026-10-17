@@ -10,7 +10,7 @@ license = "MIT"
 [dependencies]
 base64 = "0.22"
 cssparser = "0.38"
-egui = "0.36"
+egui = { version = "0.37", features = ["default_fonts"] }
 ehttp = { version = "0.7", features = ["native-async"] }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
@@ -40,7 +40,7 @@ unicode-linebreak = "0.1"
 wuff = "0.2"
 
 [dev-dependencies]
-eframe = { version = "0.36", default-features = false, features = ["wayland", "wgpu"] }
+eframe = { version = "0.37", default-features = false, features = ["wayland", "wgpu"] }
 futures-channel = "0.3"
 log = "0.4"
 paste = "1"

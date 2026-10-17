@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex, RwLock,
@@ -217,19 +216,19 @@ impl FontAssets {
     ) {
         let should_register = context.data_mut(|data| {
             let generation = data
-                .get_temp::<u64>(Id::new(FONT_GENERATION_ID))
+                .get_temp::<u64>(Id::unique(FONT_GENERATION_ID))
                 .unwrap_or_default()
                 .wrapping_add(1);
-            data.insert_temp(Id::new(FONT_GENERATION_ID), generation);
-            data.insert_temp(Id::new(FONT_ASSETS_ID), assets);
-            data.insert_temp(Id::new(FONT_REVISION_ID), revision);
-            data.insert_temp(Id::new(FONT_REQUEST_ID), global_request);
+            data.insert_temp(Id::unique(FONT_GENERATION_ID), generation);
+            data.insert_temp(Id::unique(FONT_ASSETS_ID), assets);
+            data.insert_temp(Id::unique(FONT_REVISION_ID), revision);
+            data.insert_temp(Id::unique(FONT_REQUEST_ID), global_request);
 
             let callback_registered = data
-                .get_temp::<bool>(Id::new(FONT_CALLBACK_REGISTERED_ID))
+                .get_temp::<bool>(Id::unique(FONT_CALLBACK_REGISTERED_ID))
                 .unwrap_or(false);
             if !callback_registered {
-                data.insert_temp(Id::new(FONT_CALLBACK_REGISTERED_ID), true);
+                data.insert_temp(Id::unique(FONT_CALLBACK_REGISTERED_ID), true);
             }
             !callback_registered
         });
@@ -247,12 +246,12 @@ impl FontAssets {
                 let (generation, assets, revision, global_request, installed_definitions) = context
                     .data(|data| {
                         (
-                            data.get_temp::<u64>(Id::new(FONT_GENERATION_ID)),
-                            data.get_temp::<Arc<RwLock<FontAssets>>>(Id::new(FONT_ASSETS_ID)),
-                            data.get_temp::<Arc<AtomicU64>>(Id::new(FONT_REVISION_ID)),
-                            data.get_temp::<Option<FontRequest>>(Id::new(FONT_REQUEST_ID))
+                            data.get_temp::<u64>(Id::unique(FONT_GENERATION_ID)),
+                            data.get_temp::<Arc<RwLock<FontAssets>>>(Id::unique(FONT_ASSETS_ID)),
+                            data.get_temp::<Arc<AtomicU64>>(Id::unique(FONT_REVISION_ID)),
+                            data.get_temp::<Option<FontRequest>>(Id::unique(FONT_REQUEST_ID))
                                 .flatten(),
-                            data.get_temp::<FontDefinitionsFingerprint>(Id::new(
+                            data.get_temp::<FontDefinitionsFingerprint>(Id::unique(
                                 FONT_DEFINITIONS_ID,
                             )),
                         )
@@ -359,7 +358,7 @@ impl FontAssets {
 
         context.set_fonts(definitions);
         context.data_mut(|data| {
-            data.insert_temp(Id::new(FONT_DEFINITIONS_ID), fingerprint);
+            data.insert_temp(Id::unique(FONT_DEFINITIONS_ID), fingerprint);
         });
     }
 }
@@ -390,7 +389,7 @@ fn add_kerning_disabled_copies(definitions: &mut egui::FontDefinitions) {
         .collect::<Vec<_>>();
     for (name, data) in font_data {
         let mut disabled = (*data).clone();
-        disabled.font = Cow::Owned(disable_font_kerning(&data.font, data.index));
+        disabled.font = Arc::new(disable_font_kerning(data.bytes(), data.index));
         definitions
             .font_data
             .insert(disabled_kerning_font_name(&name), Arc::new(disabled));
