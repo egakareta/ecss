@@ -569,6 +569,66 @@ mod tests {
         assert!(final_bounds.bottom() <= viewport.y);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scroll_frame_cpu_p95_stays_within_60_hz_budget() {
+        use std::time::{Duration, Instant};
+
+        fn scroll_events(delta: f32) -> Vec<egui::Event> {
+            vec![
+                egui::Event::PointerMoved(egui::pos2(500.0, 400.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, delta),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        }
+
+        let context = egui::Context::default();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        Stylesheet::parse(theme).unwrap().install(&context);
+        let mut app = App::default();
+        let viewport = egui::vec2(1000.0, 480.0);
+
+        for frame in 0..20 {
+            let delta = if frame % 2 == 0 { -24.0 } else { 24.0 };
+            let mut output = run_frame_with_size(
+                &context,
+                &mut app,
+                frame as f64 / 60.0,
+                viewport,
+                scroll_events(delta),
+            );
+            output.textures_delta.clear();
+        }
+
+        const SAMPLE_COUNT: usize = 100;
+        let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+        for frame in 0..SAMPLE_COUNT {
+            let delta = if frame % 2 == 0 { -24.0 } else { 24.0 };
+            let events = scroll_events(delta);
+            let start = Instant::now();
+            let mut output = run_frame_with_size(
+                &context,
+                &mut app,
+                (frame + 20) as f64 / 60.0,
+                viewport,
+                events,
+            );
+            samples.push(start.elapsed());
+            output.textures_delta.clear();
+        }
+        samples.sort_unstable();
+        let p95 = samples[(SAMPLE_COUNT * 95).div_ceil(100) - 1];
+        let budget = Duration::from_nanos(16_666_667);
+        assert!(
+            p95 <= budget,
+            "synthetic opt-level-0 scroll frame p95 {p95:?} exceeded 60 Hz budget {budget:?}"
+        );
+    }
+
     #[test]
     fn demo_input_fits_inside_its_panel() {
         let context = egui::Context::default();
