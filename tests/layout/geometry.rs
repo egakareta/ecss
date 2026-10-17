@@ -210,7 +210,7 @@ fn collapsed_flex_item_uses_its_current_intrinsic_cross_size() {
 fn margin_trim_removes_selected_first_and_last_child_margins() {
     let context = Context::default();
     Stylesheet::parse(
-        ".container { display:flow-root; width:80px; margin-trim:block; } .first { height:10px; margin-block-start:8px; } .last { height:10px; margin-block-end:12px; }",
+        ".container { display:flow-root; width:80px; margin-trim:block-end block-start; } .first { height:10px; margin-block-start:8px; } .last { height:10px; margin-block-end:12px; }",
     )
     .unwrap()
     .install(&context);
@@ -229,60 +229,166 @@ fn margin_trim_removes_selected_first_and_last_child_margins() {
     assert_eq!(rects[0].top(), 0.0, "{rects:?}");
     assert_eq!(rects[1].top(), rects[0].bottom(), "{rects:?}");
     assert!(Stylesheet::parse(".container { margin-trim: block invalid; }").is_err());
+    for value in [
+        "all",
+        "in-flow",
+        "inline-start",
+        "block block-start",
+        "block-start block-start",
+        "none block-end",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".container {{ margin-trim: {value}; }}")).is_err(),
+            "accepted invalid margin-trim value: {value}"
+        );
+    }
+    for value in [
+        "none",
+        "block",
+        "block-start",
+        "block-end",
+        "block-start block-end",
+        "BLOCK",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".container {{ margin-trim: {value}; }}")).is_ok(),
+            "rejected valid margin-trim value: {value}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn margin_trim_removes_inline_edge_margins_from_each_block_child() {
+fn margin_trim_does_not_apply_to_flex_containers() {
     let context = Context::default();
     Stylesheet::parse(
-        ".container { display:flow-root; width:80px; margin-trim:inline-start; } .child { width:20px; height:10px; margin-inline-start:8px; }",
+        ".container { display:flex; flex-direction:column; width:80px; margin-trim:block-start; } .child { height:10px; margin-block-start:8px; }",
     )
     .unwrap()
     .install(&context);
-    let mut rects = Vec::new();
+    let mut rects = None;
     frame(&context, 120.0, 0.0, Vec::new(), |ui| {
-        rects.clear();
-        ui.add(
+        let mut child = None;
+        let container = ui.add(
             (|ui: &mut Ui| {
-                for _ in 0..3 {
-                    rects.push(ui.add(empty_response.selector(".child")).rect);
-                }
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".container"),
         );
+        rects = Some((container.rect, child.unwrap()));
     });
+    let (container, child) = rects.unwrap();
     assert!(
-        rects.iter().all(|rect| rect.left().abs() < 0.05),
-        "{rects:?}"
+        (child.top() - container.top() - 8.0).abs() < 0.05,
+        "{container:?} {child:?}"
     );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn margin_trim_applies_to_ordered_flex_items() {
+fn margin_trim_removes_collapsed_descendant_margins() {
     let context = Context::default();
     Stylesheet::parse(
-        ".container { display:flex; width:100px; height:20px; margin-trim:inline; } .first { order:2; width:20px; height:10px; margin-inline-end:8px; } .middle { order:1; width:20px; height:10px; margin-inline-start:4px; } .last { order:0; width:20px; height:10px; margin-inline-start:10px; }",
+        ".container { display:flow-root; width:80px; margin-trim:block-start; } .descendant { height:10px; margin-block-start:8px; }",
     )
     .unwrap()
     .install(&context);
-    let mut rects = Vec::new();
+    let mut rects = None;
     frame(&context, 120.0, 0.0, Vec::new(), |ui| {
-        rects.clear();
-        ui.add(
+        let mut descendant = None;
+        let container = ui.add(
             (|ui: &mut Ui| {
-                for class in [".first", ".middle", ".last"] {
-                    rects.push(ui.add(empty_response.selector(class)).rect);
-                }
+                ui.add(
+                    (|ui: &mut Ui| {
+                        descendant = Some(ui.add(empty_response.selector(".descendant")).rect);
+                        ui.response()
+                    })
+                    .selector(".first"),
+                );
                 ui.response()
             })
             .selector(".container"),
         );
+        rects = Some((container.rect, descendant.unwrap()));
     });
-    assert!((rects[2].left()).abs() < 0.05, "{rects:?}");
-    assert!((rects[0].right() - 64.0).abs() < 0.05, "{rects:?}");
+    let (container, descendant) = rects.unwrap();
+    assert!(
+        (descendant.top() - container.top()).abs() < 0.05,
+        "{container:?} {descendant:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn margin_trim_preserves_descendant_margins_separated_by_padding() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".container { display:flow-root; width:80px; margin-trim:block-start; } .first { padding-block-start:4px; } .descendant { height:10px; margin-block-start:8px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = None;
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        let mut first = None;
+        let mut descendant = None;
+        ui.add(
+            (|ui: &mut Ui| {
+                first = Some(
+                    ui.add(
+                        (|ui: &mut Ui| {
+                            descendant = Some(ui.add(empty_response.selector(".descendant")).rect);
+                            ui.response()
+                        })
+                        .selector(".first"),
+                    )
+                    .rect,
+                );
+                ui.response()
+            })
+            .selector(".container"),
+        );
+        rects = Some((first.unwrap(), descendant.unwrap()));
+    });
+    let (first, descendant) = rects.unwrap();
+    assert!(
+        (descendant.top() - first.top() - 12.0).abs() < 0.05,
+        "{first:?} {descendant:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn margin_trim_supports_the_inherit_keyword() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { display:flow-root; width:80px; margin-trim:block-start; } .inner { display:flow-root; margin-trim:inherit; } .descendant { height:10px; margin-block-start:8px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = None;
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        let mut descendant = None;
+        let inner = ui.add(
+            (|ui: &mut Ui| {
+                let inner = ui.add(
+                    (|ui: &mut Ui| {
+                        descendant = Some(ui.add(empty_response.selector(".descendant")).rect);
+                        ui.response()
+                    })
+                    .selector(".inner"),
+                );
+                ui.response().union(inner)
+            })
+            .selector(".outer"),
+        );
+        rects = Some((inner.rect, descendant.unwrap()));
+    });
+    let (inner, descendant) = rects.unwrap();
+    assert!(
+        (descendant.top() - inner.top()).abs() < 0.05,
+        "{inner:?} {descendant:?}"
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

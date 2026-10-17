@@ -89,7 +89,7 @@
     ~~`padding-right`~~, ~~`padding-top`~~.
   - Partial because box geometry is integrated with egui widget measurement, so CSS box sizing and margin/padding interactions are not fully browser-equivalent across all content and layout contexts.
 - **[CSS Basic Box Model Level 4](https://www.w3.org/TR/css3-box/) - Partial.**
-  - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `margin-trim`, ~~`padding`~~, ~~`padding-bottom`~~,
+  - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`margin-trim`~~, ~~`padding`~~, ~~`padding-bottom`~~,
     ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~.
 - **[CSS Page Floats](https://www.w3.org/TR/css-page-floats-3/) - Unsupported.**
   - CSS properties: `clear`, `float`, `float-defer`, `float-offset`, `float-reference`.

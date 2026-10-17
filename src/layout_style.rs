@@ -1076,6 +1076,7 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
             out.intrinsic_max.height = source.intrinsic_max.height;
         }
         "aspect-ratio" => to.aspect_ratio = from.aspect_ratio,
+        "margin-trim" => out.margin_trim = source.margin_trim,
         "visibility" => {
             out.hidden = source.hidden;
             out.collapsed = source.collapsed;
@@ -1454,33 +1455,24 @@ fn apply_margin_trim(trim: &mut [bool; 4], parts: &[String]) -> Result<(), &'sta
     if parts.is_empty() {
         return Err("invalid margin-trim");
     }
-    if parts.len() == 1 && parts[0] == "none" {
+    let parts = parts
+        .iter()
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if parts.as_slice() == ["none"] {
         *trim = [false; 4];
         return Ok(());
     }
-    if parts.iter().any(|part| part == "none") {
-        return Err("invalid margin-trim");
-    }
-    if parts.len() > 1
-        && parts
-            .iter()
-            .any(|part| matches!(part.as_str(), "all" | "in-flow"))
-    {
-        return Err("invalid margin-trim");
-    }
-    *trim = [false; 4];
-    for part in parts {
+    let mut parsed = [false; 4];
+    for part in &parts {
         match part.as_str() {
-            "all" | "in-flow" => *trim = [true; 4],
-            "block" => set_trim(trim, &[0, 1])?,
-            "inline" => set_trim(trim, &[2, 3])?,
-            "block-start" => set_trim(trim, &[0])?,
-            "block-end" => set_trim(trim, &[1])?,
-            "inline-start" => set_trim(trim, &[2])?,
-            "inline-end" => set_trim(trim, &[3])?,
+            "block" if parts.len() == 1 => set_trim(&mut parsed, &[0, 1])?,
+            "block-start" => set_trim(&mut parsed, &[0])?,
+            "block-end" => set_trim(&mut parsed, &[1])?,
             _ => return Err("invalid margin-trim"),
         }
     }
+    *trim = parsed;
     Ok(())
 }
 

@@ -4944,120 +4944,163 @@ fn scrollbar_gutter(style: &BoxStyle) -> egui::epaint::MarginF32 {
     }
 }
 
-fn trim_child_margins(frame: &Frame, child: usize, style: &mut Style) {
-    let mut parent = frame.nodes[child].parent;
-    while let Some(index) = parent {
-        if !frame.nodes[index].style.contents {
-            break;
-        }
-        parent = frame.nodes[index].parent;
-    }
-    let Some(parent) = parent else {
-        return;
-    };
-    let container = &frame.nodes[parent].style;
-    let flex = container.layout.display == Display::Flex;
-    if !matches!(
-        container.layout.display,
-        Display::Block | Display::FlowRoot | Display::Flex
-    ) || container.format.display != crate::formatting::DisplayKind::Normal
-        || !container.margin_trim.iter().any(|trim| *trim)
-    {
-        return;
-    }
-
-    fn append_flow_children(
-        frame: &Frame,
-        parent: usize,
-        output: &mut Vec<usize>,
-        include_floats: bool,
-    ) {
+fn trimmed_child_margins(frame: &Frame) -> Option<Vec<[bool; 4]>> {
+    fn append_flow_children(frame: &Frame, parent: usize, output: &mut Vec<usize>) {
         for child in &frame.nodes[parent].children {
             let node = &frame.nodes[*child];
             if node.absent
                 || node.style.layout.display == Display::None
                 || node.style.layout.position.is_out_of_flow()
-                || !include_floats && node.style.layout.float.is_floated()
+                || node.style.layout.float.is_floated()
             {
                 continue;
             }
             if node.style.contents {
-                append_flow_children(frame, *child, output, include_floats);
+                append_flow_children(frame, *child, output);
             } else {
                 output.push(*child);
             }
         }
     }
 
-    let mut children = Vec::new();
-    append_flow_children(frame, parent, &mut children, flex);
-    let mut trim = [false; 4];
-    if flex {
-        children.sort_by_key(|index| frame.nodes[*index].style.order);
-        let row = matches!(
-            container.layout.flex_direction,
-            FlexDirection::Row | FlexDirection::RowReverse
-        );
-        let reverse = matches!(
-            container.layout.flex_direction,
-            FlexDirection::RowReverse | FlexDirection::ColumnReverse
-        );
-        let main_start = if row {
-            if reverse { 3 } else { 2 }
-        } else if reverse {
-            1
-        } else {
-            0
-        };
-        let main_end = match main_start {
-            0 => 1,
-            1 => 0,
-            2 => 3,
-            _ => 2,
-        };
-        let first = children.first() == Some(&child);
-        let last = children.last() == Some(&child);
-        trim[main_start] = first && container.margin_trim[main_start];
-        trim[main_end] = last && container.margin_trim[main_end];
-        let single_line = container.layout.flex_wrap == FlexWrap::NoWrap;
-        if single_line {
-            let cross_start = if row { 0 } else { 2 };
-            let cross_end = if row { 1 } else { 3 };
-            trim[cross_start] = container.margin_trim[cross_start];
-            trim[cross_end] = container.margin_trim[cross_end];
-        }
-    } else {
-        let first = children.first() == Some(&child);
-        let last = children.last() == Some(&child);
-        for (axis, selected) in container.margin_trim.iter().copied().enumerate() {
-            let at_edge = match axis {
-                0 => first,
-                1 => last,
-                _ => true,
-            };
-            trim[axis] = selected && at_edge;
+    fn block_level(style: &BoxStyle) -> bool {
+        !style.inline
+            && matches!(
+                style.format.display,
+                crate::formatting::DisplayKind::Normal
+                    | crate::formatting::DisplayKind::Table
+                    | crate::formatting::DisplayKind::Caption
+            )
+    }
+
+    fn block_container(style: &BoxStyle) -> bool {
+        !style.contents
+            && matches!(style.layout.display, Display::Block | Display::FlowRoot)
+            && style.format.display == crate::formatting::DisplayKind::Normal
+    }
+
+    fn physical_edge<T: Copy>(rect: &taffy::Rect<T>, edge: usize) -> T {
+        match edge {
+            0 => rect.top,
+            1 => rect.right,
+            2 => rect.bottom,
+            _ => rect.left,
         }
     }
-    for (axis, selected) in trim.into_iter().enumerate() {
-        if !selected {
-            continue;
+
+    fn zero_or_auto(value: Dimension) -> bool {
+        value.is_auto() || resolve(value.into_raw(), 1.0).is_some_and(|value| value == 0.0)
+    }
+
+    fn collapses_through(frame: &Frame, index: usize, block_edge: usize) -> bool {
+        let container = &frame.nodes[index].style;
+        if container.layout.display != Display::Block
+            || container.format.display != crate::formatting::DisplayKind::Normal
+            || container.layout.position.is_out_of_flow()
+            || container.layout.float.is_floated()
+            || !matches!(
+                container.layout.overflow.x,
+                Overflow::Visible | Overflow::Clip
+            )
+            || !matches!(
+                container.layout.overflow.y,
+                Overflow::Visible | Overflow::Clip
+            )
+        {
+            return false;
         }
-        let name = ["block-start", "block-end", "inline-start", "inline-end"][axis];
-        let edge = crate::layout_style::logical_side(
-            name,
+
+        let logical_edge = if block_edge == 0 {
+            "block-start"
+        } else {
+            "block-end"
+        };
+        let Some(edge) = crate::layout_style::logical_side(
+            logical_edge,
             container.layout.direction,
             container.format.writing,
             &container.format.text_orientation,
-        )
-        .unwrap();
-        let zero = taffy::LengthPercentageAuto::length(0.0);
-        match edge {
-            0 => style.margin.top = zero,
-            1 => style.margin.right = zero,
-            2 => style.margin.bottom = zero,
-            _ => style.margin.left = zero,
+        ) else {
+            return false;
+        };
+        let border = physical_edge(&container.layout.border, edge);
+        let padding = physical_edge(&container.layout.padding, edge);
+        if resolve(border.into_raw(), 0.0).unwrap_or(0.0) != 0.0
+            || resolve(padding.into_raw(), 1.0).unwrap_or(0.0) != 0.0
+        {
+            return false;
+        }
+
+        let (size, min_size) = if container.format.writing.vertical() {
+            (container.layout.size.width, container.layout.min_size.width)
+        } else {
+            (
+                container.layout.size.height,
+                container.layout.min_size.height,
+            )
+        };
+        zero_or_auto(size) && zero_or_auto(min_size.into())
+    }
+
+    let containers = frame
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            block_container(&node.style) && node.style.margin_trim[..2].iter().any(|trim| *trim)
+        })
+        .collect::<Vec<_>>();
+    if containers.is_empty() {
+        return None;
+    }
+
+    let mut trim = vec![[false; 4]; frame.nodes.len()];
+    for (index, node) in containers {
+        let mut children = Vec::new();
+        append_flow_children(frame, index, &mut children);
+        let boundary_children = [children.first().copied(), children.last().copied()];
+        for edge in 0..2 {
+            if !node.style.margin_trim[edge] {
+                continue;
+            }
+            let Some(mut current) = boundary_children[edge] else {
+                continue;
+            };
+            if !block_level(&frame.nodes[current].style) {
+                continue;
+            }
+            let name = ["block-start", "block-end"][edge];
+            let Some(physical) = crate::layout_style::logical_side(
+                name,
+                node.style.layout.direction,
+                node.style.format.writing,
+                &node.style.format.text_orientation,
+            ) else {
+                continue;
+            };
+            loop {
+                trim[current][physical] = true;
+                if !collapses_through(frame, current, edge) {
+                    break;
+                }
+                let mut descendants = Vec::new();
+                append_flow_children(frame, current, &mut descendants);
+                let next = if edge == 0 {
+                    descendants.first()
+                } else {
+                    descendants.last()
+                };
+                let Some(next) = next
+                    .copied()
+                    .filter(|next| block_level(&frame.nodes[*next].style))
+                else {
+                    break;
+                };
+                current = next;
+            }
         }
     }
+    Some(trim)
 }
 
 fn collapse_flex_item(frame: &Frame, child: usize, layout: Layout, style: &mut Style) {
@@ -5156,10 +5199,24 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
         .collect::<Vec<_>>();
     let mut tree = crate::layout_tree::Tree::new(crate::math::resolve);
     let mut ids = Vec::new();
+    let trimmed_margins = trimmed_child_margins(frame);
     for index in 0..frame.nodes.len() {
         let node = &frame.nodes[index];
         let mut style = node.style.layout.clone();
-        trim_child_margins(frame, index, &mut style);
+        if let Some(trimmed_margins) = &trimmed_margins {
+            let zero = taffy::LengthPercentageAuto::length(0.0);
+            for (edge, selected) in trimmed_margins[index].iter().copied().enumerate() {
+                if !selected {
+                    continue;
+                }
+                match edge {
+                    0 => style.margin.top = zero,
+                    1 => style.margin.right = zero,
+                    2 => style.margin.bottom = zero,
+                    _ => style.margin.left = zero,
+                }
+            }
+        }
         if node.absent {
             style.display = Display::None;
         }
