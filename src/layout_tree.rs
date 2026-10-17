@@ -63,6 +63,15 @@ pub(crate) struct Node {
     hoisted: Vec<NodeId>,
 }
 
+struct FlowRegions<'a> {
+    regions: &'a [egui::Rect],
+    clip_regions: &'a [bool],
+    region_used_bottom: &'a mut [f32],
+    last_region_break: bool,
+    region_index: &'a mut usize,
+    cursor: &'a mut f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Fragment {
     pub range: Option<egui::text::ByteRange>,
@@ -456,13 +465,14 @@ impl<'a> Tree<'a> {
         &mut self,
         parent: NodeId,
         child: NodeId,
-        regions: &[egui::Rect],
-        clip_regions: &[bool],
-        region_used_bottom: &mut [f32],
-        last_region_break: bool,
-        region_index: &mut usize,
-        cursor: &mut f32,
+        flow: &mut FlowRegions<'_>,
     ) -> bool {
+        let regions = flow.regions;
+        let clip_regions = flow.clip_regions;
+        let region_used_bottom = &mut *flow.region_used_bottom;
+        let last_region_break = flow.last_region_break;
+        let region_index = &mut *flow.region_index;
+        let cursor = &mut *flow.cursor;
         let index = usize::from(child);
         let node = &self.nodes[index];
         if node.runs.is_empty()
@@ -856,16 +866,15 @@ impl<'a> Tree<'a> {
                         continue;
                     }
 
-                    if self.layout_flow_text(
-                        root,
-                        source,
-                        &region_rects,
-                        &region_clips,
-                        &mut region_used_bottom,
+                    let mut flow = FlowRegions {
+                        regions: &region_rects,
+                        clip_regions: &region_clips,
+                        region_used_bottom: &mut region_used_bottom,
                         last_region_break,
-                        &mut region_index,
-                        &mut cursor,
-                    ) {
+                        region_index: &mut region_index,
+                        cursor: &mut cursor,
+                    };
+                    if self.layout_flow_text(root, source, &mut flow) {
                         exhausted |= self.nodes[source_index].flow_remainder;
                         break;
                     }
@@ -1018,16 +1027,16 @@ impl<'a> Tree<'a> {
                 if regions.len() > 1 {
                     let mut region_index = 0;
                     let mut cursor = regions[0].top();
-                    if self.layout_flow_text(
-                        id,
-                        child,
-                        &regions,
-                        &[],
-                        &mut vec![regions[0].top(); regions.len()],
-                        false,
-                        &mut region_index,
-                        &mut cursor,
-                    ) {
+                    let mut region_used_bottom = vec![regions[0].top(); regions.len()];
+                    let mut flow = FlowRegions {
+                        regions: &regions,
+                        clip_regions: &[],
+                        region_used_bottom: &mut region_used_bottom,
+                        last_region_break: false,
+                        region_index: &mut region_index,
+                        cursor: &mut cursor,
+                    };
+                    if self.layout_flow_text(id, child, &mut flow) {
                         continue;
                     }
                 }
@@ -1106,16 +1115,16 @@ impl<'a> Tree<'a> {
                     region_index += 1;
                     cursor = regions[region_index].top();
                 }
-                if self.layout_flow_text(
-                    id,
-                    child,
-                    &regions,
-                    &[],
-                    &mut vec![regions[0].top(); regions.len()],
-                    false,
-                    &mut region_index,
-                    &mut cursor,
-                ) {
+                let mut region_used_bottom = vec![regions[0].top(); regions.len()];
+                let mut flow = FlowRegions {
+                    regions: &regions,
+                    clip_regions: &[],
+                    region_used_bottom: &mut region_used_bottom,
+                    last_region_break: false,
+                    region_index: &mut region_index,
+                    cursor: &mut cursor,
+                };
+                if self.layout_flow_text(id, child, &mut flow) {
                     if forced_chain_break(self.nodes[child_index].format.after)
                         && region_index + 1 < regions.len()
                     {

@@ -103,6 +103,13 @@ struct TextMeasurement {
     minimum: f32,
 }
 
+#[derive(Clone, Copy)]
+struct ShapeRange {
+    layer: egui::LayerId,
+    start: egui::layers::ShapeIdx,
+    end: egui::layers::ShapeIdx,
+}
+
 struct Frame {
     nodes: Vec<Node>,
     stack: Vec<usize>,
@@ -544,9 +551,7 @@ pub(crate) fn show(
             let color = frame.nodes[index].color;
             let mut text = measure_text(
                 ui.ctx(),
-                layer,
-                start,
-                end,
+                ShapeRange { layer, start, end },
                 measured,
                 &style.format,
                 geometry.content().width(),
@@ -657,9 +662,7 @@ pub(crate) fn show(
         if let Some((layer, start, end, job, format, width)) = update {
             reflow_text(
                 ui.ctx(),
-                layer,
-                start,
-                end,
+                ShapeRange { layer, start, end },
                 &job,
                 content_ui.visuals().selection.bg_fill,
                 &format,
@@ -673,9 +676,7 @@ pub(crate) fn show(
         .map(|text| {
             reflow_text(
                 ui.ctx(),
-                layer,
-                start,
-                end,
+                ShapeRange { layer, start, end },
                 &text.job,
                 content_ui.visuals().selection.bg_fill,
                 &style.format,
@@ -3391,7 +3392,7 @@ fn resolved_element_references(stylesheet: &Stylesheet, class: &str, state: u8) 
         references.extend(ids);
     };
     for image in resolved_background(stylesheet, class, state).images {
-        collect(&image);
+        collect(image);
     }
     collect(&resolved_border_image_source(stylesheet, class, state));
     for pseudo in [
@@ -5608,9 +5609,9 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
             .unwrap();
         }
     }
-    for index in 0..frame.nodes.len() {
+    for (index, id) in ids.iter().enumerate() {
         frame.nodes[index].flow_clip =
-            tree.nodes[usize::from(ids[index])]
+            tree.nodes[usize::from(*id)]
                 .flow_clip
                 .map(|(clip, region_index)| {
                     let region = &frame.nodes[region_index];
@@ -5751,9 +5752,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
 
 fn measure_text(
     context: &Context,
-    layer: egui::LayerId,
-    start: egui::layers::ShapeIdx,
-    end: egui::layers::ShapeIdx,
+    range: ShapeRange,
     measured: Vec2,
     format: &crate::formatting::Formatting,
     text_basis: f32,
@@ -5772,10 +5771,14 @@ fn measure_text(
         }
     }
     let (galleys, fragmentable) = context.graphics(|layers| {
-        let list = layers.get(layer)?;
+        let list = layers.get(range.layer)?;
         let mut texts = Vec::new();
         let mut fragmentable = true;
-        for clipped in list.all_entries().skip(start.0).take(end.0 - start.0) {
+        for clipped in list
+            .all_entries()
+            .skip(range.start.0)
+            .take(range.end.0 - range.start.0)
+        {
             let mut text_shapes = 0;
             fragmentable &= collect_fragmentable_text(&clipped.shape, &mut text_shapes);
             collect(&clipped.shape, &mut texts, &mut fragmentable);
@@ -6212,9 +6215,7 @@ fn is_cjk(character: char) -> bool {
 
 fn reflow_text(
     context: &Context,
-    layer: egui::LayerId,
-    start: egui::layers::ShapeIdx,
-    end: egui::layers::ShapeIdx,
+    range: ShapeRange,
     job: &egui::text::LayoutJob,
     selection_color: Color32,
     format: &crate::formatting::Formatting,
@@ -6230,10 +6231,10 @@ fn reflow_text(
 
     let job = justify_wrapped_text_job(context, job, width, format);
     let current = context.graphics(|layers| {
-        let list = layers.get(layer)?;
+        let list = layers.get(range.layer)?;
         list.all_entries()
-            .skip(start.0)
-            .take(end.0 - start.0)
+            .skip(range.start.0)
+            .take(range.end.0 - range.start.0)
             .find_map(|entry| find_galley(&entry.shape).cloned())
     });
     if let Some(current) = current
@@ -6259,8 +6260,8 @@ fn reflow_text(
         }
     }
     context.graphics_mut(|layers| {
-        let list = layers.entry(layer);
-        for index in start.0..end.0 {
+        let list = layers.entry(range.layer);
+        for index in range.start.0..range.end.0 {
             list.mutate_shape(egui::layers::ShapeIdx(index), |entry| {
                 replace(&mut entry.shape, &galley)
             });

@@ -653,9 +653,9 @@ fn parse_linear_function(
         let left = points[start - 1].0.expect("linear() has a preceding input");
         let right = points[index].0.expect("linear() has a following input");
         let intervals = (index - start + 1) as f64;
-        for point_index in start..index {
+        for (point_index, point) in points.iter_mut().enumerate().take(index).skip(start) {
             let distance = (point_index - start + 1) as f64;
-            points[point_index].0 = Some(left + (right - left) * distance / intervals);
+            point.0 = Some(left + (right - left) * distance / intervals);
         }
     }
 
