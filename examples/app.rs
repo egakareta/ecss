@@ -1,5 +1,41 @@
 use ecss::{SelectorExt as _, Stylesheet};
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eframe::run_native(
+            "this is an app",
+            eframe::NativeOptions::default(),
+            Box::new(create_app),
+        )?;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use web_sys::wasm_bindgen::JsCast;
+        wasm_bindgen_futures::spawn_local(async {
+            eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+            let document = web_sys::window()
+                .expect("browser window is unavailable")
+                .document()
+                .expect("browser document is unavailable");
+            let canvas = document
+                .get_element_by_id("the_canvas_id")
+                .expect("the_canvas_id canvas is missing")
+                .dyn_into::<web_sys::HtmlCanvasElement>()
+                .expect("the_canvas_id is not a canvas");
+
+            eframe::WebRunner::new()
+                .start(canvas, eframe::WebOptions::default(), Box::new(create_app))
+                .await
+                .expect("failed to start eframe");
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Default)]
 struct App {
     saved: bool,
@@ -203,42 +239,6 @@ fn create_app(
     stylesheet.install(&cc.egui_ctx);
 
     Ok(Box::new(App::default()))
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        eframe::run_native(
-            "this is an app",
-            eframe::NativeOptions::default(),
-            Box::new(create_app),
-        )?;
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use web_sys::wasm_bindgen::JsCast;
-        wasm_bindgen_futures::spawn_local(async {
-            eframe::WebLogger::init(log::LevelFilter::Debug).ok();
-
-            let document = web_sys::window()
-                .expect("browser window is unavailable")
-                .document()
-                .expect("browser document is unavailable");
-            let canvas = document
-                .get_element_by_id("the_canvas_id")
-                .expect("the_canvas_id canvas is missing")
-                .dyn_into::<web_sys::HtmlCanvasElement>()
-                .expect("the_canvas_id is not a canvas");
-
-            eframe::WebRunner::new()
-                .start(canvas, eframe::WebOptions::default(), Box::new(create_app))
-                .await
-                .expect("failed to start eframe");
-        });
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
