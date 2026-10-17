@@ -764,11 +764,11 @@ impl Default for BorderImage {
 pub(crate) struct DecorationStyle {
     pub(crate) radii: [CornerRadius; 4],
     pub(crate) corner_shapes: [CornerShape; 4],
-    pub(crate) shadow_offsets: Vec<Option<Vec2>>,
-    pub(crate) shadow_blurs: Vec<f32>,
-    pub(crate) shadow_spreads: Vec<f32>,
-    pub(crate) shadow_colors: Vec<Option<Color32>>,
-    pub(crate) shadow_positions: Vec<ShadowPosition>,
+    pub(crate) shadow_offsets: smallvec::SmallVec<[Option<Vec2>; 1]>,
+    pub(crate) shadow_blurs: smallvec::SmallVec<[f32; 1]>,
+    pub(crate) shadow_spreads: smallvec::SmallVec<[f32; 1]>,
+    pub(crate) shadow_colors: smallvec::SmallVec<[Option<Color32>; 1]>,
+    pub(crate) shadow_positions: smallvec::SmallVec<[ShadowPosition; 1]>,
     pub(crate) border_limit: BorderLimit,
     pub(crate) border_clips: [Option<Vec<ClipPart>>; 4],
     pub(crate) border_image: BorderImage,
@@ -780,11 +780,11 @@ impl Default for DecorationStyle {
         Self {
             radii: [CornerRadius::default(); 4],
             corner_shapes: [CornerShape::Round; 4],
-            shadow_offsets: vec![None],
-            shadow_blurs: vec![0.0],
-            shadow_spreads: vec![0.0],
-            shadow_colors: vec![None],
-            shadow_positions: vec![ShadowPosition::Outset],
+            shadow_offsets: smallvec::smallvec![None],
+            shadow_blurs: smallvec::smallvec![0.0],
+            shadow_spreads: smallvec::smallvec![0.0],
+            shadow_colors: smallvec::smallvec![None],
+            shadow_positions: smallvec::smallvec![ShadowPosition::Outset],
             border_limit: BorderLimit::All,
             border_clips: std::array::from_fn(|_| None),
             border_image: BorderImage::default(),
@@ -2589,13 +2589,42 @@ pub(crate) fn path_clip(paths: Vec<Vec<Pos2>>, fill_rule: FillRule) -> PathClip 
 
 pub(crate) fn clip_mesh_to_paths(mesh: egui::epaint::Mesh, clip: &PathClip) -> egui::epaint::Mesh {
     let mut output = egui::epaint::Mesh::with_texture(mesh.texture_id);
+    let quad_bounds = clip
+        .quads
+        .iter()
+        .map(|quad| {
+            quad.iter()
+                .skip(1)
+                .fold(Rect::from_min_max(quad[0], quad[0]), |bounds, point| {
+                    bounds.union(Rect::from_min_max(*point, *point))
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut polygon = Vec::with_capacity(8);
+    let mut scratch = Vec::with_capacity(8);
     for triangle in mesh.indices.chunks_exact(3) {
-        let vertices = triangle
+        let vertices = [
+            mesh.vertices[triangle[0] as usize].clone(),
+            mesh.vertices[triangle[1] as usize].clone(),
+            mesh.vertices[triangle[2] as usize].clone(),
+        ];
+        let bounds = vertices.iter().fold(
+            Rect::from_min_max(vertices[0].pos, vertices[0].pos),
+            |bounds, vertex| bounds.union(Rect::from_min_max(vertex.pos, vertex.pos)),
+        );
+        // path_fill_quads emits scanline bands in ascending y order.
+        let first_quad = quad_bounds.partition_point(|quad| quad.max.y < bounds.min.y);
+        for (quad, quad_bounds) in clip.quads[first_quad..]
             .iter()
-            .map(|index| mesh.vertices[*index as usize].clone())
-            .collect::<Vec<_>>();
-        for quad in &clip.quads {
-            let polygon = clip_vertex_polygon(vertices.clone(), quad);
+            .zip(&quad_bounds[first_quad..])
+        {
+            if quad_bounds.min.y > bounds.max.y {
+                break;
+            }
+            if bounds.max.x < quad_bounds.min.x || bounds.min.x > quad_bounds.max.x {
+                continue;
+            }
+            clip_vertex_polygon(&vertices, quad, &mut polygon, &mut scratch);
             if polygon.len() < 3 {
                 continue;
             }
@@ -2614,9 +2643,13 @@ pub(crate) fn clip_mesh_to_paths(mesh: egui::epaint::Mesh, clip: &PathClip) -> e
 }
 
 fn clip_vertex_polygon(
-    mut polygon: Vec<egui::epaint::Vertex>,
+    vertices: &[egui::epaint::Vertex; 3],
     clip: &[Pos2; 4],
-) -> Vec<egui::epaint::Vertex> {
+    polygon: &mut Vec<egui::epaint::Vertex>,
+    scratch: &mut Vec<egui::epaint::Vertex>,
+) {
+    polygon.clear();
+    polygon.extend(vertices.iter().cloned());
     let orientation = (0..4)
         .map(|index| {
             let a = clip[index];
@@ -2632,25 +2665,28 @@ fn clip_vertex_polygon(
         let start = clip[edge];
         let end = clip[(edge + 1) % 4];
         let direction = end - start;
-        let input = std::mem::take(&mut polygon);
-        let mut previous = input.last().unwrap().clone();
-        let mut previous_distance = cross_vec(direction, previous.pos - start) * orientation;
-        for current in input {
+        scratch.clear();
+        let mut previous_index = polygon.len() - 1;
+        let mut previous_distance =
+            cross_vec(direction, polygon[previous_index].pos - start) * orientation;
+        for current_index in 0..polygon.len() {
+            let previous = &polygon[previous_index];
+            let current = &polygon[current_index];
             let current_distance = cross_vec(direction, current.pos - start) * orientation;
             let previous_inside = previous_distance >= -0.001;
             let current_inside = current_distance >= -0.001;
             if previous_inside != current_inside {
                 let amount = previous_distance / (previous_distance - current_distance);
-                polygon.push(interpolate_vertex(&previous, &current, amount));
+                scratch.push(interpolate_vertex(previous, current, amount));
             }
             if current_inside {
-                polygon.push(current.clone());
+                scratch.push(current.clone());
             }
-            previous = current;
+            previous_index = current_index;
             previous_distance = current_distance;
         }
+        std::mem::swap(polygon, scratch);
     }
-    polygon
 }
 
 fn interpolate_vertex(
@@ -3705,11 +3741,11 @@ fn parse_shadows(value: &str, units: Units) -> Result<Vec<Shadow>, &'static str>
 
 fn set_shadows(style: &mut DecorationStyle, shadows: Vec<Shadow>) {
     if shadows.is_empty() {
-        style.shadow_offsets = vec![None];
-        style.shadow_blurs = vec![0.0];
-        style.shadow_spreads = vec![0.0];
-        style.shadow_colors = vec![None];
-        style.shadow_positions = vec![ShadowPosition::Outset];
+        style.shadow_offsets = smallvec::smallvec![None];
+        style.shadow_blurs = smallvec::smallvec![0.0];
+        style.shadow_spreads = smallvec::smallvec![0.0];
+        style.shadow_colors = smallvec::smallvec![None];
+        style.shadow_positions = smallvec::smallvec![ShadowPosition::Outset];
     } else {
         style.shadow_offsets = shadows.iter().map(|shadow| shadow.offset).collect();
         style.shadow_blurs = shadows.iter().map(|shadow| shadow.blur).collect();

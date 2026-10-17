@@ -68,8 +68,8 @@ struct Node {
     element_id: Option<String>,
     element_first_occurrence: bool,
     element_references: HashSet<String>,
-    style: BoxStyle,
-    children: Vec<usize>,
+    style: Rc<BoxStyle>,
+    children: smallvec::SmallVec<[usize; 4]>,
     parent: Option<usize>,
     measured: Vec2,
     used: Geometry,
@@ -117,6 +117,7 @@ struct Active(Rc<RefCell<Frame>>, u64);
 
 thread_local! {
     static FRAMES: RefCell<HashMap<u64, Active>> = RefCell::default();
+    static FRAME_BUFFERS: RefCell<Vec<(Vec<Node>, Vec<usize>)>> = RefCell::default();
 }
 static NEXT_FRAME: AtomicU64 = AtomicU64::new(1);
 
@@ -155,14 +156,18 @@ pub(crate) fn show(
     }
     let active = active.unwrap_or_else(|| {
         let available = ui.available_rect_before_wrap();
+        let (mut nodes, mut stack) =
+            FRAME_BUFFERS.with(|buffers| buffers.borrow_mut().pop().unwrap_or_default());
+        nodes.clear();
+        stack.clear();
         let cache = ui
             .ctx()
-            .data(|d| d.get_temp::<Cache>(id))
+            .data_mut(|data| data.remove_temp::<Cache>(id))
             .unwrap_or_default();
         let active = Active(
             Rc::new(RefCell::new(Frame {
-                nodes: Vec::new(),
-                stack: Vec::new(),
+                nodes,
+                stack,
                 cache,
                 origin: available.min,
                 available: available.size(),
@@ -187,7 +192,7 @@ pub(crate) fn show(
             .stack
             .last()
             .map(|parent| frame.nodes[*parent].style.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(|| Rc::new(BoxStyle::default()))
     };
     let mut style = BoxStyle::default();
     style.layout.direction = parent_style.layout.direction;
@@ -274,6 +279,7 @@ pub(crate) fn show(
         }
     }
     style.finish();
+    let style = Rc::new(style);
     let scroll = ui
         .ctx()
         .data(|d| d.get_temp::<Vec2>(id.with("scroll")))
@@ -308,7 +314,7 @@ pub(crate) fn show(
             element_first_occurrence: first_element_occurrence,
             element_references: HashSet::new(),
             style: style.clone(),
-            children: Vec::new(),
+            children: smallvec::SmallVec::new(),
             parent,
             measured: Vec2::ZERO,
             used: geometry.clone(),
@@ -500,7 +506,6 @@ pub(crate) fn show(
                     style.layout.direction,
                 ) {
                     text.extra.x += trailing;
-                    text.minimum = minimum_text_width(ui.ctx(), &text.job);
                     let measured_text = ui
                         .ctx()
                         .fonts_mut(|fonts| fonts.layout_job(text.job.clone()).size())
@@ -555,7 +560,6 @@ pub(crate) fn show(
                     style.layout.direction,
                 )?;
                 text.extra.x += trailing;
-                text.minimum = minimum_text_width(ui.ctx(), &text.job);
                 let measured = ui
                     .ctx()
                     .fonts_mut(|fonts| fonts.layout_job(text.job.clone()).size())
@@ -658,8 +662,8 @@ pub(crate) fn show(
     }
     drop(scope);
     let final_geometry = if root {
-        let frame = active.0.borrow();
-        let cache = solve(&frame, ui.ctx());
+        let mut frame = active.0.borrow_mut();
+        let cache = solve(&mut frame, ui.ctx());
         let changed = frame.nodes.iter().any(|node| {
             cache.boxes.get(&node.id).is_some_and(|g| {
                 let actual = g
@@ -713,11 +717,15 @@ pub(crate) fn show(
         }
         geometry
     };
-    let mut decoration_style = style.clone();
-    if final_geometry.collapsed.is_some() {
-        decoration_style.decorations.radii = [crate::box_decoration::CornerRadius::default(); 4];
-        decoration_style.decorations.corner_shapes = [crate::box_decoration::CornerShape::Round; 4];
-    }
+    let collapsed_decoration_style = final_geometry.collapsed.is_some().then(|| {
+        let mut style = style.as_ref().clone();
+        style.decorations.radii = [crate::box_decoration::CornerRadius::default(); 4];
+        style.decorations.corner_shapes = [crate::box_decoration::CornerShape::Round; 4];
+        style
+    });
+    let decoration_style = collapsed_decoration_style
+        .as_ref()
+        .unwrap_or_else(|| style.as_ref());
     let border = final_geometry.border;
     let visual = if final_geometry.slices.is_empty() {
         border
@@ -751,8 +759,10 @@ pub(crate) fn show(
         u8::from(response.hovered()) | (u8::from(response.is_pointer_button_down_on()) << 1);
     ui.ctx()
         .data_mut(|d| d.insert_temp(id.with("state"), current_state));
-    active.0.borrow_mut().nodes[index].element_references =
-        resolved_element_references(stylesheet, class, current_state);
+    if stylesheet.rule_index.has_element_references {
+        active.0.borrow_mut().nodes[index].element_references =
+            resolved_element_references(stylesheet, class, current_state);
+    }
     let interaction_layout_changed = [(1, RuleState::Hovered), (2, RuleState::Active)]
         .into_iter()
         .any(|(mask, rule_state)| {
@@ -1340,7 +1350,7 @@ pub(crate) fn show(
                     visuals.fg_stroke.color,
                 ));
             } else {
-                let mut fragment_style = decoration_style.clone();
+                let mut fragment_style = (*decoration_style).clone();
                 if style.format.display == crate::formatting::DisplayKind::Inline
                     && !style.format.clone_decoration
                 {
@@ -1534,6 +1544,15 @@ pub(crate) fn show(
     }
     if root {
         reorder_paint(&active.0.borrow(), ui.ctx());
+        let mut frame = active.0.borrow_mut();
+        frame.nodes.clear();
+        frame.stack.clear();
+        let buffers = (
+            std::mem::take(&mut frame.nodes),
+            std::mem::take(&mut frame.stack),
+        );
+        drop(frame);
+        FRAME_BUFFERS.with(|pool| pool.borrow_mut().push(buffers));
     }
     response
 }
@@ -1834,29 +1853,56 @@ fn clear_previous_label_selection(context: &Context) {
 
 fn reorder_paint(frame: &Frame, context: &Context) {
     type Part = (i32, i32, usize);
+    type Path = smallvec::SmallVec<[Part; 4]>;
     let count = frame.nodes.len();
-    let mut contexts: Vec<Vec<Part>> = vec![Vec::new(); count];
+    let border_clips = frame
+        .nodes
+        .iter()
+        .map(border_content_clip)
+        .collect::<Vec<_>>();
+    if frame.nodes.iter().all(|node| {
+        !node.style.positioned
+            && node.style.z_index.is_none()
+            && !node.style.fixed
+            && node.style.layout.position != Position::Sticky
+            && !node.style.layout.float.is_floated()
+            && !node.style.inline
+            && node.paint.as_ref().is_none_or(|paint| {
+                paint.overlay == paint.end
+                    && paint.geometry.slices.is_empty()
+                    && paint.geometry.collapsed.is_none()
+            })
+    }) && frame.nodes.iter().all(|node| node.style.order == 0)
+        && border_clips.iter().all(Option::is_none)
+    {
+        return;
+    }
+    let mut contexts: Vec<Path> = vec![Path::new(); count];
     let mut groups = contexts.clone();
     let mut keys = contexts.clone();
     let mut ranks = vec![0; count];
     fn rank(frame: &Frame, node: usize, next: &mut usize, ranks: &mut [usize]) {
         ranks[node] = *next;
         *next += 1;
-        let mut children = frame.nodes[node].children.clone();
         if matches!(
             frame.nodes[node].style.layout.display,
             Display::Flex | Display::Grid
         ) {
+            let mut children = frame.nodes[node].children.clone();
             children.sort_by_key(|i| frame.nodes[*i].style.order);
-        }
-        for child in children {
-            rank(frame, child, next, ranks);
+            for child in children {
+                rank(frame, child, next, ranks);
+            }
+        } else {
+            for child in frame.nodes[node].children.iter().copied() {
+                rank(frame, child, next, ranks);
+            }
         }
     }
     rank(frame, 0, &mut 0, &mut ranks);
     for (i, node) in frame.nodes.iter().enumerate() {
-        let parent_context = node.parent.map_or_else(Vec::new, |p| contexts[p].clone());
-        let parent_group = node.parent.map_or_else(Vec::new, |p| groups[p].clone());
+        let parent_context = node.parent.map_or_else(Path::new, |p| contexts[p].clone());
+        let parent_group = node.parent.map_or_else(Path::new, |p| groups[p].clone());
         let item = node.parent.is_some_and(|p| {
             matches!(
                 frame.nodes[p].style.layout.display,
@@ -1871,7 +1917,7 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             || node.style.layout.float.is_floated()
             || node.style.inline
             || item;
-        let mut prefix = if real {
+        let mut prefix: Path = if real {
             parent_context.clone()
         } else {
             parent_group
@@ -1941,12 +1987,8 @@ fn reorder_paint(frame: &Frame, context: &Context) {
             }
         }
     }
-    let border_clips = frame
-        .nodes
-        .iter()
-        .map(border_content_clip)
-        .collect::<Vec<_>>();
-    let mut ancestor_clips = vec![Vec::new(); count];
+    let mut ancestor_clips: Vec<smallvec::SmallVec<[usize; 4]>> =
+        vec![smallvec::SmallVec::new(); count];
     for (index, node) in frame.nodes.iter().enumerate() {
         if let Some(parent) = node.parent {
             ancestor_clips[index] = ancestor_clips[parent].clone();
@@ -1966,15 +2008,15 @@ fn reorder_paint(frame: &Frame, context: &Context) {
         let mut clips = ancestor_clips[owner]
             .iter()
             .filter_map(|ancestor| border_clips[*ancestor].as_ref())
-            .collect::<Vec<_>>();
+            .collect::<smallvec::SmallVec<[&crate::box_decoration::PathClip; 4]>>();
         if !decoration {
             clips.extend(border_clips[owner].as_ref());
         }
         let is_overlay = index + root.start.0 >= paint.overlay.0;
         if is_overlay {
-            overlays[owner].extend(clip_painted_entry(context, entry, &clips));
+            append_painted_entry(context, entry, &clips, &mut overlays[owner]);
         } else if paint.geometry.slices.is_empty() {
-            grouped[owner].extend(clip_painted_entry(context, entry, &clips));
+            append_painted_entry(context, entry, &clips, &mut grouped[owner]);
         } else {
             let slices = &paint.geometry.slices;
             for (slice_index, slice) in slices.iter().enumerate() {
@@ -2026,14 +2068,15 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                                 for shadow in
                                     clip_fragment_shadows(context, vec![shadow], Some(shadow_clip))
                                 {
-                                    grouped[owner].extend(clip_painted_entry(
+                                    append_painted_entry(
                                         context,
                                         egui::epaint::ClippedShape {
                                             clip_rect: shadow_clip,
                                             shape: shadow,
                                         },
                                         &clips,
-                                    ));
+                                        &mut grouped[owner],
+                                    );
                                 }
                             }
                         }
@@ -2074,14 +2117,15 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                     entry.shape.clone()
                 };
                 shape.transform(egui::emath::TSTransform::from_translation(slice.offset));
-                grouped[owner].extend(clip_painted_entry(
+                append_painted_entry(
                     context,
                     egui::epaint::ClippedShape {
                         clip_rect: clip,
                         shape,
                     },
                     &clips,
-                ));
+                    &mut grouped[owner],
+                );
             }
         }
     }
@@ -2334,24 +2378,10 @@ fn matching_rules<'a>(
     class: &'a str,
 ) -> impl Iterator<Item = &'a crate::css::Rule> {
     let rules = &stylesheet.rules;
-    rules
-        .iter()
-        .filter(|rule| {
-            rule.pseudo.is_none() && rule.class.is_none() && rule.state == RuleState::Base
-        })
-        .chain(rules.iter().filter(move |rule| {
-            rule.pseudo.is_none()
-                && ((rule.class.is_some()
-                    && rule.class.as_deref() == Some(class)
-                    && rule.state == RuleState::Base)
-                    || (rule.class.is_none() && rule.state != RuleState::Base))
-        }))
-        .chain(rules.iter().filter(move |rule| {
-            rule.pseudo.is_none()
-                && rule.class.is_some()
-                && rule.class.as_deref() == Some(class)
-                && rule.state != RuleState::Base
-        }))
+    stylesheet
+        .rule_index
+        .matching(class)
+        .map(move |index| &rules[index])
 }
 
 fn matching_pseudo_rules<'a>(
@@ -2360,6 +2390,9 @@ fn matching_pseudo_rules<'a>(
     pseudo: crate::css::PseudoElementKind,
     state: u8,
 ) -> Vec<&'a crate::css::Rule> {
+    if !stylesheet.rule_index.has_pseudo_rules {
+        return Vec::new();
+    }
     let applicable = |rule: &&crate::css::Rule| {
         rule.pseudo == Some(pseudo)
             && (rule.state == RuleState::Base
@@ -3139,6 +3172,9 @@ fn invalid_element_references(
     node_index: usize,
     frame: &Frame,
 ) -> HashSet<String> {
+    if !stylesheet.rule_index.has_element_references {
+        return HashSet::new();
+    }
     let mut element_ids = HashSet::new();
     for rule in &stylesheet.rules {
         if let Some(id) = rule
@@ -3722,51 +3758,130 @@ fn linear_gradient_mesh(
 ) -> egui::epaint::Mesh {
     use egui::epaint::{Mesh, Vertex};
 
-    let steps = 32;
+    const STEPS: usize = 32;
     let radians = gradient.angle.to_radians();
     let direction = vec2(radians.sin(), -radians.cos());
-    let corners = [
+    let paint_corners = [
         paint_area.left_top(),
         paint_area.right_top(),
         paint_area.right_bottom(),
         paint_area.left_bottom(),
     ];
-    let min = corners
+    let min = paint_corners
         .iter()
         .map(|point| point.to_vec2().dot(direction))
         .fold(f32::INFINITY, f32::min);
-    let max = corners
+    let max = paint_corners
         .iter()
         .map(|point| point.to_vec2().dot(direction))
         .fold(f32::NEG_INFINITY, f32::max);
-    let mut mesh = Mesh::default();
-    for y in 0..=steps {
-        for x in 0..=steps {
-            let point = pos2(
-                egui::emath::lerp(clip.left()..=clip.right(), x as f32 / steps as f32),
-                egui::emath::lerp(clip.top()..=clip.bottom(), y as f32 / steps as f32),
-            );
-            let t = (((point + sample_offset).to_vec2().dot(direction) - min)
-                / (max - min).max(f32::EPSILON))
-            .clamp(0.0, 1.0);
-            mesh.vertices.push(Vertex {
-                pos: point,
-                uv: Pos2::ZERO,
-                color: gradient_color(&gradient.stops, t, gradient.repeating, gradient.color_space),
-            });
+    let range = (max - min).max(f32::EPSILON);
+    let clip_corners = [
+        clip.left_top(),
+        clip.right_top(),
+        clip.right_bottom(),
+        clip.left_bottom(),
+    ];
+    let offset_projection = sample_offset.dot(direction);
+    let clip_min = (clip_corners
+        .iter()
+        .map(|point| (point.to_vec2().dot(direction) + offset_projection - min) / range)
+        .fold(f32::INFINITY, f32::min))
+    .min(1.0);
+    let clip_max = (clip_corners
+        .iter()
+        .map(|point| (point.to_vec2().dot(direction) + offset_projection - min) / range)
+        .fold(f32::NEG_INFINITY, f32::max))
+    .max(0.0);
+    let active_min = clip_min.max(0.0);
+    let active_max = clip_max.min(1.0);
+    let mut boundaries = vec![clip_min, clip_max];
+    if clip_min < 0.0 && clip_max > 0.0 {
+        boundaries.push(0.0);
+    }
+    if clip_min < 1.0 && clip_max > 1.0 {
+        boundaries.push(1.0);
+    }
+    if active_max > active_min {
+        for step in 1..STEPS {
+            boundaries.push(egui::emath::lerp(
+                active_min..=active_max,
+                step as f32 / STEPS as f32,
+            ));
         }
     }
-    for y in 0..steps {
-        for x in 0..steps {
-            let top_left = y * (steps + 1) + x;
-            let top_right = top_left + 1;
-            let bottom_left = top_left + steps + 1;
-            let bottom_right = bottom_left + 1;
-            mesh.add_triangle(top_left as u32, top_right as u32, bottom_right as u32);
-            mesh.add_triangle(top_left as u32, bottom_right as u32, bottom_left as u32);
+    boundaries.sort_by(f32::total_cmp);
+    boundaries.dedup_by(|first, second| (*first - *second).abs() <= f32::EPSILON);
+
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
+    let mut mesh = Mesh::default();
+    let mut polygon = Vec::with_capacity(6);
+    let mut scratch = Vec::with_capacity(8);
+    for interval in boundaries.windows(2) {
+        let lower = min + interval[0] * range - offset_projection;
+        let upper = min + interval[1] * range - offset_projection;
+        polygon.clear();
+        polygon.extend(clip_corners);
+        clip_gradient_polygon(&mut polygon, &mut scratch, direction, lower, true);
+        clip_gradient_polygon(&mut polygon, &mut scratch, direction, upper, false);
+        if polygon.len() < 3 {
+            continue;
+        }
+        let first = mesh.vertices.len() as u32;
+        for point in &polygon {
+            let t = ((point.to_vec2().dot(direction) + offset_projection - min) / range)
+                .clamp(0.0, 1.0);
+            mesh.vertices.push(Vertex {
+                pos: *point,
+                uv: Pos2::ZERO,
+                color: stops.sample(t),
+            });
+        }
+        for index in 1..polygon.len() - 1 {
+            mesh.add_triangle(first, first + index as u32, first + index as u32 + 1);
         }
     }
     mesh
+}
+
+fn clip_gradient_polygon(
+    polygon: &mut Vec<Pos2>,
+    scratch: &mut Vec<Pos2>,
+    direction: Vec2,
+    boundary: f32,
+    keep_greater: bool,
+) {
+    if polygon.is_empty() {
+        return;
+    }
+    scratch.clear();
+    let mut previous_index = polygon.len() - 1;
+    let mut previous_distance = polygon[previous_index].to_vec2().dot(direction) - boundary;
+    for current_index in 0..polygon.len() {
+        let previous = polygon[previous_index];
+        let current = polygon[current_index];
+        let current_distance = current.to_vec2().dot(direction) - boundary;
+        let previous_inside = if keep_greater {
+            previous_distance >= -1.0e-5
+        } else {
+            previous_distance <= 1.0e-5
+        };
+        let current_inside = if keep_greater {
+            current_distance >= -1.0e-5
+        } else {
+            current_distance <= 1.0e-5
+        };
+        if previous_inside != current_inside {
+            let amount = previous_distance / (previous_distance - current_distance);
+            scratch.push(previous.lerp(current, amount));
+        }
+        if current_inside {
+            scratch.push(current);
+        }
+        previous_index = current_index;
+        previous_distance = current_distance;
+    }
+    std::mem::swap(polygon, scratch);
 }
 
 fn linear_gradient_slice_mesh(
@@ -3795,6 +3910,7 @@ fn linear_gradient_slice_mesh(
         .iter()
         .map(|point| point.to_vec2().dot(direction))
         .fold(f32::NEG_INFINITY, f32::max);
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
     for y in 0..=steps {
         for x in 0..=steps {
@@ -3813,7 +3929,7 @@ fn linear_gradient_slice_mesh(
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
-                color: gradient_color(&gradient.stops, t, gradient.repeating, gradient.color_space),
+                color: stops.sample(t),
             });
         }
     }
@@ -3840,6 +3956,7 @@ fn radial_gradient_mesh(
 
     const STEPS: usize = 48;
     let (center, radii, corner_extent) = radial_gradient_parameters(paint_area, gradient);
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
     for y in 0..=STEPS {
         for x in 0..=STEPS {
@@ -3850,12 +3967,12 @@ fn radial_gradient_mesh(
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
-                color: gradient_color(
-                    &gradient.stops,
-                    radial_gradient_position(point + sample_offset, center, radii, corner_extent),
-                    gradient.repeating,
-                    gradient.color_space,
-                ),
+                color: stops.sample(radial_gradient_position(
+                    point + sample_offset,
+                    center,
+                    radii,
+                    corner_extent,
+                )),
             });
         }
     }
@@ -3874,6 +3991,7 @@ fn radial_gradient_slice_mesh(
     const STEPS: usize = 32;
     let image = Rect::from_min_size(Pos2::ZERO, image_size);
     let (center, radii, corner_extent) = radial_gradient_parameters(image, gradient);
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
     for y in 0..=STEPS {
         for x in 0..=STEPS {
@@ -3890,12 +4008,12 @@ fn radial_gradient_slice_mesh(
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
-                color: gradient_color(
-                    &gradient.stops,
-                    radial_gradient_position(source_point, center, radii, corner_extent),
-                    gradient.repeating,
-                    gradient.color_space,
-                ),
+                color: stops.sample(radial_gradient_position(
+                    source_point,
+                    center,
+                    radii,
+                    corner_extent,
+                )),
             });
         }
     }
@@ -4029,6 +4147,7 @@ fn conic_gradient_mesh(
         paint_area.left() + gradient.center[0].resolve(paint_area.width()),
         paint_area.top() + gradient.center[1].resolve(paint_area.height()),
     );
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
     for y in 0..=STEPS {
         for x in 0..=STEPS {
@@ -4039,12 +4158,11 @@ fn conic_gradient_mesh(
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
-                color: gradient_color(
-                    &gradient.stops,
-                    conic_gradient_position(point + sample_offset, center, gradient.from_angle),
-                    gradient.repeating,
-                    gradient.color_space,
-                ),
+                color: stops.sample(conic_gradient_position(
+                    point + sample_offset,
+                    center,
+                    gradient.from_angle,
+                )),
             });
         }
     }
@@ -4065,6 +4183,7 @@ fn conic_gradient_slice_mesh(
         gradient.center[0].resolve(image_size.x),
         gradient.center[1].resolve(image_size.y),
     );
+    let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
     for y in 0..=STEPS {
         for x in 0..=STEPS {
@@ -4081,12 +4200,11 @@ fn conic_gradient_slice_mesh(
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
-                color: gradient_color(
-                    &gradient.stops,
-                    conic_gradient_position(source_point, center, gradient.from_angle),
-                    gradient.repeating,
-                    gradient.color_space,
-                ),
+                color: stops.sample(conic_gradient_position(
+                    source_point,
+                    center,
+                    gradient.from_angle,
+                )),
             });
         }
     }
@@ -4113,6 +4231,160 @@ fn add_grid_triangles(mesh: &mut egui::epaint::Mesh, steps: usize) {
             mesh.add_triangle(top_left as u32, bottom_right as u32, bottom_left as u32);
         }
     }
+}
+
+struct PreparedGradient {
+    stops: Vec<PreparedGradientStop>,
+    repeating: bool,
+    color_space: crate::css::GradientColorSpace,
+}
+
+struct PreparedGradientStop {
+    position: f32,
+    color: Color32,
+    alpha: f32,
+    components: [f32; 3],
+    hint_after: Option<PreparedGradientHint>,
+}
+
+enum PreparedGradientHint {
+    AtStart,
+    AtEnd,
+    Power(f32),
+}
+
+impl PreparedGradient {
+    fn new(
+        source: &[crate::css::GradientStop],
+        repeating: bool,
+        color_space: crate::css::GradientColorSpace,
+    ) -> Self {
+        let mut positions = source.iter().map(|stop| stop.position).collect::<Vec<_>>();
+        if positions[0].is_none() {
+            positions[0] = Some(0.0);
+        }
+        let last = positions.len() - 1;
+        if positions[last].is_none() {
+            positions[last] = Some(1.0);
+        }
+        let mut previous_fixed = 0;
+        for index in 1..positions.len() {
+            if let Some(value) = positions[index] {
+                let previous = positions[previous_fixed].unwrap_or(0.0);
+                let value = value.max(previous);
+                positions[index] = Some(value);
+                let gap = index - previous_fixed;
+                for missing in 1..gap {
+                    let amount = missing as f32 / gap as f32;
+                    positions[previous_fixed + missing] =
+                        Some(egui::emath::lerp(previous..=value, amount));
+                }
+                previous_fixed = index;
+            }
+        }
+
+        let stops = source
+            .iter()
+            .enumerate()
+            .map(|(index, stop)| {
+                let position = positions[index].unwrap_or(0.0);
+                let hint_after = stop.hint_after.and_then(|hint| {
+                    let end = positions.get(index + 1).copied().flatten()?;
+                    let hint_amount =
+                        ((hint - position) / (end - position).max(f32::EPSILON)).clamp(0.0, 1.0);
+                    Some(if hint_amount <= f32::EPSILON {
+                        PreparedGradientHint::AtStart
+                    } else if hint_amount >= 1.0 - f32::EPSILON {
+                        PreparedGradientHint::AtEnd
+                    } else {
+                        PreparedGradientHint::Power(0.5_f32.ln() / hint_amount.ln())
+                    })
+                });
+                let rgba = stop.color.to_array();
+                PreparedGradientStop {
+                    position,
+                    color: stop.color,
+                    alpha: f32::from(rgba[3]) / 255.0,
+                    components: gradient_color_components(rgba, color_space),
+                    hint_after,
+                }
+            })
+            .collect();
+        Self {
+            stops,
+            repeating,
+            color_space,
+        }
+    }
+
+    fn sample(&self, position: f32) -> Color32 {
+        let position = if self.repeating {
+            let start = self.stops[0].position;
+            let end = self.stops[self.stops.len() - 1].position;
+            let period = end - start;
+            if period <= f32::EPSILON {
+                return self.stops[self.stops.len() - 1].color;
+            }
+            (position - start).rem_euclid(period) + start
+        } else {
+            position
+        };
+        let after = self
+            .stops
+            .iter()
+            .position(|stop| stop.position >= position)
+            .unwrap_or(self.stops.len() - 1);
+        if after == 0 {
+            return self.stops[0].color;
+        }
+        let start = &self.stops[after - 1];
+        let end = &self.stops[after];
+        let mut amount = ((position - start.position)
+            / (end.position - start.position).max(f32::EPSILON))
+        .clamp(0.0, 1.0);
+        if let Some(hint) = &start.hint_after {
+            amount = match hint {
+                PreparedGradientHint::AtStart => {
+                    if amount <= 0.0 {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                }
+                PreparedGradientHint::AtEnd => {
+                    if amount >= 1.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+                PreparedGradientHint::Power(exponent) => amount.powf(*exponent),
+            };
+        }
+        interpolate_prepared_gradient_colors(start, end, amount, self.color_space)
+    }
+}
+
+fn interpolate_prepared_gradient_colors(
+    start: &PreparedGradientStop,
+    end: &PreparedGradientStop,
+    amount: f32,
+    color_space: crate::css::GradientColorSpace,
+) -> Color32 {
+    let alpha = egui::emath::lerp(start.alpha..=end.alpha, amount);
+    let mut color = std::array::from_fn(|index| {
+        egui::emath::lerp(
+            (start.components[index] * start.alpha)..=(end.components[index] * end.alpha),
+            amount,
+        )
+    });
+    if alpha > f32::EPSILON {
+        color.iter_mut().for_each(|component| *component /= alpha);
+    } else {
+        color = [0.0; 3];
+    }
+    let channels = gradient_color_channels(color, alpha, color_space);
+    Color32::from_rgba_unmultiplied(channels[0], channels[1], channels[2], channels[3])
 }
 
 fn gradient_color(
@@ -4579,10 +4851,14 @@ fn collapse_flex_item(frame: &Frame, child: usize, layout: Layout, style: &mut S
     }
 }
 
-fn solve(frame: &Frame, context: &Context) -> Cache {
+fn solve(frame: &mut Frame, context: &Context) -> Cache {
+    let mut cache = std::mem::take(&mut frame.cache);
+    frame.cache.paint_order = cache.paint_order.clone();
+    cache.boxes.clear();
     let mut tree = crate::layout_tree::Tree::new(crate::math::resolve);
     let mut ids = Vec::new();
-    for (index, node) in frame.nodes.iter().enumerate() {
+    for index in 0..frame.nodes.len() {
+        let node = &frame.nodes[index];
         let mut style = node.style.layout.clone();
         trim_child_margins(frame, index, &mut style);
         if node.absent {
@@ -4729,8 +5005,13 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
             paint.response.sense.senses_click() || paint.response.sense.senses_drag()
         }) || node.style.inline
             && node.style.format.display != crate::formatting::DisplayKind::Inline;
-        if let Some(text) = &node.text {
-            tree.nodes[usize::from(id)].runs = text_runs(context, &text.job, &node.style.format);
+        if let Some((runs, minimum)) = node
+            .text
+            .as_ref()
+            .map(|text| text_runs(context, &text.job, &node.style.format))
+        {
+            frame.nodes[index].text.as_mut().unwrap().minimum = minimum;
+            tree.nodes[usize::from(id)].runs = runs;
         }
         ids.push(id);
     }
@@ -4765,9 +5046,9 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
         }
         layout_parents[i] = containing;
         if let Some(p) = parent {
-            children[p].push(i);
+            children[p].push(ids[i]);
         } else {
-            root_children.push(i);
+            root_children.push(ids[i]);
         }
     }
     for (i, children) in children.iter_mut().enumerate() {
@@ -4775,13 +5056,10 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
             frame.nodes[i].style.layout.display,
             Display::Flex | Display::Grid
         ) {
-            children.sort_by_key(|i| frame.nodes[*i].style.order);
+            children.sort_by_key(|id| frame.nodes[usize::from(*id)].style.order);
         }
-        tree.set_children(
-            ids[i],
-            &children.iter().map(|i| ids[*i]).collect::<Vec<_>>(),
-        )
-        .unwrap();
+        tree.set_children_owned(ids[i], std::mem::take(children))
+            .unwrap();
     }
     let holder = Style {
         display: Display::Block,
@@ -4791,12 +5069,7 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
         },
         ..Style::default()
     };
-    let root = tree
-        .new_with_children(
-            holder,
-            &root_children.iter().map(|i| ids[*i]).collect::<Vec<_>>(),
-        )
-        .unwrap();
+    let root = tree.new_with_children_owned(holder, root_children).unwrap();
     let measure =
         |input: taffy::LayoutInput, _: NodeId, index: Option<&mut usize>, style: &Style| {
             let node = index.map(|index| &frame.nodes[*index]);
@@ -4839,7 +5112,7 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
     .unwrap();
     let fixed_root = if !fixed.is_empty() {
         let viewport = tree
-            .new_with_children(
+            .new_with_children_owned(
                 Style {
                     display: Display::Block,
                     size: Size {
@@ -4848,7 +5121,7 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
                     },
                     ..Style::default()
                 },
-                &fixed.iter().map(|i| ids[*i]).collect::<Vec<_>>(),
+                fixed.iter().map(|i| ids[*i]).collect(),
             )
             .unwrap();
         tree.compute_layout_with_measure(
@@ -4905,7 +5178,6 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
             .unwrap();
         }
     }
-    let mut cache = Cache::default();
     for (i, node) in frame.nodes.iter().enumerate() {
         let layout = tree.absolute_layout(ids[i]);
         let mut ancestor = Some(i);
@@ -5023,63 +5295,44 @@ fn measure_text(
     measured: Vec2,
     format: &crate::formatting::Formatting,
 ) -> Option<TextMeasurement> {
-    fn collect(shape: &egui::Shape, text: &mut Vec<Arc<egui::Galley>>) {
+    fn collect(shape: &egui::Shape, text: &mut Option<Arc<egui::Galley>>, multiple: &mut bool) {
+        if *multiple {
+            return;
+        }
         match shape {
-            egui::Shape::Text(shape) if shape.angle == 0.0 => text.push(shape.galley.clone()),
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, text)),
+            egui::Shape::Text(shape) if shape.angle == 0.0 => {
+                if text.replace(shape.galley.clone()).is_some() {
+                    *multiple = true;
+                }
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .for_each(|shape| collect(shape, text, multiple)),
             _ => {}
         }
     }
     let galley = context.graphics(|layers| {
         let list = layers.get(layer)?;
-        let mut text = Vec::new();
+        let mut text = None;
+        let mut multiple = false;
         for clipped in list.all_entries().skip(start.0).take(end.0 - start.0) {
-            collect(&clipped.shape, &mut text);
+            collect(&clipped.shape, &mut text, &mut multiple);
+            if multiple {
+                return None;
+            }
         }
-        let [galley] = text.as_slice() else {
+        if multiple {
             return None;
-        };
-        Some(galley.clone())
+        }
+        text
     })?;
     let source = prepare_text_job(context, &galley.job, format);
-    let minimum = minimum_text_width(context, &source);
     let extra = (measured - galley.size()).max(Vec2::ZERO);
     Some(TextMeasurement {
         job: source,
         extra,
-        minimum,
+        minimum: 0.0,
     })
-}
-
-fn minimum_text_width(context: &Context, source: &egui::text::LayoutJob) -> f32 {
-    let mut minimum = 0.0_f32;
-    let mut start = 0;
-    for (end, _) in unicode_linebreak::linebreaks(&source.text) {
-        let content = &source.text[start..end];
-        let content = content.trim_end_matches(|c: char| c.is_ascii_whitespace());
-        let end_content = start + content.len();
-        let mut job = source.clone();
-        job.text = content.to_owned();
-        job.sections = source
-            .sections
-            .iter()
-            .filter_map(|section| {
-                let from = section.byte_range.start.max(egui::text::ByteIndex(start));
-                let to = section
-                    .byte_range
-                    .end
-                    .min(egui::text::ByteIndex(end_content));
-                (from < to).then(|| egui::text::LayoutSection {
-                    byte_range: from - start..to - start,
-                    ..section.clone()
-                })
-            })
-            .collect();
-        job.wrap.max_width = f32::INFINITY;
-        minimum = minimum.max(context.fonts_mut(|fonts| fonts.layout_job(job).size().x));
-        start = end;
-    }
-    minimum
 }
 
 fn first_letter_range(text: &str) -> Option<std::ops::Range<usize>> {
@@ -5625,6 +5878,19 @@ fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
         vec![path],
         crate::box_decoration::FillRule::Nonzero,
     ))
+}
+
+fn append_painted_entry(
+    context: &Context,
+    entry: egui::epaint::ClippedShape,
+    clips: &[&crate::box_decoration::PathClip],
+    output: &mut Vec<egui::epaint::ClippedShape>,
+) {
+    if clips.is_empty() {
+        output.push(entry);
+    } else {
+        output.extend(clip_painted_entry(context, entry, clips));
+    }
 }
 
 fn clip_painted_entry(
@@ -6705,9 +6971,10 @@ fn text_runs(
     context: &Context,
     job: &egui::text::LayoutJob,
     format: &crate::formatting::Formatting,
-) -> Vec<crate::layout_tree::TextRun> {
+) -> (Vec<crate::layout_tree::TextRun>, f32) {
     let mut start = 0;
     let mut runs = Vec::new();
+    let mut minimum = 0.0_f32;
     let preserve = matches!(
         format.white_space.as_str(),
         "pre" | "pre-wrap" | "break-spaces"
@@ -6719,14 +6986,26 @@ fn text_runs(
         } else {
             original.trim_end_matches(|c: char| c.is_ascii_whitespace())
         };
+        let minimum_content = original.trim_end_matches(|c: char| c.is_ascii_whitespace());
+        let minimum_end = start + minimum_content.len();
+        let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
         if let Some(section) = job
             .sections
             .iter()
             .find(|section| section.byte_range.end.0 > start)
         {
-            let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
             let size =
                 context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, range.clone())).size());
+            let minimum_width = if minimum_end == range.end.0 {
+                size.x
+            } else if minimum_end == start {
+                0.0
+            } else {
+                let minimum_range =
+                    egui::text::ByteIndex(start)..egui::text::ByteIndex(minimum_end);
+                context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, minimum_range)).size().x)
+            };
+            minimum = minimum.max(minimum_width);
             let (space, height) = context.fonts_mut(|fonts| {
                 (
                     fonts.glyph_width(&section.format.font_id, ' '),
@@ -6749,10 +7028,19 @@ fn text_runs(
                 }),
                 newline: original.contains('\n'),
             });
+        } else {
+            let minimum_width = if minimum_end == start {
+                0.0
+            } else {
+                let minimum_range =
+                    egui::text::ByteIndex(start)..egui::text::ByteIndex(minimum_end);
+                context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, minimum_range)).size().x)
+            };
+            minimum = minimum.max(minimum_width);
         }
         start = end;
     }
-    runs
+    (runs, minimum)
 }
 fn replace_fragmented_text(
     context: &Context,

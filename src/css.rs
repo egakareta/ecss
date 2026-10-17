@@ -370,6 +370,11 @@ pub(crate) fn parse(source: &str) -> Result<(Vec<Rule>, Vec<String>), CssError> 
 }
 
 pub(crate) fn selector_class(selector: &str) -> Option<String> {
+    if let Some(class) = selector.strip_prefix('.')
+        && is_simple_class_name(class)
+    {
+        return Some(class.to_owned());
+    }
     let mut parser = CssParser::new(selector);
     parse_selectors(&mut parser)
         .ok()
@@ -380,6 +385,23 @@ pub(crate) fn selector_class(selector: &str) -> Option<String> {
                 .then_some(class)
                 .flatten()
         })
+}
+
+fn is_simple_class_name(class: &str) -> bool {
+    let bytes = class.as_bytes();
+    let Some(first) = bytes.first() else {
+        return false;
+    };
+    let valid_start = first.is_ascii_alphabetic()
+        || *first == b'_'
+        || *first == b'-'
+            && bytes
+                .get(1)
+                .is_some_and(|next| next.is_ascii_alphabetic() || matches!(*next, b'_' | b'-'));
+    valid_start
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-'))
 }
 
 struct StylesheetRuleParser;

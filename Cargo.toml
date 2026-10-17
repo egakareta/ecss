@@ -22,6 +22,7 @@ resvg = { version = "0.48", default-features = false, features = [
   "text",
 ] }
 selectors = "0.41"
+smallvec = "1"
 taffy = { version = "0.15", default-features = false, features = [
   "block_layout",
   "calc",

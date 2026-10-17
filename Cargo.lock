@@ -616,6 +616,7 @@ dependencies = [
  "precomputed-hash",
  "resvg",
  "selectors",
+ "smallvec",
  "taffy",
  "unicode-general-category",
  "unicode-linebreak",

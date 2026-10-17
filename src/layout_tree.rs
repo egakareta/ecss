@@ -144,8 +144,15 @@ impl<'a> Tree<'a> {
         style: Style,
         children: &[NodeId],
     ) -> Result<NodeId, Infallible> {
+        self.new_with_children_owned(style, children.to_vec())
+    }
+    pub(crate) fn new_with_children_owned(
+        &mut self,
+        style: Style,
+        children: Vec<NodeId>,
+    ) -> Result<NodeId, Infallible> {
         let id = self.add(style);
-        self.set_children(id, children)?;
+        self.set_children_owned(id, children)?;
         Ok(id)
     }
     pub(crate) fn new_format_node(
@@ -162,10 +169,17 @@ impl<'a> Tree<'a> {
     }
 
     pub fn set_children(&mut self, id: NodeId, children: &[NodeId]) -> Result<(), Infallible> {
-        self.nodes[usize::from(id)].children = children.to_vec();
-        for child in children {
+        self.set_children_owned(id, children.to_vec())
+    }
+    pub(crate) fn set_children_owned(
+        &mut self,
+        id: NodeId,
+        children: Vec<NodeId>,
+    ) -> Result<(), Infallible> {
+        for child in &children {
             self.nodes[usize::from(*child)].parent = Some(id);
         }
+        self.nodes[usize::from(id)].children = children;
         Ok(())
     }
 
@@ -194,11 +208,11 @@ impl<'a> Tree<'a> {
     }
 
     fn resolve_intrinsic_sizes(&mut self, id: NodeId, available: Size<AvailableSpace>) {
-        let children = self.nodes[usize::from(id)].children.clone();
-        for child in children {
+        let index = usize::from(id);
+        for child_index in 0..self.nodes[index].children.len() {
+            let child = self.nodes[index].children[child_index];
             self.resolve_intrinsic_sizes(child, available);
         }
-        let index = usize::from(id);
         let min = self.nodes[index].intrinsic_min;
         let max = self.nodes[index].intrinsic_max;
         if min.width.is_none()
@@ -422,15 +436,16 @@ impl<'a> Tree<'a> {
             }
             self.nodes[index].axes_prepared = true;
         }
-        let children = self.nodes[index].children.clone();
-        for child in children {
+        for child_index in 0..self.nodes[index].children.len() {
+            let child = self.nodes[index].children[child_index];
             self.prepare_axes(child);
         }
     }
     pub(crate) fn refresh_children(&mut self, id: NodeId) {
         let mode = self.nodes[usize::from(id)].format.writing;
-        let children = self.nodes[usize::from(id)].children.clone();
-        for child in children {
+        let index = usize::from(id);
+        for child_index in 0..self.nodes[index].children.len() {
+            let child = self.nodes[index].children[child_index];
             self.prepare_axes(child);
             let node = &mut self.nodes[usize::from(child)];
             let physical = if node.format.writing.vertical() {

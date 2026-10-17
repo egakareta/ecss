@@ -14,6 +14,7 @@
 //! ```
 
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
     future::Future,
@@ -65,10 +66,103 @@ where
 #[derive(Clone, Debug, Default)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
+    rule_index: RuleIndex,
     imports: Vec<String>,
     fonts: Arc<RwLock<FontAssets>>,
     font_revision: Arc<AtomicU64>,
     background_images: background::ImageAssets,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RuleIndex {
+    universal_base: Vec<usize>,
+    universal_state: Vec<usize>,
+    classes: HashMap<String, Vec<usize>>,
+    has_pseudo_rules: bool,
+    has_element_references: bool,
+}
+
+impl RuleIndex {
+    fn new(rules: &[Rule]) -> Self {
+        let mut index = Self::default();
+
+        for (rule_index, rule) in rules.iter().enumerate() {
+            if rule.pseudo.is_some() {
+                index.has_pseudo_rules = true;
+                continue;
+            }
+            match &rule.class {
+                None if rule.state == RuleState::Base => {
+                    index.universal_base.push(rule_index);
+                }
+                None => index.universal_state.push(rule_index),
+                Some(class) => {
+                    index.classes.entry(class.clone()).or_default();
+                }
+            }
+        }
+        index.has_element_references = rules
+            .iter()
+            .flat_map(|rule| &rule.declarations)
+            .any(declaration_has_element_references);
+
+        for (class, matching) in &mut index.classes {
+            for (rule_index, rule) in rules.iter().enumerate() {
+                if rule.pseudo.is_none()
+                    && ((rule.class.as_deref() == Some(class.as_str())
+                        && rule.state == RuleState::Base)
+                        || (rule.class.is_none() && rule.state != RuleState::Base))
+                {
+                    matching.push(rule_index);
+                }
+            }
+            for (rule_index, rule) in rules.iter().enumerate() {
+                if rule.pseudo.is_none()
+                    && rule.class.as_deref() == Some(class.as_str())
+                    && rule.state != RuleState::Base
+                {
+                    matching.push(rule_index);
+                }
+            }
+        }
+
+        index
+    }
+
+    fn matching(&self, class: &str) -> impl Iterator<Item = usize> + '_ {
+        self.universal_base.iter().copied().chain(
+            self.classes
+                .get(class)
+                .map_or(self.universal_state.as_slice(), Vec::as_slice)
+                .iter()
+                .copied(),
+        )
+    }
+}
+
+fn declaration_has_element_references(declaration: &Declaration) -> bool {
+    let mut ids = Vec::new();
+    match declaration {
+        Declaration::BackgroundShorthand(background) => {
+            for image in &background.images {
+                image.collect_element_ids(&mut ids);
+            }
+        }
+        Declaration::BackgroundImage(images) => {
+            for image in images {
+                image.collect_element_ids(&mut ids);
+            }
+        }
+        Declaration::Layout(layout) if layout.name.starts_with("border-image") => {
+            if let Some(image) =
+                crate::box_decoration::border_image_source(&layout.name, &layout.value)
+            {
+                image.collect_element_ids(&mut ids);
+            }
+        }
+        _ => {}
+    }
+    !ids.is_empty()
 }
 
 impl Stylesheet {
@@ -122,8 +216,10 @@ impl Stylesheet {
 
     fn parse_unloaded(source: &str) -> Result<Self, CssError> {
         let (rules, imports) = css::parse(source)?;
+        let rule_index = RuleIndex::new(&rules);
         Ok(Self {
             rules,
+            rule_index,
             imports,
             fonts: Arc::default(),
             font_revision: Arc::default(),
@@ -229,24 +325,21 @@ impl Stylesheet {
         let mut families = None;
         let mut weight = 400;
         let mut italic = false;
-        let global_rules = self.rules.iter().filter(|rule| {
-            rule.pseudo.is_none() && rule.class.is_none() && rule.state == RuleState::Base
-        });
-        let class_rules = self.rules.iter().filter(|rule| {
-            rule.pseudo.is_none()
-                && rule.class.is_some()
-                && rule.class.as_deref() == class
-                && rule.state == RuleState::Base
-        });
-        for declaration in global_rules
-            .chain(class_rules)
-            .flat_map(|rule| &rule.declarations)
-        {
-            match declaration {
-                Declaration::FontFamily(value) => families = Some(value.clone()),
-                Declaration::FontWeight(value) => weight = *value,
-                Declaration::FontStyle(value) => italic = *value,
-                _ => {}
+        let class_rules = class
+            .and_then(|class| self.rule_index.classes.get(class))
+            .map_or(&[][..], Vec::as_slice);
+        for rule_index in self.rule_index.universal_base.iter().chain(class_rules) {
+            let rule = &self.rules[*rule_index];
+            if rule.state != RuleState::Base {
+                continue;
+            }
+            for declaration in &rule.declarations {
+                match declaration {
+                    Declaration::FontFamily(value) => families = Some(value.clone()),
+                    Declaration::FontWeight(value) => weight = *value,
+                    Declaration::FontStyle(value) => italic = *value,
+                    _ => {}
+                }
             }
         }
         Some(FontRequest {
