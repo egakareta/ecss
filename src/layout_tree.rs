@@ -487,6 +487,13 @@ impl<'a> Tree<'a> {
         let margin = initial.margin;
         let box_width = initial.size.width;
         let nowrap = matches!(format.white_space.as_str(), "nowrap" | "pre");
+        let indent = |width: f32| {
+            if format.text_indent.1 {
+                format.text_indent.0 * width
+            } else {
+                format.text_indent.0
+            }
+        };
         let mut fragments = Vec::new();
         let mut run_index = 0;
         let mut started = false;
@@ -546,20 +553,40 @@ impl<'a> Tree<'a> {
                 break;
             }
 
-            let free = (content_width - line_width).max(0.0);
+            let last_line = run_index >= runs.len() || runs[run_index - 1].newline;
+            let line_indent = if format.text_indent_hanging {
+                if started { indent(content_width) } else { 0.0 }
+            } else if !started || format.text_indent_each_line {
+                indent(content_width)
+            } else {
+                0.0
+            };
+            let line_align = if last_line && format.text_align_last != "auto" {
+                format.text_align_last.as_str()
+            } else {
+                format.text_align.as_str()
+            };
+            let free = (content_width - line_width - line_indent).max(0.0);
             let rtl = style.direction == taffy::Direction::Rtl;
-            let align = match (format.text_align.as_str(), rtl) {
+            let align = match (line_align, rtl) {
                 ("center", _) => free * 0.5,
                 ("right" | "end", false) => free,
                 ("left" | "end", true) => -free,
                 _ => 0.0,
             };
+            let align = if line_align == "justify" && !last_line {
+                0.0
+            } else {
+                align
+            };
+            let justify = matches!(line_align, "justify" | "justify-all")
+                && (!last_line || line_align == "justify-all");
             let box_left = region.left() + margin.left;
             let content_left = box_left + initial.border.left + initial.padding.left;
             let text_x = if rtl {
-                content_left + content_width - line_width + align
+                content_left + content_width - line_width - line_indent + align
             } else {
-                content_left + align
+                content_left + line_indent + align
             };
             let first = &runs[line_start];
             let last = &runs[run_index - 1];
@@ -574,7 +601,14 @@ impl<'a> Tree<'a> {
                 rect,
                 text_rect: egui::Rect::from_min_size(
                     egui::pos2(text_x, line_y + initial.border.top + initial.padding.top),
-                    egui::vec2(line_width, line_height),
+                    egui::vec2(
+                        if justify {
+                            content_width - line_indent
+                        } else {
+                            line_width
+                        },
+                        line_height,
+                    ),
                 ),
                 clip: clip_regions
                     .get(*region_index)

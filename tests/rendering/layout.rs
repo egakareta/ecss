@@ -484,6 +484,77 @@ async fn named_flow_text_continues_across_document_ordered_regions_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_justify_modes_select_word_character_and_script_specific_spacing_test() {
+    async fn render(mode: &str, text: &str) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".region {{ display:block; width:100px; height:60px; flow-from:article; }}\
+             .source {{ flow-into:article content; font-size:14px; \
+             color:#f00; text-align:justify-all; text-justify:{mode}; }}"
+        ))
+        .unwrap();
+        let text = text.to_owned();
+        render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new(text.clone()).selector(".source"));
+                    ui.add(empty_response.selector(".region"));
+                    ui.response()
+                })
+                .selector(".container"),
+            );
+        })
+        .await
+    }
+    async fn render_widget(
+        mode: &str,
+        alignment: &str,
+        last_alignment: &str,
+        text: &str,
+    ) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ display:block; width:100px; height:60px; font-size:14px; color:#f00; \
+             text-align:{alignment}; text-align-last:{last_alignment}; text-justify:{mode}; }}"
+        ))
+        .unwrap();
+        let text = text.to_owned();
+        render_ui_pixels(stylesheet, move |ui| {
+            ui.add(egui::Label::new(text.clone()).selector(".text"));
+        })
+        .await
+    }
+
+    let latin = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    let none = render("none", latin).await;
+    let inter_word = render("inter-word", latin).await;
+    let inter_character = render("inter-character", latin).await;
+    let auto_latin = render("auto", latin).await;
+    assert_ne!(none, inter_word);
+    assert_ne!(inter_character, inter_word);
+    assert_eq!(auto_latin, inter_word);
+
+    let cjk = "日本語日本語日本語日本語日本語日本語";
+    let cjk_inter_word = render("inter-word", cjk).await;
+    let cjk_inter_character = render("inter-character", cjk).await;
+    let auto_cjk = render("auto", cjk).await;
+    assert_eq!(auto_cjk, cjk_inter_character);
+    assert_ne!(auto_cjk, cjk_inter_word);
+
+    let generic_none = render_widget("none", "justify-all", "auto", latin).await;
+    let generic_inter_word = render_widget("inter-word", "justify-all", "auto", latin).await;
+    assert_ne!(generic_none, generic_inter_word);
+
+    let last_line_words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
+    let plain_last = render_widget("inter-word", "left", "auto", last_line_words).await;
+    let justified_last = render_widget("inter-word", "left", "justify", last_line_words).await;
+    assert_ne!(plain_last, justified_last);
+
+    let justify = render_widget("inter-word", "justify", "auto", last_line_words).await;
+    let justify_all = render_widget("inter-word", "justify-all", "auto", last_line_words).await;
+    assert_ne!(justify, justify_all);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn anonymous_text_in_content_flow_continues_across_regions_test() {
     let stylesheet = Stylesheet::parse(
         ".first { display:block; width:60px; height:14px; flow-from:article; overflow:hidden; background-color:#00f; }\

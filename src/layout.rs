@@ -210,7 +210,22 @@ pub(crate) fn show(
     style.format.line_height = parent_style.format.line_height;
     style.format.white_space = parent_style.format.white_space.clone();
     style.format.text_align = parent_style.format.text_align.clone();
+    style.format.text_align_last = parent_style.format.text_align_last.clone();
+    style.format.text_justify = parent_style.format.text_justify.clone();
     style.format.text_overflow = parent_style.format.text_overflow.clone();
+    style.format.letter_spacing = parent_style.format.letter_spacing;
+    style.format.word_spacing = parent_style.format.word_spacing;
+    style.format.tab_size = parent_style.format.tab_size;
+    style.format.tab_size_length = parent_style.format.tab_size_length;
+    style.format.text_indent = parent_style.format.text_indent;
+    style.format.text_indent_each_line = parent_style.format.text_indent_each_line;
+    style.format.text_indent_hanging = parent_style.format.text_indent_hanging;
+    style.format.text_transform = parent_style.format.text_transform.clone();
+    style.format.line_break = parent_style.format.line_break.clone();
+    style.format.overflow_wrap = parent_style.format.overflow_wrap.clone();
+    style.format.word_break = parent_style.format.word_break.clone();
+    style.format.hyphens = parent_style.format.hyphens.clone();
+    style.format.hanging_punctuation = parent_style.format.hanging_punctuation.clone();
     style.format.collapse = parent_style.format.collapse;
     style.format.spacing = parent_style.format.spacing;
     style.format.hide_empty = parent_style.format.hide_empty;
@@ -534,6 +549,7 @@ pub(crate) fn show(
                 end,
                 measured,
                 &style.format,
+                geometry.content().width(),
                 style.format.flow_into_content,
             );
             if let Some(text) = &mut text
@@ -629,10 +645,16 @@ pub(crate) fn show(
                     paint.start,
                     paint.end,
                     text.job.clone(),
+                    node.style.format.clone(),
+                    if node.style.format.writing.vertical() {
+                        node.used.content().height()
+                    } else {
+                        node.used.content().width()
+                    },
                 ))
             })
         };
-        if let Some((layer, start, end, job)) = update {
+        if let Some((layer, start, end, job, format, width)) = update {
             reflow_text(
                 ui.ctx(),
                 layer,
@@ -640,6 +662,8 @@ pub(crate) fn show(
                 end,
                 &job,
                 content_ui.visuals().selection.bg_fill,
+                &format,
+                width,
             );
         }
     }
@@ -654,6 +678,12 @@ pub(crate) fn show(
                 end,
                 &text.job,
                 content_ui.visuals().selection.bg_fill,
+                &style.format,
+                if style.format.writing.vertical() {
+                    geometry.content().height()
+                } else {
+                    geometry.content().width()
+                },
             )
         })
         .unwrap_or(measured);
@@ -5669,6 +5699,7 @@ fn measure_text(
     end: egui::layers::ShapeIdx,
     measured: Vec2,
     format: &crate::formatting::Formatting,
+    text_basis: f32,
     allow_anonymous_content: bool,
 ) -> Option<TextMeasurement> {
     fn collect(shape: &egui::Shape, texts: &mut Vec<Arc<egui::Galley>>, supported: &mut bool) {
@@ -5731,7 +5762,7 @@ fn measure_text(
         let size = context.fonts_mut(|fonts| fonts.layout_job(job.clone()).size());
         (job, size)
     };
-    let source = prepare_text_job(context, &source_job, format);
+    let source = prepare_text_job(context, &source_job, format, text_basis);
     let extra = (measured - natural_size).max(Vec2::ZERO);
     Some(TextMeasurement {
         job: source,
@@ -5932,6 +5963,7 @@ fn prepare_text_job(
     context: &Context,
     job: &egui::text::LayoutJob,
     format: &crate::formatting::Formatting,
+    text_basis: f32,
 ) -> egui::text::LayoutJob {
     let preserve = matches!(
         format.white_space.as_str(),
@@ -5943,6 +5975,15 @@ fn prepare_text_job(
     result.sections.clear();
     let mut space = false;
     let mut carriage = false;
+    let mut line_advance = 0.0_f32;
+    let mut word_start = true;
+    let mut line_index = 0usize;
+    let mut line_start = true;
+    let indent = if format.text_indent.1 {
+        format.text_indent.0 * text_basis
+    } else {
+        format.text_indent.0
+    };
     for (index, mut c) in job.text.char_indices() {
         if c == '\n' && carriage {
             carriage = false;
@@ -5977,12 +6018,139 @@ fn prepare_text_job(
         if let Some(height) = format.line_height {
             text_format.line_height = Some(height);
         }
-        result.append(c.encode_utf8(&mut [0; 4]), 0.0, text_format);
+        let mut output = String::new();
+        let space_width = context.fonts_mut(|fonts| fonts.glyph_width(&text_format.font_id, ' '));
+        let indent_spaces = if indent > 0.0 && space_width > 0.0 {
+            (indent / space_width).round().max(1.0) as usize
+        } else {
+            0
+        };
+        let apply_indent = line_start
+            && if format.text_indent_hanging {
+                line_index > 0
+            } else {
+                line_index == 0 || format.text_indent_each_line
+            };
+        if apply_indent {
+            output.extend(std::iter::repeat_n(' ', indent_spaces));
+        }
+        if c == '\t' && preserve {
+            let tab_stop = if format.tab_size_length {
+                format.tab_size
+            } else {
+                format.tab_size * space_width
+            };
+            if tab_stop > 0.0 && space_width > 0.0 {
+                let remainder = line_advance.rem_euclid(tab_stop);
+                let advance = if remainder <= f32::EPSILON {
+                    tab_stop
+                } else {
+                    tab_stop - remainder
+                };
+                let count = (advance / space_width).ceil().max(1.0) as usize;
+                output.extend(std::iter::repeat_n(' ', count));
+            }
+        } else {
+            match format.text_transform.as_str() {
+                "uppercase" => output.extend(c.to_uppercase()),
+                "lowercase" => output.extend(c.to_lowercase()),
+                "capitalize" if word_start => output.extend(c.to_uppercase()),
+                "full-width" => {
+                    let transformed = if c == ' ' {
+                        '\u{3000}'
+                    } else if ('!'..='~').contains(&c) {
+                        char::from_u32(c as u32 + 0xFEE0).unwrap_or(c)
+                    } else {
+                        c
+                    };
+                    output.push(transformed);
+                }
+                "full-size-kana" => output.push(full_size_kana(c)),
+                _ => output.push(c),
+            }
+        }
+        if matches!(c, '\n' | '\r') {
+            line_advance = 0.0;
+            word_start = true;
+            line_index += 1;
+            line_start = true;
+        } else {
+            for character in output.chars() {
+                let glyph_width =
+                    context.fonts_mut(|fonts| fonts.glyph_width(&text_format.font_id, character));
+                line_advance += glyph_width
+                    + format.letter_spacing
+                    + if character.is_whitespace() {
+                        format.word_spacing
+                    } else {
+                        0.0
+                    };
+            }
+            word_start = !c.is_alphanumeric() && !is_combining_mark(c);
+            line_start = false;
+        }
+        for character in output.chars() {
+            text_format.extra_letter_spacing = format.letter_spacing
+                + if character.is_whitespace() {
+                    format.word_spacing
+                } else {
+                    0.0
+                };
+            result.append(character.encode_utf8(&mut [0; 4]), 0.0, text_format.clone());
+        }
     }
     if matches!(format.white_space.as_str(), "pre" | "nowrap") {
         result.wrap.max_width = f32::INFINITY;
     }
+    result.wrap.break_anywhere |= matches!(format.word_break.as_str(), "break-all" | "break-word")
+        || matches!(format.overflow_wrap.as_str(), "break-word" | "anywhere")
+        || format.line_break == "anywhere";
     result
+}
+
+fn full_size_kana(character: char) -> char {
+    match character {
+        'ぁ' => 'あ',
+        'ぃ' => 'い',
+        'ぅ' => 'う',
+        'ぇ' => 'え',
+        'ぉ' => 'お',
+        'っ' => 'つ',
+        'ゃ' => 'や',
+        'ゅ' => 'ゆ',
+        'ょ' => 'よ',
+        'ゎ' => 'わ',
+        'ァ' => 'ア',
+        'ィ' => 'イ',
+        'ゥ' => 'ウ',
+        'ェ' => 'エ',
+        'ォ' => 'オ',
+        'ッ' => 'ツ',
+        'ャ' => 'ヤ',
+        'ュ' => 'ユ',
+        'ョ' => 'ヨ',
+        'ヮ' => 'ワ',
+        _ => character,
+    }
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x2E80..=0x2FFF
+            | 0x3000..=0x30FF
+            | 0x3100..=0x312F
+            | 0x31A0..=0x31BF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x323AF
+    )
 }
 
 fn reflow_text(
@@ -5992,6 +6160,8 @@ fn reflow_text(
     end: egui::layers::ShapeIdx,
     job: &egui::text::LayoutJob,
     selection_color: Color32,
+    format: &crate::formatting::Formatting,
+    width: f32,
 ) -> Vec2 {
     fn find_galley(shape: &egui::Shape) -> Option<&std::sync::Arc<egui::Galley>> {
         match shape {
@@ -6001,6 +6171,7 @@ fn reflow_text(
         }
     }
 
+    let job = justify_wrapped_text_job(context, job, width, format);
     let current = context.graphics(|layers| {
         let list = layers.get(layer)?;
         list.all_entries()
@@ -6008,11 +6179,14 @@ fn reflow_text(
             .take(end.0 - start.0)
             .find_map(|entry| find_galley(&entry.shape).cloned())
     });
-    if let Some(current) = current.as_ref().filter(|galley| galley.job.as_ref() == job) {
+    if let Some(current) = current
+        .as_ref()
+        .filter(|galley| galley.job.as_ref() == &job)
+    {
         return current.size();
     }
 
-    let galley = context.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+    let galley = context.fonts_mut(|fonts| fonts.layout_job(job));
     if current
         .as_ref()
         .is_some_and(|current| galley_has_selection(current, selection_color))
@@ -7424,6 +7598,14 @@ fn slice_job(job: &egui::text::LayoutJob, range: egui::text::ByteRange) -> egui:
     result.wrap.max_width = f32::INFINITY;
     result
 }
+
+fn leading_space_at_byte(job: &egui::text::LayoutJob, byte: usize) -> f32 {
+    job.sections
+        .iter()
+        .find(|section| section.byte_range.start.0 == byte)
+        .map_or(0.0, |section| section.leading_space)
+}
+
 fn text_runs(
     context: &Context,
     job: &egui::text::LayoutJob,
@@ -7436,14 +7618,48 @@ fn text_runs(
         format.white_space.as_str(),
         "pre" | "pre-wrap" | "break-spaces"
     );
-    for (end, _) in unicode_linebreak::linebreaks(&job.text) {
+    let break_anywhere = matches!(format.word_break.as_str(), "break-all" | "break-word")
+        || matches!(format.overflow_wrap.as_str(), "break-word" | "anywhere")
+        || format.line_break == "anywhere";
+    let line_ends = if break_anywhere {
+        let characters = job.text.char_indices().collect::<Vec<_>>();
+        characters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (start, character))| {
+                let next = characters.get(index + 1).map(|(_, character)| *character);
+                let grapheme_continues = next.is_some_and(|next| {
+                    is_combining_mark(next) || next == '\u{200d}' || *character == '\u{200d}'
+                });
+                (!grapheme_continues).then_some(start + character.len_utf8())
+            })
+            .collect::<Vec<_>>()
+    } else {
+        unicode_linebreak::linebreaks(&job.text)
+            .filter_map(|(end, _)| {
+                if format.word_break == "keep-all" && end < job.text.len() {
+                    let before = job.text[..end].chars().next_back();
+                    let after = job.text[end..].chars().next();
+                    if before.is_some_and(is_cjk) && after.is_some_and(is_cjk) {
+                        return None;
+                    }
+                }
+                Some(end)
+            })
+            .collect()
+    };
+    for end in line_ends {
         let original = &job.text[start..end];
         let content = if preserve {
             original.trim_end_matches(['\r', '\n'])
         } else {
             original.trim_end_matches(|c: char| c.is_ascii_whitespace())
         };
-        let minimum_content = original.trim_end_matches(|c: char| c.is_ascii_whitespace());
+        let minimum_content = if break_anywhere {
+            content
+        } else {
+            original.trim_end_matches(|c: char| c.is_ascii_whitespace())
+        };
         let minimum_end = start + minimum_content.len();
         let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
         if let Some(section) = job
@@ -7630,6 +7846,12 @@ fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
             if fragment.marker.is_some() {
                 layout.wrap = egui::text::TextWrapping::no_max_width();
             }
+            if fragment.marker.is_none()
+                && (matches!(format.text_align.as_str(), "justify" | "justify-all")
+                    || format.text_align_last == "justify")
+            {
+                layout = justify_text_job(context, &layout, fragment.text_rect.width(), format);
+            }
             text.galley = context.fonts_mut(|fonts| fonts.layout_job(layout));
             text.pos = geometry.border.min + fragment.text_rect.min.to_vec2();
             if selection_by_range {
@@ -7688,6 +7910,173 @@ fn paint_galley_selection_range(
         }
         char_offset += row.glyphs.len() + usize::from(placed.ends_with_newline);
     }
+}
+
+fn justify_text_job(
+    context: &Context,
+    job: &egui::text::LayoutJob,
+    width: f32,
+    format: &crate::formatting::Formatting,
+) -> egui::text::LayoutJob {
+    if format.text_justify == "none" {
+        return job.clone();
+    }
+
+    let natural_width = context.fonts_mut(|fonts| fonts.layout_job(job.clone()).size().x);
+    let target = width.max(natural_width);
+    let is_inter_character = match format.text_justify.as_str() {
+        "inter-character" => true,
+        "auto" => job.text.chars().any(is_cjk),
+        _ => false,
+    };
+    let characters = job.text.char_indices().collect::<Vec<_>>();
+    let opportunities = if is_inter_character {
+        characters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (byte_index, character))| {
+                let next = characters.get(index + 1).map(|(_, character)| *character)?;
+                let continues_cluster =
+                    is_combining_mark(next) || next == '\u{200d}' || *character == '\u{200d}';
+                (!character.is_whitespace() && !next.is_whitespace() && !continues_cluster)
+                    .then_some(*byte_index)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let mut seen_word = false;
+        characters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (byte_index, character))| {
+                if !character.is_whitespace() {
+                    seen_word = true;
+                    return None;
+                }
+                let followed_by_word = characters
+                    .get(index + 1)
+                    .is_some_and(|(_, next)| !next.is_whitespace());
+                (*character == ' ' && seen_word && followed_by_word).then_some(*byte_index)
+            })
+            .collect::<Vec<_>>()
+    };
+    if opportunities.is_empty() || target <= natural_width + 0.01 {
+        return job.clone();
+    }
+    let extra = (target - natural_width) / opportunities.len() as f32;
+    let mut result = job.clone();
+    result.text.clear();
+    result.sections.clear();
+    let mut next_opportunity = 0;
+    for &(index, character) in &characters {
+        let mut text_format = job.format_at_byte(egui::text::ByteIndex(index)).clone();
+        if opportunities.get(next_opportunity) == Some(&index) {
+            text_format.extra_letter_spacing += extra;
+            next_opportunity += 1;
+        }
+        result.append(
+            character.encode_utf8(&mut [0; 4]),
+            leading_space_at_byte(job, index),
+            text_format,
+        );
+    }
+    result.halign = egui::Align::Min;
+    result
+}
+
+fn justify_wrapped_text_job(
+    context: &Context,
+    job: &egui::text::LayoutJob,
+    width: f32,
+    format: &crate::formatting::Formatting,
+) -> egui::text::LayoutJob {
+    if format.text_justify == "none"
+        || !matches!(format.text_align.as_str(), "justify" | "justify-all")
+            && format.text_align_last != "justify"
+    {
+        return job.clone();
+    }
+
+    let galley = context.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+    if galley.elided {
+        return job.clone();
+    }
+
+    let characters = job.text.char_indices().collect::<Vec<_>>();
+    let mut result = job.clone();
+    result.text.clear();
+    result.sections.clear();
+    let mut character_start = 0;
+    let mut changed = false;
+
+    for (row_index, placed_row) in galley.rows.iter().enumerate() {
+        let character_end = (character_start + placed_row.row.glyphs.len()).min(characters.len());
+        let byte_start = characters
+            .get(character_start)
+            .map_or(job.text.len(), |(byte, _)| *byte);
+        let byte_end = characters
+            .get(character_end)
+            .map_or(job.text.len(), |(byte, _)| *byte);
+        let paragraph_end = placed_row.ends_with_newline || row_index + 1 == galley.rows.len();
+        let line_align = if paragraph_end && format.text_align_last != "auto" {
+            format.text_align_last.as_str()
+        } else {
+            format.text_align.as_str()
+        };
+        let should_justify = line_align == "justify-all"
+            || line_align == "justify" && (!paragraph_end || format.text_align_last == "justify");
+        let line_range = egui::text::ByteIndex(byte_start)..egui::text::ByteIndex(byte_end);
+        let source_line = slice_job(job, line_range);
+        let justified_line = (should_justify && byte_start < byte_end)
+            .then(|| justify_text_job(context, &source_line, width, format));
+        changed |= justified_line
+            .as_ref()
+            .is_some_and(|justified| justified != &source_line);
+
+        for (byte, character) in source_line.text.char_indices() {
+            let text_format = justified_line
+                .as_ref()
+                .map(|line| line.format_at_byte(egui::text::ByteIndex(byte)).clone())
+                .unwrap_or_else(|| {
+                    job.format_at_byte(egui::text::ByteIndex(byte_start + byte))
+                        .clone()
+                });
+            result.append(
+                character.encode_utf8(&mut [0; 4]),
+                leading_space_at_byte(justified_line.as_ref().unwrap_or(&source_line), byte),
+                text_format,
+            );
+        }
+        character_start = character_end;
+
+        if placed_row.ends_with_newline
+            && characters
+                .get(character_start)
+                .is_some_and(|(_, character)| *character == '\n')
+        {
+            let (byte, character) = characters[character_start];
+            let text_format = job.format_at_byte(egui::text::ByteIndex(byte)).clone();
+            result.append(
+                character.encode_utf8(&mut [0; 4]),
+                leading_space_at_byte(job, byte),
+                text_format,
+            );
+            character_start += 1;
+        }
+    }
+
+    for &(byte, character) in characters.iter().skip(character_start) {
+        let text_format = job.format_at_byte(egui::text::ByteIndex(byte)).clone();
+        result.append(
+            character.encode_utf8(&mut [0; 4]),
+            leading_space_at_byte(job, byte),
+            text_format,
+        );
+    }
+    if !changed {
+        return job.clone();
+    }
+    result.halign = egui::Align::Min;
+    result
 }
 
 fn galley_selection_ranges(

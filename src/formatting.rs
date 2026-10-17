@@ -166,8 +166,23 @@ pub(crate) struct Formatting {
     pub vertical_align: String,
     pub line_height: Option<f32>,
     pub text_align: String,
+    pub text_align_last: String,
+    pub text_justify: String,
     pub text_overflow: [TextOverflow; 2],
     pub white_space: String,
+    pub letter_spacing: f32,
+    pub word_spacing: f32,
+    pub tab_size: f32,
+    pub tab_size_length: bool,
+    pub text_indent: (f32, bool),
+    pub text_indent_each_line: bool,
+    pub text_indent_hanging: bool,
+    pub text_transform: String,
+    pub line_break: String,
+    pub overflow_wrap: String,
+    pub word_break: String,
+    pub hyphens: String,
+    pub hanging_punctuation: String,
     pub text_orientation: String,
 }
 
@@ -216,8 +231,23 @@ impl Default for Formatting {
             vertical_align: "baseline".into(),
             line_height: None,
             text_align: "start".into(),
+            text_align_last: "auto".into(),
+            text_justify: "auto".into(),
             text_overflow: [TextOverflow::Clip, TextOverflow::Clip],
             white_space: "normal".into(),
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            tab_size: 8.0,
+            tab_size_length: false,
+            text_indent: (0.0, false),
+            text_indent_each_line: false,
+            text_indent_hanging: false,
+            text_transform: "none".into(),
+            line_break: "auto".into(),
+            overflow_wrap: "normal".into(),
+            word_break: "normal".into(),
+            hyphens: "manual".into(),
+            hanging_punctuation: "none".into(),
             text_orientation: "mixed".into(),
         }
     }
@@ -259,8 +289,21 @@ pub(crate) fn supported(name: &str) -> bool {
             | "vertical-align"
             | "line-height"
             | "text-align"
+            | "text-align-all"
+            | "text-align-last"
+            | "text-justify"
             | "text-overflow"
             | "white-space"
+            | "letter-spacing"
+            | "word-spacing"
+            | "tab-size"
+            | "text-indent"
+            | "text-transform"
+            | "line-break"
+            | "overflow-wrap"
+            | "word-break"
+            | "hyphens"
+            | "hanging-punctuation"
     )
 }
 
@@ -507,13 +550,183 @@ pub(crate) fn apply(
             }
         }
         "text-align" => {
+            let value = value.to_ascii_lowercase();
             if !matches!(
-                value,
-                "start" | "end" | "left" | "right" | "center" | "justify" | "match-parent"
+                value.as_str(),
+                "start"
+                    | "end"
+                    | "left"
+                    | "right"
+                    | "center"
+                    | "justify"
+                    | "justify-all"
+                    | "match-parent"
             ) {
                 return Err("invalid text-align");
             }
-            f.text_align = value.into();
+            f.text_align = value;
+        }
+        "text-align-all" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "start"
+                    | "end"
+                    | "left"
+                    | "right"
+                    | "center"
+                    | "justify"
+                    | "justify-all"
+                    | "match-parent"
+            ) {
+                return Err("invalid text-align-all");
+            }
+            f.text_align = value;
+        }
+        "text-align-last" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "auto" | "start" | "end" | "left" | "right" | "center" | "justify"
+            ) {
+                return Err("invalid text-align-last");
+            }
+            f.text_align_last = value;
+        }
+        "text-justify" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "auto" | "none" | "inter-word" | "inter-character"
+            ) {
+                return Err("invalid text-justify");
+            }
+            f.text_justify = value;
+        }
+        "letter-spacing" => {
+            f.letter_spacing = if value.eq_ignore_ascii_case("normal") {
+                0.0
+            } else if let Some(handle) = crate::math::length(value, units, true, false)? {
+                crate::math::resolve(handle, 0.0)
+            } else {
+                length(value, units)?
+            };
+        }
+        "word-spacing" => {
+            f.word_spacing = if value.eq_ignore_ascii_case("normal") {
+                0.0
+            } else if let Some(handle) = crate::math::length(value, units, true, false)? {
+                crate::math::resolve(handle, 0.0)
+            } else {
+                let (spacing, percentage) = crate::layout_style::length_value(value, units, true)?;
+                if percentage {
+                    spacing * units.font
+                } else {
+                    spacing
+                }
+            };
+        }
+        "tab-size" => {
+            if let Ok(size) = value.parse::<u32>() {
+                if size > 65535 {
+                    return Err("invalid tab-size");
+                }
+                f.tab_size = size as f32;
+                f.tab_size_length = false;
+            } else {
+                f.tab_size = length(value, units)?;
+                if f.tab_size < 0.0 {
+                    return Err("invalid tab-size");
+                }
+                f.tab_size_length = true;
+            }
+        }
+        "text-indent" => {
+            let parts = crate::layout_style::components(value)?;
+            if parts.is_empty() || parts.len() > 3 {
+                return Err("invalid text-indent");
+            }
+            let mut length = None;
+            let mut each_line = false;
+            let mut hanging = false;
+            for part in &parts {
+                match part.to_ascii_lowercase().as_str() {
+                    "each-line" if !each_line => each_line = true,
+                    "hanging" if !hanging => hanging = true,
+                    "each-line" | "hanging" => return Err("duplicate text-indent modifier"),
+                    _ if length.is_none() => {
+                        length = Some(crate::layout_style::length_value(part, units, true)?);
+                    }
+                    _ => return Err("invalid text-indent"),
+                }
+            }
+            let Some(length) = length else {
+                return Err("text-indent requires a length");
+            };
+            f.text_indent = length;
+            f.text_indent_each_line = each_line;
+            f.text_indent_hanging = hanging;
+        }
+        "text-transform" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "none" | "capitalize" | "uppercase" | "lowercase" | "full-width" | "full-size-kana"
+            ) {
+                return Err("invalid text-transform");
+            }
+            f.text_transform = value;
+        }
+        "line-break" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "auto" | "loose" | "normal" | "strict" | "anywhere"
+            ) {
+                return Err("invalid line-break");
+            }
+            f.line_break = value;
+        }
+        "overflow-wrap" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(value.as_str(), "normal" | "break-word" | "anywhere") {
+                return Err("invalid overflow-wrap");
+            }
+            f.overflow_wrap = value;
+        }
+        "word-break" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "normal" | "break-all" | "keep-all" | "break-word"
+            ) {
+                return Err("invalid word-break");
+            }
+            f.word_break = value;
+        }
+        "hyphens" => {
+            let value = value.to_ascii_lowercase();
+            if !matches!(value.as_str(), "none" | "manual" | "auto") {
+                return Err("invalid hyphens");
+            }
+            f.hyphens = value;
+        }
+        "hanging-punctuation" => {
+            let value = value.to_ascii_lowercase();
+            let values = value.split_whitespace().collect::<Vec<_>>();
+            if values.is_empty()
+                || values.len() > 3
+                || values.iter().any(|value| {
+                    !matches!(
+                        *value,
+                        "none" | "first" | "last" | "allow-end" | "force-end"
+                    )
+                })
+                || values.len() > 1 && values.contains(&"none")
+            {
+                return Err("invalid hanging-punctuation");
+            }
+            f.hanging_punctuation = value;
         }
         "text-overflow" => {
             let mut parser = Parser::new(value);
@@ -548,13 +761,14 @@ pub(crate) fn apply(
             };
         }
         "white-space" => {
+            let value = value.to_ascii_lowercase();
             if !matches!(
-                value,
+                value.as_str(),
                 "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line" | "break-spaces"
             ) {
                 return Err("invalid white-space");
             }
-            f.white_space = value.into();
+            f.white_space = value;
         }
         "column-rule" => {
             let mut rule = ColumnRule::default();

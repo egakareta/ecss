@@ -729,6 +729,151 @@ async fn inline_padding_and_borders_paint_around_text_without_expanding_line_hei
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_transform_matches_the_transformed_source_and_spacing_expands_text_test() {
+    async fn render(styles: &str, text: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(styles).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let text = text.to_owned();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let response = ui.add(egui::Label::new(text.clone()).selector(".text"));
+            *capture.lock().unwrap() = Some(response.rect);
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    let transformed = render(
+        ".text { color:red; width:120px; height:32px; text-transform:uppercase; }",
+        "hello",
+    )
+    .await;
+    let reference = render(".text { color:red; width:120px; height:32px; }", "HELLO").await;
+    assert_eq!(transformed.0, reference.0);
+
+    let spaced = render(
+        ".text { width:max-content; letter-spacing:2px; word-spacing:3px; }",
+        "A B C",
+    )
+    .await;
+    let plain = render(".text { width:max-content; }", "A B C").await;
+    assert!(spaced.1.width() > plain.1.width() + 8.0);
+    assert_ne!(spaced.0, plain.0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_transform_and_spacing_are_inherited_by_nested_widgets_test() {
+    async fn render(styles: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(styles).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    let child = ui.add(egui::Label::new("inherit me").selector(".child"));
+                    *capture.lock().unwrap() = Some(child.rect);
+                    ui.response()
+                })
+                .selector(".parent"),
+            );
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    let inherited = render(
+        ".parent { text-transform:uppercase; letter-spacing:2px; word-spacing:3px; } \
+         .child { color:red; width:max-content; }",
+    )
+    .await;
+    let specified = render(
+        ".child { color:red; width:max-content; text-transform:uppercase; \
+         letter-spacing:2px; word-spacing:3px; }",
+    )
+    .await;
+
+    assert_eq!(inherited.0, specified.0);
+    assert_eq!(inherited.1.size(), specified.1.size());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn css_text_declarations_are_accepted_together_test() {
+    let stylesheet = Stylesheet::parse(
+        ".text { color:red; hanging-punctuation:first last allow-end; hyphens:auto; letter-spacing:1px; \
+         line-break:strict; overflow-wrap:anywhere; tab-size:4; text-align:center; \
+         text-align-all:start; text-align-last:justify; text-indent:2px each-line hanging; \
+         text-justify:inter-character; text-transform:uppercase; white-space:pre-wrap; \
+         word-break:break-all; word-spacing:2px; }",
+    )
+    .unwrap();
+    let pixels = render_ui_pixels(stylesheet, |ui| {
+        ui.add(egui::Label::new("css text\nproperties").selector(".text"));
+    })
+    .await;
+    assert!(
+        pixels
+            .iter()
+            .any(|pixel| pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0)
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_indent_offsets_the_first_line_and_tab_size_changes_preserved_tabs_test() {
+    async fn render(styles: &str, text: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(styles).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let text = text.to_owned();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let response = ui.add(egui::Label::new(text.clone()).selector(".text"));
+            *capture.lock().unwrap() = Some(response.rect);
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    let indented = render(
+        ".text { color:red; width:160px; height:32px; text-indent:18px; }",
+        "X",
+    )
+    .await;
+    let plain = render(".text { color:red; width:160px; height:32px; }", "X").await;
+    let first_red_x = |(pixels, rect): &(Vec<[u8; 4]>, egui::Rect)| {
+        (rect.left().floor() as usize..rect.right().ceil() as usize)
+            .find(|x| {
+                (rect.top().floor() as usize..rect.bottom().ceil() as usize).any(|y| {
+                    let color = pixel(pixels, *x as f32, y as f32);
+                    color[0] > color[1] && color[0] > color[2]
+                })
+            })
+            .unwrap()
+    };
+    assert!(first_red_x(&indented) > first_red_x(&plain) + 12);
+
+    let four = render(
+        ".text { width:max-content; white-space:pre; tab-size:4; }",
+        "\tB",
+    )
+    .await;
+    let two = render(
+        ".text { width:max-content; white-space:pre; tab-size:2; }",
+        "\tB",
+    )
+    .await;
+    assert!(
+        four.1.width() > two.1.width() + 4.0,
+        "tab-size 4 width {} should exceed tab-size 2 width {}",
+        four.1.width(),
+        two.1.width()
+    );
+    assert_ne!(four.0, two.0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn font_kerning_none_uses_unadjusted_glyph_spacing_and_inherits_test() {
     let stylesheet = Stylesheet::parse(
         ".normal { width: 250px; font-size: 48px; font-kerning: normal; white-space: nowrap; }\

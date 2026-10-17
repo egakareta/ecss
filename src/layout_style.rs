@@ -331,7 +331,9 @@ impl Declaration {
             output.format.font_size_set = true;
         }
         let keyword = self.value.trim();
-        if self.name == "text-align" && keyword.eq_ignore_ascii_case("match-parent") {
+        if matches!(self.name.as_str(), "text-align" | "text-align-all")
+            && keyword.eq_ignore_ascii_case("match-parent")
+        {
             output.format.text_align = match parent.format.text_align.as_str() {
                 "start" if parent.layout.direction == taffy::Direction::Ltr => "left",
                 "start" => "right",
@@ -862,8 +864,21 @@ fn inherited(name: &str) -> bool {
             | "text-orientation"
             | "line-height"
             | "text-align"
+            | "text-align-all"
+            | "text-align-last"
+            | "text-justify"
             | "text-overflow"
             | "white-space"
+            | "letter-spacing"
+            | "word-spacing"
+            | "tab-size"
+            | "text-indent"
+            | "text-transform"
+            | "line-break"
+            | "overflow-wrap"
+            | "word-break"
+            | "hyphens"
+            | "hanging-punctuation"
             | "border-collapse"
             | "border-spacing"
             | "caption-side"
@@ -2443,9 +2458,28 @@ fn copy_format_property(
         "empty-cells" => to.hide_empty = from.hide_empty,
         "vertical-align" => to.vertical_align = from.vertical_align.clone(),
         "line-height" => to.line_height = from.line_height,
-        "text-align" => to.text_align = from.text_align.clone(),
+        "text-align" | "text-align-all" => to.text_align = from.text_align.clone(),
+        "text-align-last" => to.text_align_last = from.text_align_last.clone(),
+        "text-justify" => to.text_justify = from.text_justify.clone(),
         "text-overflow" => to.text_overflow = from.text_overflow.clone(),
         "white-space" => to.white_space = from.white_space.clone(),
+        "letter-spacing" => to.letter_spacing = from.letter_spacing,
+        "word-spacing" => to.word_spacing = from.word_spacing,
+        "tab-size" => {
+            to.tab_size = from.tab_size;
+            to.tab_size_length = from.tab_size_length;
+        }
+        "text-indent" => {
+            to.text_indent = from.text_indent;
+            to.text_indent_each_line = from.text_indent_each_line;
+            to.text_indent_hanging = from.text_indent_hanging;
+        }
+        "text-transform" => to.text_transform = from.text_transform.clone(),
+        "line-break" => to.line_break = from.line_break.clone(),
+        "overflow-wrap" => to.overflow_wrap = from.overflow_wrap.clone(),
+        "word-break" => to.word_break = from.word_break.clone(),
+        "hyphens" => to.hyphens = from.hyphens.clone(),
+        "hanging-punctuation" => to.hanging_punctuation = from.hanging_punctuation.clone(),
         _ => {}
     }
 }

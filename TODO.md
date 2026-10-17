@@ -304,10 +304,10 @@
   - CSS properties: `cue`, `cue-after`, `cue-before`, `pause`, `pause-after`, `pause-before`, `rest`, `rest-after`, `rest-before`,
     `speak`, `speak-as`, `voice-balance`, `voice-duration`, `voice-family`, `voice-pitch`, `voice-range`, `voice-rate`,
     `voice-stress`, `voice-volume`.
-- **[CSS Text](https://www.w3.org/TR/css3-text/) - Unsupported.**
-  - CSS properties: `hanging-punctuation`, `hyphens`, `letter-spacing`, `line-break`, `overflow-wrap`, `tab-size`, `text-align`,
-    `text-align-all`, `text-align-last`, `text-indent`, `text-justify`, `text-transform`, `white-space`, `word-break`,
-    `word-spacing`.
+- **[CSS Text](https://www.w3.org/TR/css3-text/) - Partial.**
+  - CSS properties: `hanging-punctuation`, `hyphens`, ~~`letter-spacing`~~, `line-break`, ~~`overflow-wrap`~~, ~~`tab-size`~~,
+    ~~`text-align`~~, ~~`text-align-all`~~, `text-align-last`, ~~`text-indent`~~, ~~`text-justify`~~, ~~`text-transform`~~,
+    ~~`white-space`~~, ~~`word-break`~~, ~~`word-spacing`~~.
 - **[CSS Writing Modes](https://www.w3.org/TR/css3-writing-modes/) - Partial.**
   - CSS properties: ~~`direction`~~, `glyph-orientation-vertical`, `text-combine-upright`, ~~`text-orientation`~~, `unicode-bidi`,
     ~~`writing-mode`~~.
