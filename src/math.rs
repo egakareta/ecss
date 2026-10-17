@@ -102,11 +102,15 @@ impl Expression {
                     "atan2" => a.atan2(values[1]),
                     "mod" => a - values[1] * (a / values[1]).floor(),
                     "rem" => a % values[1],
-                    "round-line-width" => round_line_width(
-                        a,
-                        values[1],
-                        pixels_per_point.expect("line-width rounding has a pixel scale"),
-                    ),
+                    "round-line-width" => {
+                        let pixels_per_point =
+                            pixels_per_point.expect("line-width rounding has a pixel scale");
+                        if values.len() == 1 {
+                            snap_line_width(a, pixels_per_point)
+                        } else {
+                            round_line_width(a, values[1], pixels_per_point)
+                        }
+                    }
                     name if name.starts_with("round") => {
                         let step = values.get(1).copied().unwrap_or(1.0);
                         let v = a / step;
@@ -265,10 +269,6 @@ pub(crate) fn resolve(handle: *const (), basis: f32) -> f32 {
 }
 
 fn round_line_width(value: f32, step: f32, pixels_per_point: f32) -> f32 {
-    if value == 0.0 {
-        return value;
-    }
-
     let step = step.abs();
     if step == 0.0 {
         return f32::NAN;
@@ -289,10 +289,18 @@ fn round_line_width(value: f32, step: f32, pixels_per_point: f32) -> f32 {
         upper
     };
 
+    snap_line_width(rounded, pixels_per_point)
+}
+
+fn snap_line_width(value: f32, pixels_per_point: f32) -> f32 {
+    if value == 0.0 {
+        return value;
+    }
+
     let pixels_per_point = pixels_per_point.max(f32::MIN_POSITIVE);
-    let device_pixels = rounded * pixels_per_point;
+    let device_pixels = value * pixels_per_point;
     if device_pixels.fract() == 0.0 {
-        rounded
+        value
     } else if device_pixels.abs() < 1.0 {
         device_pixels.signum() / pixels_per_point
     } else {
@@ -566,10 +574,6 @@ fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> Result
     };
     if args.iter().any(|arg| arg.kind != kind) {
         return Err(ParseError::custom("incompatible function dimensions"));
-    }
-    if line_width_rounding && count == 1 {
-        let pixels_per_point = units.pixels_per_point.max(f32::MIN_POSITIVE);
-        args.push(Expression::constant(1.0 / pixels_per_point, kind));
     }
     let pixels_per_point = line_width_rounding.then_some(units.pixels_per_point);
     Ok(Expression {
