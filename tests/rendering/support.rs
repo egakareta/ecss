@@ -32,9 +32,6 @@ struct OffscreenRenderer {
 // thread-local state that is unsafe to tear down with each test thread.
 static RENDERER_THREAD: OnceLock<mpsc::Sender<RenderRequest>> = OnceLock::new();
 
-#[cfg(target_arch = "wasm32")]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
 pub(super) fn empty_box(ui: &mut egui::Ui) -> egui::Response {
     ui.allocate_exact_size(egui::Vec2::ZERO, egui::Sense::hover())
         .1
