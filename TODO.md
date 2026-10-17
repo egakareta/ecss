@@ -368,7 +368,7 @@
   - CSS properties: `offset`, `offset-anchor`, `offset-distance`, `offset-path`, `offset-position`, `offset-rotate`.
 - **[CSS Easing Functions Level 1](https://www.w3.org/TR/css-easing-1/) - Supported.**
   - CSSOM serialization is not exposed, which shouldn't be relevant in egui.
-- **[CSS Easing Functions Level 2](https://www.w3.org/TR/css-easing-2/) - Unsupported.**
+- **[CSS Easing Functions Level 2](https://www.w3.org/TR/css-easing-2/) - Supported.**
 - **[CSS Animation Worklet API](https://www.w3.org/TR/css-animation-worklet-1/) - Unsupported.**
 - **[CSS View Transitions Level 1](https://www.w3.org/TR/css-view-transitions-1/) - Unsupported.**
   - CSS properties: `view-transition-name`.

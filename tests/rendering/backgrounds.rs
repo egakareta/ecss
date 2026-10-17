@@ -111,9 +111,22 @@ async fn longhand_animation_properties_keep_a_paused_animation_at_its_start_test
 }
 
 #[test]
-fn easing_function_values_follow_css_easing_level_1_grammar_test() {
+fn easing_function_values_follow_css_easing_level_2_grammar_test() {
     for easing in [
         "linear",
+        "linear(0, 1)",
+        "linear(0, 0.25, 1)",
+        "linear(0, 0.25 75%, 1)",
+        "linear(0, 0.25 25% 75%, 1)",
+        "linear(0 20%, 0.5 10%, 1)",
+        "linear(-0.5 -10%, 1 110%)",
+        "linear(/*comment*/ 0, 1)",
+        "linear(0 calc(50%), 0 100%)",
+        "linear(0 0% 50%, 1 50% 100%)",
+        "linear(0 calc(0%), 1)",
+        "linear(0 calc(50% - 50%), 1)",
+        "linear(0 calc(min(50%, 60%)), 1)",
+        "linear(calc(0/0), 1)",
         "ease",
         "ease-in",
         "ease-out",
@@ -151,6 +164,14 @@ fn easing_function_values_follow_css_easing_level_1_grammar_test() {
         "steps(4, jump-middle)",
         "steps(4, jump-both, end)",
         "linear()",
+        "linear(0)",
+        "linear(0,,1)",
+        "linear(0,1,)",
+        "linear(0 10% 20% 30%, 1)",
+        "linear(0, 1 10% 20% 30%)",
+        "linear(0% 1 50%)",
+        "linear(0% 1)",
+        "linear(0 calc(50px - 50%), 0 calc(50em + 50em))",
     ] {
         assert!(
             Stylesheet::parse(&format!(
@@ -164,17 +185,14 @@ fn easing_function_values_follow_css_easing_level_1_grammar_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-async fn easing_functions_apply_step_boundaries_before_fill_and_cubic_overshoot_test() {
+async fn easing_functions_render_step_boundaries_and_before_fill_test() {
     let stylesheet = Stylesheet::parse(
         "@keyframes color { from { background-color: #000; } to { background-color: #fff; } }\
-         @keyframes stretch { from { width: 40px; animation-timing-function: cubic-bezier(0, 0, 0.5, 0.5); }\
-         to { width: 100px; } }\
          .jump-start { animation: color 1s steps(4, jump-start) both; }\
          .jump-end { animation: color 1s steps(4, jump-end) both; }\
          .jump-none { animation: color 1s steps(4, jump-none) both; }\
          .jump-both { animation: color 1s steps(4, jump-both) both; }\
-         .before { animation: color 1s 1s steps(1, start) backwards; }\
-         .overshoot { box-sizing: border-box; animation: stretch 1s cubic-bezier(0, 2, 0, 2) both; }",
+         .before { animation: color 1s 1s steps(1, start) backwards; }",
     )
     .unwrap();
     let widget_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -193,10 +211,6 @@ async fn easing_functions_apply_step_boundaries_before_fill_and_cubic_overshoot_
                 .unwrap()
                 .push(ui.add(egui::Button::new("X").selector(selector)).rect);
         }
-        rects_from_ui
-            .lock()
-            .unwrap()
-            .push(ui.add(egui::Button::new("X").selector(".overshoot")).rect);
     })
     .await;
 
@@ -209,11 +223,117 @@ async fn easing_functions_apply_step_boundaries_before_fill_and_cubic_overshoot_
             "{index} easing pixel was {pixel:?}, expected grayscale {expected}"
         );
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn linear_easing_functions_interpolate_and_cubic_bezier_overshoots_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes color { from { background-color: #000; } to { background-color: #fff; } }\
+         @keyframes stretch { from { width: 40px; animation-timing-function: linear(0, 0.5 50%, 1); }\
+         to { width: 100px; } }\
+         .linear-even { animation: color 1s linear(0, 0.25, 1) both; }\
+         .linear-explicit { animation: color 1s linear(0, 0.25 75%, 1) both; }\
+         .linear-double { animation: color 1s linear(0, 0.5 25% 75%, 1) both; }\
+         .linear-clamped { animation: color 1s linear(0 20%, 0.5 10%, 1) both; }\
+         .overshoot { box-sizing: border-box; animation: stretch 1s cubic-bezier(0, 2, 0, 2) both; }",
+    )
+    .unwrap();
+    let widget_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let rects_from_ui = widget_rects.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        rects_from_ui.lock().unwrap().clear();
+        for selector in [
+            ".linear-even",
+            ".linear-explicit",
+            ".linear-double",
+            ".linear-clamped",
+        ] {
+            rects_from_ui
+                .lock()
+                .unwrap()
+                .push(ui.add(egui::Button::new("X").selector(selector)).rect);
+        }
+        rects_from_ui
+            .lock()
+            .unwrap()
+            .push(ui.add(egui::Button::new("X").selector(".overshoot")).rect);
+    })
+    .await;
+
+    let rects = widget_rects.lock().unwrap();
+    for (index, expected) in [(0, 64), (1, 42), (2, 128), (3, 175)] {
+        let rect = rects[index];
+        let pixel = pixel(&pixels, rect.min.x + 5.5, rect.center().y);
+        assert!(
+            (i16::from(pixel[0]) - expected).abs() <= 1,
+            "{index} linear easing pixel was {pixel:?}, expected grayscale {expected}"
+        );
+    }
     assert!(
-        (rects[5].width() - 129.0).abs() < 1.0,
-        "overshooting eased width was {}",
-        rects[5].width()
+        (rects[4].width() - 129.0).abs() < 1.0,
+        "linearly extrapolated width was {}",
+        rects[4].width()
     );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn linear_easing_extrapolates_outside_its_input_range_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes color { from { background-color: #000; } to { background-color: #fff; } }\
+         .extrapolated { animation: color 1s linear(0.3 60%, 0.7 80%) both; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        *rect_from_ui.lock().unwrap() = Some(
+            ui.add(egui::Button::new("X").selector(".extrapolated"))
+                .rect,
+        );
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    let pixel = pixel(&pixels, rect.min.x + 5.5, rect.center().y);
+    assert!(
+        (i16::from(pixel[0]) - 26).abs() <= 1,
+        "linearly extrapolated pixel was {pixel:?}, expected grayscale 26"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn linear_easing_uses_last_duplicate_and_before_flag_uses_first_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes color { from { background-color: #000; } to { background-color: #fff; } }\
+         .duplicate { animation: color 1s linear(0 0%, 0.5 0%, 1) both; }\
+         .before { animation: color 1s 1s linear(0 0%, 0.5 0%, 1) backwards; }",
+    )
+    .unwrap();
+    let widget_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let rects_from_ui = widget_rects.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.0, move |ui| {
+        rects_from_ui.lock().unwrap().clear();
+        for selector in [".duplicate", ".before"] {
+            rects_from_ui
+                .lock()
+                .unwrap()
+                .push(ui.add(egui::Button::new("X").selector(selector)).rect);
+        }
+    })
+    .await;
+
+    let rects = widget_rects.lock().unwrap();
+    for (index, expected) in [(0, 128), (1, 0)] {
+        let rect = rects[index];
+        let pixel = pixel(&pixels, rect.min.x + 5.5, rect.center().y);
+        assert!(
+            (i16::from(pixel[0]) - expected).abs() <= 1,
+            "linear easing pixel was {pixel:?}, expected grayscale {expected}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

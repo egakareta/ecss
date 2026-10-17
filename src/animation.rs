@@ -68,8 +68,15 @@ enum StepPosition {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct LinearPoint {
+    input: f64,
+    output: f64,
+}
+
+#[derive(Clone, Debug)]
 enum TimingFunction {
     Linear,
+    LinearFunction(Vec<LinearPoint>),
     Ease,
     EaseIn,
     EaseOut,
@@ -445,6 +452,7 @@ fn parse_timing_arguments(
     input: &mut CssParser<'_>,
 ) -> Result<TimingFunction, cssparser::ParseError<&'static str>> {
     match name.to_ascii_lowercase().as_str() {
+        "linear" => parse_linear_function(input),
         "cubic-bezier" => {
             let x1 = timing_number(input)?;
             input.expect_comma()?;
@@ -511,6 +519,212 @@ fn parse_timing_arguments(
             Ok(TimingFunction::Steps(count, position))
         }
         _ => Err(cssparser::ParseError::custom("unsupported easing function")),
+    }
+}
+
+fn parse_linear_function(
+    input: &mut CssParser<'_>,
+) -> Result<TimingFunction, cssparser::ParseError<&'static str>> {
+    let mut stops = Vec::new();
+    let mut output = None;
+    let mut positions = Vec::new();
+    let mut after_comma = false;
+
+    while !input.is_exhausted() {
+        input.skip_whitespace();
+        if input.is_exhausted() {
+            break;
+        }
+        let start = input.position();
+        let token = input.next()?.clone();
+        match token {
+            Token::Number { .. } => {
+                if output.is_some() {
+                    return Err(cssparser::ParseError::custom(
+                        "linear() stop must contain one number",
+                    ));
+                }
+                output = Some(linear_component(
+                    input.slice(start..input.position()),
+                    false,
+                )?);
+                after_comma = false;
+            }
+            Token::Percentage { .. } => {
+                if output.is_none() {
+                    return Err(cssparser::ParseError::custom(
+                        "linear() stop position must follow its number",
+                    ));
+                }
+                if positions.len() == 2 {
+                    return Err(cssparser::ParseError::custom(
+                        "linear() stop accepts at most two percentages",
+                    ));
+                }
+                positions.push(linear_component(
+                    input.slice(start..input.position()),
+                    true,
+                )?);
+                after_comma = false;
+            }
+            Token::Function(_) => {
+                input.parse_nested_block(|arguments| {
+                    while arguments.next().is_ok() {}
+                    Ok::<_, cssparser::ParseError<&'static str>>(())
+                })?;
+                let value = input.slice(start..input.position()).trim();
+                if output.is_none() {
+                    if let Ok(value) = linear_component(value, false) {
+                        output = Some(value);
+                    } else {
+                        return Err(cssparser::ParseError::custom(
+                            "linear() stop position must follow its number",
+                        ));
+                    }
+                } else {
+                    let value = linear_component(value, true)?;
+                    if positions.len() == 2 {
+                        return Err(cssparser::ParseError::custom(
+                            "linear() stop accepts at most two percentages",
+                        ));
+                    }
+                    positions.push(value);
+                }
+                after_comma = false;
+            }
+            Token::Comma => {
+                push_linear_stop(&mut stops, output.take(), std::mem::take(&mut positions))?;
+                after_comma = true;
+            }
+            _ => return Err(cssparser::ParseError::custom("invalid linear() stop")),
+        }
+    }
+
+    if after_comma {
+        return Err(cssparser::ParseError::custom(
+            "linear() cannot end with a comma",
+        ));
+    }
+    push_linear_stop(&mut stops, output, positions)?;
+    if stops.len() < 2 {
+        return Err(cssparser::ParseError::custom(
+            "linear() requires at least two stops",
+        ));
+    }
+
+    let last_stop = stops.len() - 1;
+    let mut largest_input = f64::NEG_INFINITY;
+    let mut points = Vec::new();
+    for (index, (output, positions)) in stops.into_iter().enumerate() {
+        if positions.is_empty() {
+            let input = if index == 0 {
+                largest_input = 0.0;
+                Some(0.0)
+            } else if index == last_stop {
+                largest_input = largest_input.max(1.0);
+                Some(largest_input)
+            } else {
+                None
+            };
+            points.push((input, output));
+            continue;
+        }
+
+        let input = positions[0].max(largest_input);
+        largest_input = input;
+        points.push((Some(input), output));
+        if let Some(input) = positions.get(1) {
+            let input = input.max(largest_input);
+            largest_input = input;
+            points.push((Some(input), output));
+        }
+    }
+
+    let mut index = 0;
+    while index < points.len() {
+        if points[index].0.is_some() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while points.get(index).is_some_and(|point| point.0.is_none()) {
+            index += 1;
+        }
+        let left = points[start - 1].0.expect("linear() has a preceding input");
+        let right = points[index].0.expect("linear() has a following input");
+        let intervals = (index - start + 1) as f64;
+        for point_index in start..index {
+            let distance = (point_index - start + 1) as f64;
+            points[point_index].0 = Some(left + (right - left) * distance / intervals);
+        }
+    }
+
+    Ok(TimingFunction::LinearFunction(
+        points
+            .into_iter()
+            .map(|(input, output)| LinearPoint {
+                input: input.expect("all linear() inputs are assigned"),
+                output,
+            })
+            .collect(),
+    ))
+}
+
+fn push_linear_stop(
+    stops: &mut Vec<(f64, Vec<f64>)>,
+    output: Option<f64>,
+    positions: Vec<f64>,
+) -> Result<(), cssparser::ParseError<&'static str>> {
+    let output =
+        output.ok_or_else(|| cssparser::ParseError::custom("linear() stop needs a number"))?;
+    stops.push((output, positions));
+    Ok(())
+}
+
+fn linear_component(
+    value: &str,
+    percentage: bool,
+) -> Result<f64, cssparser::ParseError<&'static str>> {
+    let value = value.trim();
+    if percentage {
+        if let Some(value) = value.strip_suffix('%') {
+            return value
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .map(|value| value / 100.0)
+                .ok_or_else(|| cssparser::ParseError::custom("invalid linear() percentage"));
+        }
+    } else if !value.contains('(') {
+        return value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| cssparser::ParseError::custom("invalid linear() number"));
+    }
+
+    let arena = crate::math::Arena::default();
+    let units = crate::layout_style::Units {
+        math: &arena,
+        font: 16.0,
+        root_font: 16.0,
+        viewport: egui::Vec2::splat(1000.0),
+        pixels_per_point: 1.0,
+    };
+    if percentage {
+        let handle = crate::math::percentage(value, units, true)
+            .map_err(|_| cssparser::ParseError::custom("invalid linear() percentage"))?
+            .ok_or_else(|| {
+                cssparser::ParseError::custom("linear() stop position must be a percentage")
+            })?;
+        Ok(f64::from(crate::math::resolve(handle, 1.0)))
+    } else {
+        let number = crate::math::number(value, units)
+            .map_err(|_| cssparser::ParseError::custom("invalid linear() number"))?
+            .ok_or_else(|| cssparser::ParseError::custom("invalid linear() number"))?;
+        let number = f64::from(number);
+        Ok(if number.is_nan() { 0.0 } else { number })
     }
 }
 
@@ -847,25 +1061,27 @@ fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool, bool
     };
     let directed = if reversed { 1.0 - fraction } else { fraction };
     (
-        Some(ease(config.timing, directed, before) as f32),
+        Some(ease(&config.timing, directed, before) as f32),
         active,
         before,
     )
 }
 
-fn ease(timing: TimingFunction, progress: f64, before: bool) -> f64 {
+fn ease(timing: &TimingFunction, progress: f64, before: bool) -> f64 {
     match timing {
         TimingFunction::Linear => progress,
+        TimingFunction::LinearFunction(points) => linear_function(points, progress, before),
         TimingFunction::Ease => cubic_bezier(0.25, 0.1, 0.25, 1.0, progress),
         TimingFunction::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, progress),
         TimingFunction::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, progress),
         TimingFunction::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, progress),
-        TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(x1, y1, x2, y2, progress),
+        TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, progress),
         TimingFunction::Steps(count, position) => {
+            let count = *count;
             let scaled = progress * count;
             let mut current_step = scaled.floor();
             if matches!(
-                position,
+                *position,
                 StepPosition::Start | StepPosition::JumpStart | StepPosition::JumpBoth
             ) {
                 current_step += 1.0;
@@ -876,7 +1092,7 @@ fn ease(timing: TimingFunction, progress: f64, before: bool) -> f64 {
             if progress >= 0.0 && current_step < 0.0 {
                 current_step = 0.0;
             }
-            let jumps = match position {
+            let jumps = match *position {
                 StepPosition::JumpNone => count - 1.0,
                 StepPosition::JumpBoth => count + 1.0,
                 StepPosition::Start
@@ -890,6 +1106,37 @@ fn ease(timing: TimingFunction, progress: f64, before: bool) -> f64 {
             current_step / jumps
         }
     }
+}
+
+fn linear_function(points: &[LinearPoint], progress: f64, before: bool) -> f64 {
+    if points.len() == 1 {
+        return points[0].output;
+    }
+    if before && progress == points[0].input {
+        return points[0].output;
+    }
+
+    let last_matching = points.partition_point(|point| point.input <= progress);
+    if last_matching > 0 && points[last_matching - 1].input == progress {
+        return points[last_matching - 1].output;
+    }
+
+    let (point_a, point_b) = if last_matching == 0 {
+        (points[0], points[1])
+    } else if last_matching == points.len() {
+        (points[points.len() - 2], points[points.len() - 1])
+    } else {
+        (points[last_matching - 1], points[last_matching])
+    };
+    if point_a.input == point_b.input {
+        return if progress < point_a.input {
+            point_a.output
+        } else {
+            point_b.output
+        };
+    }
+    let progress_between_points = (progress - point_a.input) / (point_b.input - point_a.input);
+    point_a.output + progress_between_points * (point_b.output - point_a.output)
 }
 
 fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
@@ -1025,7 +1272,7 @@ fn sample_keyframes(
                 (progress - previous.0) / span
             };
             let local = keyframe_timing(frames, previous.0)
-                .map(|timing| ease(timing, f64::from(local), before) as f32)
+                .map(|timing| ease(&timing, f64::from(local), before) as f32)
                 .unwrap_or(local);
             interpolate(&previous.1, &next.1, local)
         } else {
