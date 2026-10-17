@@ -816,26 +816,25 @@ pub(crate) fn show(
             background_style.clips[clip_index]
         };
         let shape_clip_for = |clip| {
-            style.decorations.border_shape.as_ref().map(|border_shape| {
-                let border_widths = style
-                    .layout
-                    .border
-                    .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-                let (paths, fill_rule) = border_shape.background_paths(
-                    border,
-                    clip,
-                    final_geometry.stroke,
-                    final_geometry.padding,
-                    final_geometry.margin,
-                    [
-                        border_widths.top,
-                        border_widths.right,
-                        border_widths.bottom,
-                        border_widths.left,
-                    ],
-                );
-                crate::box_decoration::path_clip(paths, fill_rule)
-            })
+            let border_widths = style
+                .layout
+                .border
+                .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
+            background_clip_path(
+                border,
+                &style,
+                final_geometry.stroke,
+                final_geometry.padding,
+                final_geometry.margin,
+                [
+                    border_widths.top,
+                    border_widths.right,
+                    border_widths.bottom,
+                    border_widths.left,
+                ],
+                clip,
+                corner_radius,
+            )
         };
         let frame_stroke = if style.border_set || final_geometry.collapsed.is_some() {
             egui::Stroke::NONE
@@ -2791,6 +2790,65 @@ fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> Backg
     background
 }
 
+fn background_clip_path(
+    border: Rect,
+    style: &BoxStyle,
+    stroke: egui::epaint::MarginF32,
+    padding: egui::epaint::MarginF32,
+    margin: egui::epaint::MarginF32,
+    widths: [f32; 4],
+    clip: crate::css::BackgroundClip,
+    fallback_radius: egui::CornerRadius,
+) -> Option<crate::box_decoration::PathClip> {
+    if let Some(border_shape) = &style.decorations.border_shape {
+        let (paths, fill_rule) =
+            border_shape.background_paths(border, clip, stroke, padding, margin, widths);
+        return Some(crate::box_decoration::path_clip(paths, fill_rule));
+    }
+
+    let inset = match clip {
+        crate::css::BackgroundClip::Border => egui::epaint::MarginF32::ZERO,
+        crate::css::BackgroundClip::Padding => stroke,
+        crate::css::BackgroundClip::Content => egui::epaint::MarginF32 {
+            top: stroke.top + padding.top,
+            right: stroke.right + padding.right,
+            bottom: stroke.bottom + padding.bottom,
+            left: stroke.left + padding.left,
+        },
+    };
+    let mut radii = crate::box_decoration::resolved_radii(style, border);
+    radii[0] -= vec2(inset.left, inset.top);
+    radii[1] -= vec2(inset.right, inset.top);
+    radii[2] -= vec2(inset.right, inset.bottom);
+    radii[3] -= vec2(inset.left, inset.bottom);
+    radii = radii.map(|radius| radius.max(Vec2::ZERO));
+
+    let shapes = if radii.iter().all(|radius| *radius == Vec2::ZERO) {
+        if fallback_radius == egui::CornerRadius::ZERO {
+            return None;
+        }
+        radii = [
+            fallback_radius.nw,
+            fallback_radius.ne,
+            fallback_radius.se,
+            fallback_radius.sw,
+        ]
+        .map(|radius| vec2(f32::from(radius), f32::from(radius)));
+        [crate::box_decoration::CornerShape::Round; 4]
+    } else {
+        style.decorations.corner_shapes
+    };
+
+    Some(crate::box_decoration::path_clip(
+        vec![crate::box_decoration::rounded_path(
+            border - inset,
+            radii,
+            shapes,
+        )],
+        crate::box_decoration::FillRule::Nonzero,
+    ))
+}
+
 fn fragment_background_shapes(
     context: &Context,
     images: &crate::background::ImageAssets,
@@ -2811,17 +2869,16 @@ fn fragment_background_shapes(
         .border
         .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
     let shape_clip_for = |rect, clip| {
-        style.decorations.border_shape.as_ref().map(|border_shape| {
-            let (paths, fill_rule) = border_shape.background_paths(
-                rect,
-                clip,
-                stroke,
-                padding,
-                margin,
-                [widths.top, widths.right, widths.bottom, widths.left],
-            );
-            crate::box_decoration::path_clip(paths, fill_rule)
-        })
+        background_clip_path(
+            rect,
+            style,
+            stroke,
+            padding,
+            margin,
+            [widths.top, widths.right, widths.bottom, widths.left],
+            clip,
+            corner_radius,
+        )
     };
     let color_surface = match color_clip {
         crate::css::BackgroundClip::Border => border,

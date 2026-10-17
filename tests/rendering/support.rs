@@ -1,13 +1,11 @@
-use std::sync::Mutex;
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{OnceLock, mpsc};
 
-use ecss::{SelectorExt as _, Stylesheet};
+use ecss::Stylesheet;
 use eframe::{egui, egui_wgpu, wgpu};
 
-const WIDTH: u32 = 256;
-const HEIGHT: u32 = 128;
+pub(super) const WIDTH: u32 = 256;
+pub(super) const HEIGHT: u32 = 128;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,83 +35,24 @@ static RENDERER_THREAD: OnceLock<mpsc::Sender<RenderRequest>> = OnceLock::new();
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-
-
-
-
-
-macro_rules! rendering_test {
-    ($name:ident) => {
-        paste::paste! {
-            #[cfg(not(target_arch = "wasm32"))]
-            #[test]
-            fn $name() {
-                pollster::block_on([<$name _test>]());
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            #[wasm_bindgen_test::wasm_bindgen_test]
-            async fn $name() {
-                [<$name _test>]().await;
-            }
-        }
-    };
-}
-
-fn empty_box(ui: &mut egui::Ui) -> egui::Response {
+pub(super) fn empty_box(ui: &mut egui::Ui) -> egui::Response {
     ui.allocate_exact_size(egui::Vec2::ZERO, egui::Sense::hover())
         .1
 }
 
-fn pixel(pixels: &[[u8; 4]], x: f32, y: f32) -> [u8; 4] {
+pub(super) fn pixel(pixels: &[[u8; 4]], x: f32, y: f32) -> [u8; 4] {
     pixels[y.floor() as usize * WIDTH as usize + x.floor() as usize]
 }
 
-fn near(actual: f32, expected: f32) {
+pub(super) fn near(actual: f32, expected: f32) {
     assert!(
         (actual - expected).abs() < 0.05,
         "expected {expected}, got {actual}"
     );
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[cfg(not(target_arch = "wasm32"))]
-async fn render_ui_pixels(
+pub(super) async fn render_ui_pixels(
     stylesheet: Stylesheet,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
@@ -121,7 +60,7 @@ async fn render_ui_pixels(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn render_ui_pixels_at_scale(
+pub(super) async fn render_ui_pixels_at_scale(
     stylesheet: Stylesheet,
     pixels_per_point: f32,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
@@ -160,7 +99,7 @@ async fn render_ui_pixels_at_scale(
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn render_ui_pixels(
+pub(super) async fn render_ui_pixels(
     stylesheet: Stylesheet,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
@@ -168,7 +107,7 @@ async fn render_ui_pixels(
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn render_ui_pixels_at_scale(
+pub(super) async fn render_ui_pixels_at_scale(
     stylesheet: Stylesheet,
     pixels_per_point: f32,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,

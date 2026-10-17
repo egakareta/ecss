@@ -1,3 +1,7 @@
+use super::*;
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_text_continues_across_selectors_and_paints_line_fragments_test() {
     let stylesheet=Stylesheet::parse(".flow {width:80px;} .one {display:inline; background-color:red; color:white;} .two {display:inline; background-color:blue; color:white;} .probe {width:max-content;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
@@ -37,6 +41,8 @@ async fn inline_text_continues_across_selectors_and_paints_line_fragments_test()
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn pseudo_element_borders_paint_first_letter_and_first_line_test() {
     let stylesheet = Stylesheet::parse(
         ".letter, .line { width:200px; }\
@@ -83,6 +89,8 @@ async fn pseudo_element_borders_paint_first_letter_and_first_line_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn first_letter_decoration_selects_numbers_and_associated_punctuation_test() {
     let stylesheet = Stylesheet::parse(
         ".number, .punctuation, .symbol { font-size:32px; }\
@@ -106,13 +114,9 @@ async fn first_letter_decoration_selects_numbers_and_associated_punctuation_test
     })
     .await;
     let bounds = bounds.lock().unwrap();
-    for (index, color) in [
-        [255, 0, 0, 255],
-        [0, 0, 255, 255],
-        [0, 255, 0, 255],
-    ]
-    .into_iter()
-    .enumerate()
+    for (index, color) in [[255, 0, 0, 255], [0, 0, 255, 255], [0, 255, 0, 255]]
+        .into_iter()
+        .enumerate()
     {
         let rect = bounds[index].unwrap();
         let left = pixels
@@ -129,6 +133,8 @@ async fn first_letter_decoration_selects_numbers_and_associated_punctuation_test
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn first_letter_decoration_excludes_following_dashes_test() {
     let stylesheet = Stylesheet::parse(
         ".plain, .dashed { font-size:32px; }\
@@ -152,7 +158,8 @@ async fn first_letter_decoration_excludes_following_dashes_test() {
             .iter()
             .enumerate()
             .filter(|(index, pixel)| {
-                **pixel == color && (index / 256) as f32 >= rect.top() - 3.0
+                **pixel == color
+                    && (index / 256) as f32 >= rect.top() - 3.0
                     && (index / 256) as f32 <= rect.bottom() + 3.0
             })
             .fold(None, |bounds, (index, _)| {
@@ -168,6 +175,8 @@ async fn first_letter_decoration_excludes_following_dashes_test() {
     assert_eq!(dashed, plain);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn vertical_first_letter_border_tracks_rotated_glyph_geometry_test() {
     let stylesheet = Stylesheet::parse(
         ".vertical { writing-mode:vertical-rl; width:60px; height:60px; }\
@@ -188,11 +197,14 @@ async fn vertical_first_letter_border_tracks_rotated_glyph_geometry_test() {
     let top = (text.top() - 4.0).floor().max(0.0) as usize;
     let bottom = (text.bottom() + 4.0).ceil().min(128.0) as usize;
     assert!(
-        (top..bottom).any(|y| (left..right).any(|x| pixel(&pixels, x as f32, y as f32) == [255, 0, 0, 255])),
+        (top..bottom)
+            .any(|y| (left..right).any(|x| pixel(&pixels, x as f32, y as f32) == [255, 0, 0, 255])),
         "vertical first-letter border was not painted around its glyph: {text:?}"
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn vertical_upright_first_letter_maps_inline_start_through_direction_test() {
     async fn decoration_bounds(direction: &str) -> ((usize, usize), (usize, usize)) {
         let stylesheet = Stylesheet::parse(&format!(
@@ -215,9 +227,7 @@ async fn vertical_upright_first_letter_maps_inline_start_through_direction_test(
             let top = (rect.top() - 4.0).floor().max(0.0) as usize;
             let bottom = (rect.bottom() + 4.0).ceil().min(128.0) as usize;
             (top..bottom)
-                .filter(|y| {
-                    (left..right).any(|x| pixel(&pixels, x as f32, *y as f32) == color)
-                })
+                .filter(|y| (left..right).any(|x| pixel(&pixels, x as f32, *y as f32) == color))
                 .fold(None, |bounds, y| {
                     Some(bounds.map_or((y, y), |(min, max): (usize, usize)| {
                         (min.min(y), max.max(y))
@@ -241,6 +251,8 @@ async fn vertical_upright_first_letter_maps_inline_start_through_direction_test(
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn first_letter_percentage_padding_uses_the_containing_block_basis_test() {
     let stylesheet = Stylesheet::parse(
         ".pixels, .percentage { width:100px; }\
@@ -274,6 +286,8 @@ async fn first_letter_percentage_padding_uses_the_containing_block_basis_test() 
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn first_letter_inline_decoration_extents_contribute_to_text_width_test() {
     let stylesheet = Stylesheet::parse(
         ".decorated::first-letter { margin-left:4px; padding-left:2px; border-left:3px solid red; margin-right:5px; padding-right:6px; border-right:1px solid red; }\n         .wrapped-plain, .wrapped-decorated { width:32px; }\n         .wrapped-decorated::first-letter { padding-right:12px; }\n         .flow-plain, .flow-decorated { width:max-content; }\n         .flow-word { display:inline; }\n         .flow-decorated::first-letter { margin-left:4px; padding-left:2px; border-left:3px solid red; margin-right:5px; padding-right:6px; border-right:1px solid red; }",
@@ -321,6 +335,8 @@ async fn first_letter_inline_decoration_extents_contribute_to_text_width_test() 
     assert!(pixels.iter().any(|pixel| *pixel == [255, 0, 0, 255]));
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn pseudo_element_decorations_apply_to_descendant_text_shapes_test() {
     let stylesheet = Stylesheet::parse(
         ".flow { width:200px; }\
@@ -345,6 +361,8 @@ async fn pseudo_element_decorations_apply_to_descendant_text_shapes_test() {
     assert!(pixels.iter().any(|pixel| *pixel == [128, 0, 128, 255]));
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_box_shadows_follow_box_decoration_break_test() {
     async fn shadow_pixels(decoration_break: &str, shadow: &str) -> usize {
         let stylesheet = Stylesheet::parse(&format!(
@@ -378,6 +396,8 @@ async fn inline_box_shadows_follow_box_decoration_break_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_slice_background_gradients_continue_across_fragments_test() {
     async fn background_pixels(
         decoration_break: &str,
@@ -392,7 +412,9 @@ async fn inline_slice_background_gradients_continue_across_fragments_test() {
         render_ui_pixels(stylesheet, move |ui| {
             ui.add(
                 (|ui: &mut egui::Ui| {
-                    ui.add(egui::Label::new("one two three four five six seven").selector(".fragment"));
+                    ui.add(
+                        egui::Label::new("one two three four five six seven").selector(".fragment"),
+                    );
                     ui.response()
                 })
                 .selector(".flow"),
@@ -434,6 +456,8 @@ async fn inline_slice_background_gradients_continue_across_fragments_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_slice_border_images_continue_across_fragments_test() {
     async fn border_image_pixels(decoration_break: &str, direction: &str) -> Vec<[u8; 4]> {
         let stylesheet = Stylesheet::parse(&format!(
@@ -444,8 +468,7 @@ async fn inline_slice_border_images_continue_across_fragments_test() {
             ui.add(
                 (|ui: &mut egui::Ui| {
                     ui.add(
-                        egui::Label::new("one two three four five six seven")
-                            .selector(".fragment"),
+                        egui::Label::new("one two three four five six seven").selector(".fragment"),
                     );
                     ui.response()
                 })
@@ -470,6 +493,8 @@ async fn inline_slice_border_images_continue_across_fragments_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn text_overflow_ellipsis_paints_at_the_clip_edge_test() {
     async fn render(overflow: &str) -> (Vec<[u8; 4]>, egui::Rect) {
         let stylesheet = Stylesheet::parse(&format!(
@@ -507,6 +532,8 @@ async fn text_overflow_ellipsis_paints_at_the_clip_edge_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn font_size_resizes_text_and_inherits_through_nested_selectors_test() {
     let stylesheet = Stylesheet::parse(
         ".small { font-size: 8px; }\
@@ -575,6 +602,8 @@ async fn font_size_resizes_text_and_inherits_through_nested_selectors_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn vertical_text_positions_lines_and_honors_text_orientation_test() {
     let stylesheet = Stylesheet::parse(".row {display:flex; width:200px; gap:10px;} .rl {writing-mode:vertical-rl; white-space:pre; width:32px; height:60px; color:red;} .lr {writing-mode:vertical-lr; white-space:pre; width:32px; height:60px; color:red;} .upright {writing-mode:vertical-lr; text-orientation:upright; width:20px; height:20px; color:red;} .sideways {writing-mode:vertical-lr; text-orientation:sideways; width:20px; height:20px; color:red;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -658,6 +687,8 @@ async fn vertical_text_positions_lines_and_honors_text_orientation_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_padding_and_borders_paint_around_text_without_expanding_line_height_test() {
     let stylesheet = Stylesheet::parse(".flow {width:100px; margin-top:16px;} .text {display:inline; padding:4px 8px; border:2px solid blue; margin-left:3px; background-color:red; color:white;} .next {display:inline-block; width:10px; height:10px; background-color:green;} .probe {width:max-content;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -696,6 +727,8 @@ async fn inline_padding_and_borders_paint_around_text_without_expanding_line_hei
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn font_kerning_none_uses_unadjusted_glyph_spacing_and_inherits_test() {
     let stylesheet = Stylesheet::parse(
         ".normal { width: 250px; font-size: 48px; font-kerning: normal; white-space: nowrap; }\

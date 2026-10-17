@@ -1,3 +1,7 @@
+use super::*;
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn installed_white_background_renders_every_pixel_white_test() {
     let pixels = render_ui_pixels(Stylesheet::default(), |_ui| {}).await;
     assert_eq!(pixels.len(), (WIDTH * HEIGHT) as usize);
@@ -14,6 +18,8 @@ async fn installed_white_background_renders_every_pixel_white_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     let stylesheet = Stylesheet::parse(".primary { background-color: #f00; }").unwrap();
     let widget_rect = std::sync::Arc::new(Mutex::new(None));
@@ -30,6 +36,8 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
     assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_shorthand_gradient_and_content_clip_render_correctly_test() {
     let stylesheet = Stylesheet::parse(
         ".gradient { width: 60px; height: 24px; padding: 4px; border: 4px solid black; background: linear-gradient(to right, red, blue); background-clip: content-box; background-attachment: scroll; }",
@@ -45,7 +53,10 @@ async fn background_shorthand_gradient_and_content_clip_render_correctly_test() 
 
     let rect = widget_rect.lock().unwrap().unwrap();
     let center_y = rect.center().y;
-    assert_eq!(pixel(&pixels, rect.min.x + 5.5, center_y), [255, 255, 255, 255]);
+    assert_eq!(
+        pixel(&pixels, rect.min.x + 5.5, center_y),
+        [255, 255, 255, 255]
+    );
     assert_eq!(pixel(&pixels, rect.min.x + 1.5, center_y), [0, 0, 0, 255]);
 
     let left = pixel(&pixels, rect.min.x + 9.5, center_y);
@@ -54,6 +65,34 @@ async fn background_shorthand_gradient_and_content_clip_render_correctly_test() 
     assert!(right[2] > right[0], "right gradient pixel was {right:?}");
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn gradient_background_respects_border_radius_and_padding_clip_test() {
+    let stylesheet = Stylesheet::parse(
+        ".gradient { width: 60px; height: 24px; border: 1px solid black; border-radius: 12px; background: linear-gradient(to right, red, blue); background-clip: padding-box; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+    })
+    .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.min.x + 2.5, rect.min.y + 2.5),
+        [255, 255, 255, 255]
+    );
+    let center = pixel(&pixels, rect.center().x, rect.center().y);
+    assert!(
+        center[0] > 0 && center[2] > 0,
+        "center gradient pixel was {center:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_image_data_url_is_decoded_and_tiled_test() {
     let source = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255]));
     let mut encoded = std::io::Cursor::new(Vec::new());
@@ -77,9 +116,14 @@ async fn background_image_data_url_is_decoded_and_tiled_test() {
     .await;
 
     let rect = widget_rect.lock().unwrap().unwrap();
-    assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255, 0, 255, 255]);
+    assert_eq!(
+        pixel(&pixels, rect.center().x, rect.center().y),
+        [255, 0, 255, 255]
+    );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn functional_colors_render_rgb_rgba_hsl_and_hsla_values_test() {
     let stylesheet = Stylesheet::parse(
         ".rgb-comma { background-color: rgb(255, 0, 0); }\
@@ -135,6 +179,8 @@ async fn functional_colors_render_rgb_rgba_hsl_and_hsla_values_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn button_frame_stroke_tracks_the_css_padding_box_test() {
     let stylesheet = Stylesheet::parse(
         ".primary { background-color: #f00; padding: 8px 12px; border-radius: 6px; }",
@@ -165,6 +211,8 @@ async fn button_frame_stroke_tracks_the_css_padding_box_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn asymmetric_box_model_is_visible_in_rendered_pixels_test() {
     let stylesheet = Stylesheet::parse(
         ".box { padding: 2px 6px 4px 10px; margin: 4px 3px 5px 7px; background-color: #f00; }",
@@ -207,6 +255,8 @@ async fn asymmetric_box_model_is_visible_in_rendered_pixels_test() {
     assert_eq!(pixel_at(rect.center().x, rect.max.y + 4.0 + 2.5), white);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn percentage_and_auto_sizes_affect_styled_widget_bounds_test() {
     let stylesheet = Stylesheet::parse(
         ".percentage { width: 50%; height: 50%; background-color: #f00; }\

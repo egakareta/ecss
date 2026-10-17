@@ -1,3 +1,7 @@
+use super::*;
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_borders_choose_one_shared_edge_test() {
     let stylesheet=Stylesheet::parse(".table {display:table; table-layout:fixed; box-sizing:border-box; width:200px; border-collapse:collapse;} .row {display:table-row; border-top:10px solid green;} .a {display:table-cell; height:30px; border:2px solid red; border-top:12px solid red;} .b {display:table-cell; height:30px; border:2px solid red; border-left:8px solid blue; border-top:12px solid red;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
@@ -38,6 +42,8 @@ async fn collapsed_table_borders_choose_one_shared_edge_test() {
     assert_eq!(pixel(&pixels, x + 6.0, y), [255; 4]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_shared_edges_preserve_the_winning_stripes_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; }\
@@ -81,6 +87,8 @@ async fn collapsed_table_shared_edges_preserve_the_winning_stripes_test() {
     assert_eq!(pixel(&pixels, x + 5.0, y), [255; 4]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_column_and_group_borders_compete_with_cell_borders_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:150px; border-collapse:collapse; }\
@@ -154,6 +162,8 @@ async fn collapsed_table_column_and_group_borders_compete_with_cell_borders_test
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_column_and_group_borders_follow_rtl_columns_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:150px; border-collapse:collapse; direction:rtl; }\
@@ -214,6 +224,8 @@ async fn collapsed_table_column_and_group_borders_follow_rtl_columns_test() {
     assert_eq!(pixel(&pixels, cells[1].left() + 3.0, y), [0, 255, 0, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_equal_cell_borders_follow_table_direction_test() {
     async fn shared_border(direction: &str) -> ([u8; 4], Vec<egui::Rect>) {
         let stylesheet = Stylesheet::parse(&format!(
@@ -261,6 +273,8 @@ async fn collapsed_table_equal_cell_borders_follow_table_direction_test() {
     assert_eq!(rtl, [0, 0, 255, 255], "{rtl_cells:?}");
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_outer_border_widths_follow_table_direction_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; direction:rtl; }\
@@ -299,6 +313,8 @@ async fn collapsed_table_outer_border_widths_follow_table_direction_test() {
     near(cells[1].left(), table.left() + 3.0);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_missing_cells_do_not_pull_outer_borders_inward_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; border:8px solid blue; }\
@@ -345,6 +361,8 @@ async fn collapsed_table_missing_cells_do_not_pull_outer_borders_inward_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_missing_cells_respect_rtl_outer_border_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; border:8px solid blue; direction:rtl; }\
@@ -391,6 +409,8 @@ async fn collapsed_table_missing_cells_respect_rtl_outer_border_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_anonymous_rows_paint_missing_outer_border_segments_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; border:8px solid blue; }\
@@ -442,6 +462,8 @@ async fn collapsed_table_anonymous_rows_paint_missing_outer_border_segments_test
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_missing_declared_columns_keep_the_outer_border_at_the_grid_edge_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; border-collapse:collapse; border:8px solid blue; }\
@@ -484,6 +506,8 @@ async fn collapsed_table_missing_declared_columns_keep_the_outer_border_at_the_g
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_vertical_table_anonymous_rows_paint_missing_outer_border_segments_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:100px; height:100px; writing-mode:vertical-rl; border-collapse:collapse; border:8px solid blue; }\
@@ -528,6 +552,8 @@ async fn collapsed_vertical_table_anonymous_rows_paint_missing_outer_border_segm
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_cells_ignore_border_radius_test() {
     let stylesheet = Stylesheet::parse(
         ".collapsed { display:table; table-layout:fixed; box-sizing:border-box; width:64px; border-collapse:collapse; }\
@@ -580,6 +606,8 @@ async fn collapsed_table_cells_ignore_border_radius_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_cell_borders_ignore_border_radius_test() {
     let stylesheet = Stylesheet::parse(
         ".collapsed { display:table; table-layout:fixed; box-sizing:border-box; width:64px; border-collapse:collapse; }\
@@ -625,6 +653,8 @@ async fn collapsed_table_cell_borders_ignore_border_radius_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_box_background_ignores_border_radius_test() {
     let stylesheet = Stylesheet::parse(
         ".collapsed { display:table; table-layout:fixed; box-sizing:border-box; width:64px; border-collapse:collapse; background:red; border-radius:20px; }\
@@ -667,6 +697,8 @@ async fn collapsed_table_box_background_ignores_border_radius_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_box_shadow_ignores_border_radius_test() {
     let stylesheet = Stylesheet::parse(
         ".table { display:table; table-layout:fixed; box-sizing:border-box; width:64px; margin:24px; border-collapse:collapse; border-radius:20px; box-shadow:0 0 0 6px green; }\
@@ -700,6 +732,8 @@ async fn collapsed_table_box_shadow_ignores_border_radius_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_table_internal_cells_do_not_paint_outer_shadows_test() {
     let stylesheet = Stylesheet::parse(
         ".collapsed { display:table; table-layout:fixed; width:80px; border-collapse:collapse; box-shadow:0 0 0 6px green; }\
@@ -757,6 +791,8 @@ async fn collapsed_table_internal_cells_do_not_paint_outer_shadows_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn collapsed_tables_do_not_paint_border_images_test() {
     let stylesheet = Stylesheet::parse(
         ".collapsed { display:table; table-layout:fixed; box-sizing:border-box; width:80px; border-collapse:collapse; border:4px solid blue; border-image:image(red) 2; }\
@@ -799,6 +835,8 @@ async fn collapsed_tables_do_not_paint_border_images_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn empty_table_cells_hide_borders_and_backgrounds_without_changing_tracks_test() {
     let stylesheet = Stylesheet::parse(".table {display:table; width:120px; table-layout:fixed; empty-cells:hide;} .row {display:table-row;} .cell {display:table-cell; height:30px; background-color:red; border:2px solid blue;} .visible {display:table-cell; height:30px; background-color:red; border:2px solid blue; empty-cells:show;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
@@ -824,6 +862,8 @@ async fn empty_table_cells_hide_borders_and_backgrounds_without_changing_tracks_
     assert_eq!(pixel(&pixels, 60.5, 10.0), [0, 0, 255, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn table_cells_align_native_text_within_the_row_height_test() {
     let stylesheet = Stylesheet::parse(".table {display:table;table-layout:fixed;width:100px;} .row {display:table-row;} .middle {display:table-cell;height:40px;vertical-align:middle;color:red;} .top {display:table-cell;vertical-align:top;color:blue;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {

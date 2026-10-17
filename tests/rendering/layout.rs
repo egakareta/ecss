@@ -1,3 +1,7 @@
+use super::*;
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn nested_selectors_distribute_flex_space_and_gap_test() {
     let stylesheet = Stylesheet::parse(
         ".row { display: flex; width: 200px; height: 30px; gap: 10px; }\
@@ -40,6 +44,8 @@ async fn nested_selectors_distribute_flex_space_and_gap_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn grid_tracks_spans_and_gaps_control_selector_boxes_test() {
     let stylesheet = Stylesheet::parse(
         ".grid { display: grid; width: 200px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 20px 30px; gap: 5px 10px; }\
@@ -75,6 +81,8 @@ async fn grid_tracks_spans_and_gaps_control_selector_boxes_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn overflow_and_display_none_clip_paint_and_remove_layout_space_test() {
     let stylesheet=Stylesheet::parse(
         ".parent { display: flex; width: 60px; height: 30px; overflow: hidden; background-color: #00f; }\
@@ -113,6 +121,8 @@ async fn overflow_and_display_none_clip_paint_and_remove_layout_space_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn flow_root_keeps_visible_overflow_test() {
     let stylesheet = Stylesheet::parse(
         ".root { display:flow-root; width:40px; height:20px; background-color:#00f; } .child { width:60px; height:10px; background-color:#f00; }",
@@ -140,6 +150,8 @@ async fn flow_root_keeps_visible_overflow_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn named_grid_areas_position_children_independently_of_source_order_test() {
     let stylesheet=Stylesheet::parse(
         ".grid { display: grid; width: 150px; grid-template-columns: 50px 100px; grid-template-rows: 20px 30px; grid-template-areas: 'head head' 'nav main'; }\
@@ -177,6 +189,8 @@ async fn named_grid_areas_position_children_independently_of_source_order_test()
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn floats_and_clear_position_selector_boxes_test() {
     let stylesheet = Stylesheet::parse(
         ".flow { display: flow-root; width: 160px; }\
@@ -214,6 +228,8 @@ async fn floats_and_clear_position_selector_boxes_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn flex_order_wrap_and_contents_use_only_selector_composition_test() {
     let stylesheet = Stylesheet::parse(
         ".flex { display: flex; flex-wrap: wrap; width: 100px; gap: 5px; }\
@@ -256,6 +272,8 @@ async fn flex_order_wrap_and_contents_use_only_selector_composition_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn visible_descendants_override_hidden_ancestors_without_removing_layout_test() {
     let stylesheet = Stylesheet::parse(
         ".hidden { visibility:hidden; width:80px; height:40px; background-color:red; }\
@@ -288,6 +306,8 @@ async fn visible_descendants_override_hidden_ancestors_without_removing_layout_t
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn stacking_contexts_contain_descendant_z_indices_test() {
     let stylesheet=Stylesheet::parse(
         ".root { position:relative; width:80px; height:40px; }\
@@ -330,6 +350,8 @@ async fn stacking_contexts_contain_descendant_z_indices_test() {
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn vertical_writing_paints_boxes_in_the_declared_block_direction_test() {
     let stylesheet=Stylesheet::parse(".flow {writing-mode:vertical-rl; width:80px; height:40px;} .red {block-size:20px; inline-size:30px; background-color:red;} .blue {block-size:20px; inline-size:30px; background-color:blue;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
@@ -348,6 +370,8 @@ async fn vertical_writing_paints_boxes_in_the_declared_block_direction_test() {
     assert_eq!(pixel(&pixels, 20.0, 15.0), [255; 4]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn subgrid_inherits_tracks_gaps_and_named_lines_on_both_axes_test() {
     let stylesheet = Stylesheet::parse(".grid {display:grid; width:210px; grid-template-columns:[start] 1fr [middle] 1fr [end]; grid-template-rows:20px 20px; gap:10px;} .sub {display:grid; grid-column:start / end; grid-row:1 / 3; grid-template-columns:subgrid [a] [b] [c]; grid-template-rows:subgrid;} .red {grid-column:a / b; grid-row:1; background-color:red;} .blue {grid-column:b / c; grid-row:2; background-color:blue;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {

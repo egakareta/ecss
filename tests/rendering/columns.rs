@@ -1,3 +1,7 @@
+use super::*;
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn column_fragments_paint_in_destination_columns_without_painting_gutters_test() {
     let stylesheet=Stylesheet::parse(".columns {width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto;} .box {height:60px; background-color:red;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
@@ -33,6 +37,8 @@ async fn column_fragments_paint_in_destination_columns_without_painting_gutters_
     );
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn column_spanners_create_full_width_boxes_between_column_sets_test() {
     let stylesheet=Stylesheet::parse(".columns {width:210px; column-count:2; column-gap:10px;} .item {height:20px; background-color:red;} .span {column-span:all; height:10px; background-color:blue;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -67,6 +73,8 @@ async fn column_spanners_create_full_width_boxes_between_column_sets_test() {
     assert_eq!(pixel(&pixels, 120.0, 40.0), [255, 0, 0, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn column_rules_and_cloned_fragment_borders_render_their_styles_test() {
     let stylesheet = Stylesheet::parse(".columns {width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; column-rule:6px double green; column-rule-style:none; column-rule-style:double;} .box {height:60px; box-sizing:border-box; border:2px solid blue; background-color:red; box-decoration-break:clone;}").unwrap();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
@@ -89,6 +97,8 @@ async fn column_rules_and_cloned_fragment_borders_render_their_styles_test() {
     assert!(right[1] > right[0] && right[1] > right[2], "{right:?}");
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn cloned_column_fragments_repeat_border_images_test() {
     let stylesheet = Stylesheet::parse(
         ".columns { width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; }\
@@ -109,6 +119,8 @@ async fn cloned_column_fragments_repeat_border_images_test() {
     assert_eq!(pixel(&pixels, 70.0, 0.5), [255, 0, 0, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn cloned_column_fragments_repeat_background_images_test() {
     let stylesheet = Stylesheet::parse(
         ".columns { width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; }\
@@ -129,6 +141,8 @@ async fn cloned_column_fragments_repeat_background_images_test() {
     assert_eq!(pixel(&pixels, 70.0, 15.0), [255, 0, 0, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn cloned_column_fragments_repaint_background_gradients_test() {
     let stylesheet = Stylesheet::parse(
         ".columns { width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; }\
@@ -155,6 +169,8 @@ async fn cloned_column_fragments_repaint_background_gradients_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn cloned_column_fragments_repaint_radial_gradient_centers_test() {
     let stylesheet = Stylesheet::parse(
         ".columns { width:100px; height:30px; column-count:2; column-gap:10px; column-fill:auto; }\
@@ -177,6 +193,8 @@ async fn cloned_column_fragments_repaint_radial_gradient_centers_test() {
     }
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn cloned_column_fragments_repeat_url_background_images_test() {
     let source = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255]));
     let mut encoded = std::io::Cursor::new(Vec::new());
@@ -207,6 +225,8 @@ async fn cloned_column_fragments_repeat_url_background_images_test() {
     assert_eq!(pixel(&pixels, 70.0, 15.0), [255, 0, 255, 255]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn fragmented_border_image_outset_paints_outside_each_clone_test() {
     async fn render(decoration_break: &str) -> Vec<[u8; 4]> {
         let stylesheet = Stylesheet::parse(&format!(
@@ -234,6 +254,8 @@ async fn fragmented_border_image_outset_paints_outside_each_clone_test() {
     assert_eq!(pixel(&sliced, 70.0, 36.5), [255; 4]);
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn multicolumn_box_shadows_follow_box_decoration_break_test() {
     async fn shadow_pixels(decoration_break: &str, shadow: &str) -> usize {
         let stylesheet = Stylesheet::parse(&format!(
