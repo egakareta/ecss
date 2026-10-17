@@ -498,7 +498,7 @@ fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> Result
                 n,
                 "round" | "round-nearest" | "round-up" | "round-down" | "round-to-zero"
             )
-            && (count == 2 || count == 1 && kind == Kind::Number) =>
+            && (1..=2).contains(&count) =>
         {
             kind
         }
