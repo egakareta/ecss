@@ -1450,9 +1450,8 @@ impl Tree<'_> {
             .rows
             .iter()
             .enumerate()
-            .filter_map(|(row, (row_id, cells))| {
-                (row_id.is_none() && cells.len() < columns).then(|| (row, row_edges[row].clone()))
-            })
+            .filter(|(_, (row_id, cells))| row_id.is_none() && cells.len() < columns)
+            .map(|(row, _)| (row, row_edges[row].clone()))
             .collect()
     }
 

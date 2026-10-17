@@ -355,18 +355,22 @@ impl BorderShape {
 
     pub(crate) fn overflow_paths(
         &self,
-        border: Rect,
         clip: crate::css::BackgroundClip,
-        stroke: egui::epaint::MarginF32,
-        padding: egui::epaint::MarginF32,
-        margin: egui::epaint::MarginF32,
-        widths: [f32; 4],
-        outset: f32,
+        geometry: OverflowGeometry,
     ) -> (Vec<Vec<Pos2>>, FillRule) {
-        let (paths, fill_rule) =
-            self.background_paths(border, clip, stroke, padding, margin, widths);
-        if outset > 0.0 {
-            (offset_filled_paths(&paths, fill_rule, outset), fill_rule)
+        let (paths, fill_rule) = self.background_paths(
+            geometry.border,
+            clip,
+            geometry.stroke,
+            geometry.padding,
+            geometry.margin,
+            geometry.widths,
+        );
+        if geometry.outset > 0.0 {
+            (
+                offset_filled_paths(&paths, fill_rule, geometry.outset),
+                fill_rule,
+            )
         } else {
             (paths, fill_rule)
         }
@@ -380,6 +384,15 @@ impl BorderShape {
         };
         self.shapes[index].0.is_convex()
     }
+}
+
+pub(crate) struct OverflowGeometry {
+    pub(crate) border: Rect,
+    pub(crate) stroke: egui::epaint::MarginF32,
+    pub(crate) padding: egui::epaint::MarginF32,
+    pub(crate) margin: egui::epaint::MarginF32,
+    pub(crate) widths: [f32; 4],
+    pub(crate) outset: f32,
 }
 
 impl BasicShape {
@@ -623,11 +636,13 @@ impl ShapeFunction {
                         &mut points,
                         current,
                         end,
-                        rx,
-                        ry,
-                        *rotation,
-                        *large,
-                        *clockwise,
+                        ArcParameters {
+                            radius_x: rx,
+                            radius_y: ry,
+                            rotation: *rotation,
+                            large_arc: *large,
+                            sweep: *clockwise,
+                        },
                     );
                     current = end;
                     cubic_control = None;
@@ -1676,11 +1691,13 @@ fn parse_svg_path(data: &str) -> Result<Vec<Vec<Vec2>>, &'static str> {
                     &mut points,
                     current,
                     end,
-                    numbers[0],
-                    numbers[1],
-                    numbers[2],
-                    numbers[3] != 0.0,
-                    numbers[4] != 0.0,
+                    ArcParameters {
+                        radius_x: numbers[0],
+                        radius_y: numbers[1],
+                        rotation: numbers[2],
+                        large_arc: numbers[3] != 0.0,
+                        sweep: numbers[4] != 0.0,
+                    },
                 );
                 current = end;
                 cubic_control = None;
@@ -1791,16 +1808,23 @@ fn append_quadratic(points: &mut Vec<Vec2>, start: Vec2, control: Vec2, end: Vec
     }
 }
 
-fn append_arc(
-    points: &mut Vec<Vec2>,
-    start: Vec2,
-    end: Vec2,
+#[derive(Clone, Copy)]
+struct ArcParameters {
     radius_x: f32,
     radius_y: f32,
     rotation: f32,
     large_arc: bool,
     sweep: bool,
-) {
+}
+
+fn append_arc(points: &mut Vec<Vec2>, start: Vec2, end: Vec2, parameters: ArcParameters) {
+    let ArcParameters {
+        radius_x,
+        radius_y,
+        rotation,
+        large_arc,
+        sweep,
+    } = parameters;
     let (mut rx, mut ry) = (radius_x.abs(), radius_y.abs());
     if rx == 0.0 || ry == 0.0 || (start - end).length() <= f32::EPSILON {
         points.push(end);
@@ -2427,12 +2451,11 @@ pub(crate) fn limit_intervals(
                 return Vec::new();
             };
             let extent = extent.resolve(percentage_basis).clamp(0.0, length);
-            let intervals = match (selected, side) {
+            match (selected, side) {
                 (3, 0) | (1, 2) | (0, 1) | (2, 3) => vec![(0.0, extent)],
                 (3, 2) | (1, 0) | (0, 3) | (2, 1) => vec![(length - extent, length)],
                 _ => Vec::new(),
-            };
-            intervals
+            }
         }
     }
 }
@@ -2602,11 +2625,12 @@ pub(crate) fn clip_mesh_to_paths(mesh: egui::epaint::Mesh, clip: &PathClip) -> e
         .collect::<Vec<_>>();
     let mut polygon = Vec::with_capacity(8);
     let mut scratch = Vec::with_capacity(8);
-    for triangle in mesh.indices.chunks_exact(3) {
+    let (triangles, _) = mesh.indices.as_chunks::<3>();
+    for triangle in triangles {
         let vertices = [
-            mesh.vertices[triangle[0] as usize].clone(),
-            mesh.vertices[triangle[1] as usize].clone(),
-            mesh.vertices[triangle[2] as usize].clone(),
+            mesh.vertices[triangle[0] as usize],
+            mesh.vertices[triangle[1] as usize],
+            mesh.vertices[triangle[2] as usize],
         ];
         let bounds = vertices.iter().fold(
             Rect::from_min_max(vertices[0].pos, vertices[0].pos),
@@ -2630,11 +2654,9 @@ pub(crate) fn clip_mesh_to_paths(mesh: egui::epaint::Mesh, clip: &PathClip) -> e
             }
             for index in 1..polygon.len() - 1 {
                 let first = output.vertices.len() as u32;
-                output.vertices.extend([
-                    polygon[0].clone(),
-                    polygon[index].clone(),
-                    polygon[index + 1].clone(),
-                ]);
+                output
+                    .vertices
+                    .extend([polygon[0], polygon[index], polygon[index + 1]]);
                 output.add_triangle(first, first + 1, first + 2);
             }
         }
@@ -2680,7 +2702,7 @@ fn clip_vertex_polygon(
                 scratch.push(interpolate_vertex(previous, current, amount));
             }
             if current_inside {
-                scratch.push(current.clone());
+                scratch.push(*current);
             }
             previous_index = current_index;
             previous_distance = current_distance;
@@ -2759,12 +2781,11 @@ fn path_fill_quads(paths: Vec<Vec<Pos2>>, fill_rule: FillRule) -> Vec<[Pos2; 4]>
         let mut crossings: Vec<_> = edges
             .iter()
             .copied()
-            .filter_map(|(a, b)| {
-                ((a.y < middle && b.y > middle) || (b.y < middle && a.y > middle)).then(|| {
-                    let direction = if b.y > a.y { 1_i32 } else { -1_i32 };
-                    let x = x_at_y(a, b, middle);
-                    (x, direction, (a, b))
-                })
+            .filter(|(a, b)| (a.y < middle && b.y > middle) || (b.y < middle && a.y > middle))
+            .map(|(a, b)| {
+                let direction = if b.y > a.y { 1_i32 } else { -1_i32 };
+                let x = x_at_y(a, b, middle);
+                (x, direction, (a, b))
             })
             .collect();
         crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2797,19 +2818,19 @@ fn path_fill_quads(paths: Vec<Vec<Pos2>>, fill_rule: FillRule) -> Vec<[Pos2; 4]>
             };
             if !was_inside && is_inside {
                 left = group.first().map(|crossing| crossing.2);
-            } else if was_inside && !is_inside {
-                if let (Some((left_a, left_b)), Some((right_a, right_b))) =
+            } else if was_inside
+                && !is_inside
+                && let (Some((left_a, left_b)), Some((right_a, right_b))) =
                     (left.take(), group.first().map(|crossing| crossing.2))
-                {
-                    let quad = vec![
-                        pos2(x_at_y(left_a, left_b, top), top),
-                        pos2(x_at_y(right_a, right_b, top), top),
-                        pos2(x_at_y(right_a, right_b, bottom), bottom),
-                        pos2(x_at_y(left_a, left_b, bottom), bottom),
-                    ];
-                    if (quad[1] - quad[0]).length_sq() + (quad[2] - quad[3]).length_sq() > 0.0001 {
-                        quads.push([quad[0], quad[1], quad[2], quad[3]]);
-                    }
+            {
+                let quad = [
+                    pos2(x_at_y(left_a, left_b, top), top),
+                    pos2(x_at_y(right_a, right_b, top), top),
+                    pos2(x_at_y(right_a, right_b, bottom), bottom),
+                    pos2(x_at_y(left_a, left_b, bottom), bottom),
+                ];
+                if (quad[1] - quad[0]).length_sq() + (quad[2] - quad[3]).length_sq() > 0.0001 {
+                    quads.push([quad[0], quad[1], quad[2], quad[3]]);
                 }
             }
         }
@@ -2881,11 +2902,10 @@ fn path_difference_quads(
         let mut crossings: Vec<_> = edges
             .iter()
             .copied()
-            .filter_map(|(a, b, shape)| {
-                ((a.y < middle && b.y > middle) || (b.y < middle && a.y > middle)).then(|| {
-                    let direction = if b.y > a.y { 1_i32 } else { -1_i32 };
-                    (x_at_y(a, b, middle), direction, (a, b), shape)
-                })
+            .filter(|(a, b, _)| (a.y < middle && b.y > middle) || (b.y < middle && a.y > middle))
+            .map(|(a, b, shape)| {
+                let direction = if b.y > a.y { 1_i32 } else { -1_i32 };
+                (x_at_y(a, b, middle), direction, (a, b), shape)
             })
             .collect();
         crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2969,10 +2989,7 @@ impl CornerShape {
     }
 }
 
-fn radius_quad<'a>(
-    values: &'a [String],
-    units: Units,
-) -> Result<[LengthPercentage; 4], &'static str> {
+fn radius_quad(values: &[String], units: Units) -> Result<[LengthPercentage; 4], &'static str> {
     let values = quad(values)?;
     Ok([
         length_percentage(&values[0], units, false)?,
@@ -4001,9 +4018,17 @@ pub(crate) fn shadow_shapes(
         };
         let color = shadow.color.unwrap_or(current);
         if position == ShadowPosition::Inset {
-            shapes.extend(inset_shadow_shapes(
-                rect, style, radii, &shadow, color, stroke, padding, margin, widths,
-            ));
+            shapes.extend(inset_shadow_shapes(InsetShadowInput {
+                rect,
+                style,
+                outer_radii: radii,
+                shadow: &shadow,
+                color,
+                stroke,
+                padding,
+                margin,
+                widths,
+            }));
             continue;
         }
 
@@ -4083,19 +4108,32 @@ pub(crate) fn inset_shadow_extent(rect: Rect, style: &BoxStyle) -> f32 {
         .fold(0.0, f32::max)
 }
 
-fn inset_shadow_shapes(
+struct InsetShadowInput<'a> {
     rect: Rect,
-    style: &BoxStyle,
+    style: &'a BoxStyle,
     outer_radii: [Vec2; 4],
-    shadow: &Shadow,
+    shadow: &'a Shadow,
     color: Color32,
     stroke: egui::epaint::MarginF32,
     padding: egui::epaint::MarginF32,
     margin: egui::epaint::MarginF32,
     widths: [f32; 4],
-) -> Vec<Shape> {
+}
+
+fn inset_shadow_shapes(input: InsetShadowInput<'_>) -> Vec<Shape> {
     use egui::epaint::{Mesh, Vertex};
 
+    let InsetShadowInput {
+        rect,
+        style,
+        outer_radii,
+        shadow,
+        color,
+        stroke,
+        padding,
+        margin,
+        widths,
+    } = input;
     let Some(offset) = shadow.offset else {
         return Vec::new();
     };

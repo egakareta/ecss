@@ -494,9 +494,11 @@ fn parse_import<'i>(input: &mut CssParser<'i>) -> Result<String, ParseError<Pars
     Ok(url)
 }
 
+type ParsedSelector = (Option<String>, RuleState, Option<PseudoElementKind>);
+
 fn parse_selectors<'i>(
     input: &mut CssParser<'i>,
-) -> Result<Vec<(Option<String>, RuleState, Option<PseudoElementKind>)>, ParseError<ParseIssue>> {
+) -> Result<Vec<ParsedSelector>, ParseError<ParseIssue>> {
     let selector_parser = SimpleSelectorParser;
     let selectors = SelectorList::parse(&selector_parser, input, ParseRelative::No)
         .map_err(|_| ParseError::custom(ParseIssue::new("unsupported class selector")))?;
@@ -1463,7 +1465,7 @@ fn parse_conic_gradient_stop(value: &str) -> Result<Vec<GradientStop>, ParseErro
         let token = input.next()?.clone();
         let position = match token {
             Token::Percentage { unit_value, .. } => unit_value,
-            Token::Number { value, .. } if value == 0.0 => 0.0,
+            Token::Number { value: 0.0, .. } => 0.0,
             Token::Dimension { .. } => {
                 parse_gradient_angle(input.slice_from(start).trim())
                     .ok_or_else(|| ParseError::custom("invalid conic gradient stop"))?

@@ -62,11 +62,11 @@ async fn pseudo_element_borders_paint_first_letter_and_first_line_test() {
     })
     .await;
 
-    assert!(pixels.iter().any(|pixel| *pixel == [255, 0, 0, 255]));
-    assert!(pixels.iter().any(|pixel| *pixel == [0, 0, 255, 255]));
-    assert!(pixels.iter().any(|pixel| *pixel == [0, 128, 0, 255]));
-    assert!(pixels.iter().any(|pixel| *pixel == [128, 0, 128, 255]));
-    assert!(!pixels.iter().any(|pixel| *pixel == [255, 0, 255, 255]));
+    assert!(pixels.contains(&[255, 0, 0, 255]));
+    assert!(pixels.contains(&[0, 0, 255, 255]));
+    assert!(pixels.contains(&[0, 128, 0, 255]));
+    assert!(pixels.contains(&[128, 0, 128, 255]));
+    assert!(!pixels.contains(&[255, 0, 255, 255]));
     let (letter, line) = bounds.lock().unwrap().unwrap();
     let horizontal_bounds = |color| {
         pixels
@@ -332,7 +332,7 @@ async fn first_letter_inline_decoration_extents_contribute_to_text_width_test() 
     );
     assert!((flow_decorated.width() - flow_plain.width() - 21.0).abs() < 0.5);
     assert!(wrapped_decorated.height() > wrapped_plain.height());
-    assert!(pixels.iter().any(|pixel| *pixel == [255, 0, 0, 255]));
+    assert!(pixels.contains(&[255, 0, 0, 255]));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
@@ -357,8 +357,8 @@ async fn pseudo_element_decorations_apply_to_descendant_text_shapes_test() {
     })
     .await;
 
-    assert!(pixels.iter().any(|pixel| *pixel == [255, 165, 0, 255]));
-    assert!(pixels.iter().any(|pixel| *pixel == [128, 0, 128, 255]));
+    assert!(pixels.contains(&[255, 165, 0, 255]));
+    assert!(pixels.contains(&[128, 0, 128, 255]));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

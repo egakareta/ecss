@@ -609,16 +609,16 @@ pub(crate) fn show(
         .unwrap_or(measured);
     if !geometry.fragments.is_empty() {
         if let Some(text) = active.0.borrow().nodes[index].text.as_ref() {
-            replace_fragmented_text(
-                ui.ctx(),
+            replace_fragmented_text(FragmentedTextInput {
+                context: ui.ctx(),
                 layer,
                 start,
                 end,
-                &geometry,
-                &text.job,
-                &style.format,
-                content_ui.visuals(),
-            );
+                geometry: &geometry,
+                job: &text.job,
+                format: &style.format,
+                selection_visuals: content_ui.visuals(),
+            });
         }
     } else if text_vertical {
         rotate_text(ui.ctx(), layer, start, end, &geometry, &style.format);
@@ -825,27 +825,21 @@ pub(crate) fn show(
             };
             background_style.clips[clip_index]
         };
-        let shape_clip_for = |clip| {
-            let border_widths = style
-                .layout
-                .border
-                .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-            background_clip_path(
-                border,
-                &style,
-                final_geometry.stroke,
-                final_geometry.padding,
-                final_geometry.margin,
-                [
-                    border_widths.top,
-                    border_widths.right,
-                    border_widths.bottom,
-                    border_widths.left,
-                ],
-                clip,
-                corner_radius,
-            )
-        };
+        let clip_geometry = BoxDecorationGeometry::new(
+            border,
+            &style,
+            final_geometry.stroke,
+            final_geometry.padding,
+            final_geometry.margin,
+        );
+        let box_geometry = BoxDecorationGeometry::new(
+            border,
+            decoration_style,
+            final_geometry.stroke,
+            final_geometry.padding,
+            final_geometry.margin,
+        );
+        let shape_clip_for = |clip| background_clip_path(&clip_geometry, clip, corner_radius);
         let frame_stroke = if style.border_set || final_geometry.collapsed.is_some() {
             egui::Stroke::NONE
         } else {
@@ -952,20 +946,26 @@ pub(crate) fn show(
                 .iter()
                 .map(|slice| {
                     let source = slice.source.translate(border.min.to_vec2());
-                    fragment_background_shapes(
-                        ui.ctx(),
-                        &stylesheet.background_images,
-                        &background_style,
-                        &decoration_style,
+                    let geometry = BoxDecorationGeometry::new(
                         source,
+                        decoration_style,
                         final_geometry.stroke,
                         final_geometry.padding,
                         final_geometry.margin,
+                    );
+                    let resources = ImageResources {
+                        context: ui.ctx(),
+                        images: &stylesheet.background_images,
+                        invalid_elements: &blocked_element_ids,
+                    };
+                    fragment_background_shapes(
+                        &resources,
+                        &background_style,
+                        &geometry,
                         fill,
                         color_clip,
                         corner_radius,
                         scroll,
-                        &blocked_element_ids,
                     )
                 })
                 .collect();
@@ -975,7 +975,7 @@ pub(crate) fn show(
             for (surface_index, surface) in surfaces.iter().copied().enumerate() {
                 let shadow = crate::box_decoration::shadow_shapes(
                     if inline_fragmented { surface } else { border },
-                    &decoration_style,
+                    decoration_style,
                     visuals.fg_stroke.color,
                     crate::box_decoration::ShadowPosition::Outset,
                     final_geometry.stroke,
@@ -986,10 +986,12 @@ pub(crate) fn show(
                     let clip = fragment_shadow_clip(
                         surface,
                         ui.clip_rect(),
-                        inline_vertical,
-                        inline_forward,
-                        surface_index,
-                        surface_count,
+                        FragmentPosition {
+                            vertical: inline_vertical,
+                            forward: inline_forward,
+                            index: surface_index,
+                            count: surface_count,
+                        },
                         crate::box_decoration::ShadowPosition::Outset,
                         0.0,
                         final_geometry.stroke,
@@ -1011,11 +1013,7 @@ pub(crate) fn show(
             };
             shapes.push(box_surface_shape(
                 color_surface,
-                border,
-                &decoration_style,
-                final_geometry.stroke,
-                final_geometry.padding,
-                final_geometry.margin,
+                &box_geometry,
                 color_clip,
                 fill,
                 corner_radius,
@@ -1074,11 +1072,7 @@ pub(crate) fn show(
                     shapes.push(clip_background_shape(
                         box_surface_shape(
                             background_surface,
-                            border,
-                            &decoration_style,
-                            final_geometry.stroke,
-                            final_geometry.padding,
-                            final_geometry.margin,
+                            &box_geometry,
                             layer_clip,
                             *color,
                             corner_radius,
@@ -1310,7 +1304,7 @@ pub(crate) fn show(
             }
             let inset_shadow = crate::box_decoration::shadow_shapes(
                 surface,
-                &decoration_style,
+                decoration_style,
                 visuals.fg_stroke.color,
                 crate::box_decoration::ShadowPosition::Inset,
                 final_geometry.stroke,
@@ -1321,10 +1315,12 @@ pub(crate) fn show(
                 let clip = fragment_shadow_clip(
                     surface,
                     ui.clip_rect(),
-                    inline_vertical,
-                    inline_forward,
-                    surface_index,
-                    surface_count,
+                    FragmentPosition {
+                        vertical: inline_vertical,
+                        forward: inline_forward,
+                        index: surface_index,
+                        count: surface_count,
+                    },
                     crate::box_decoration::ShadowPosition::Inset,
                     crate::box_decoration::inset_shadow_extent(surface, &style),
                     final_geometry.stroke,
@@ -1345,7 +1341,7 @@ pub(crate) fn show(
             if let Some(edges) = final_geometry.collapsed.as_ref() {
                 shapes.extend(collapsed_border_shapes(
                     surface,
-                    &decoration_style,
+                    decoration_style,
                     edges,
                     visuals.fg_stroke.color,
                 ));
@@ -1485,16 +1481,16 @@ pub(crate) fn show(
                     continue;
                 }
                 for text_rect in text_rects {
-                    shapes.extend(pseudo_decoration_shapes(
-                        ui.ctx(),
+                    shapes.extend(pseudo_decoration_shapes(PseudoDecorationInput {
+                        context: ui.ctx(),
                         stylesheet,
-                        text_rect,
-                        &pseudo_style,
-                        final_geometry.content().width(),
+                        rect: text_rect,
+                        style: &pseudo_style,
+                        percentage_basis: final_geometry.content().width(),
                         fill,
-                        color,
-                        &blocked_element_ids,
-                    ));
+                        current: color,
+                        blocked_element_ids: &blocked_element_ids,
+                    }));
                 }
             }
         }
@@ -2051,10 +2047,12 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                                 fragment_shadow_clip(
                                     destination,
                                     paint.clip,
-                                    !node.style.format.writing.vertical(),
-                                    !node.style.format.writing.reverse(),
-                                    slice_index,
-                                    slices.len(),
+                                    FragmentPosition {
+                                        vertical: !node.style.format.writing.vertical(),
+                                        forward: !node.style.format.writing.reverse(),
+                                        index: slice_index,
+                                        count: slices.len(),
+                                    },
                                     crate::box_decoration::ShadowPosition::Outset,
                                     0.0,
                                     paint.geometry.stroke,
@@ -2098,12 +2096,14 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                 let mut shape = if decoration && node.style.format.clone_decoration {
                     clone_decoration(
                         &entry.shape,
-                        source,
-                        &node.style,
+                        &BoxDecorationGeometry::new(
+                            source,
+                            &node.style,
+                            paint.geometry.stroke,
+                            paint.geometry.padding,
+                            paint.geometry.margin,
+                        ),
                         node.color,
-                        paint.geometry.stroke,
-                        paint.geometry.padding,
-                        paint.geometry.margin,
                         paint
                             .fragment_border_images
                             .get(slice_index)
@@ -2189,30 +2189,26 @@ fn reorder_paint(frame: &Frame, context: &Context) {
 
 fn clone_decoration(
     shape: &egui::Shape,
-    rect: Rect,
-    style: &BoxStyle,
+    geometry: &BoxDecorationGeometry<'_>,
     color: Color32,
-    stroke: egui::epaint::MarginF32,
-    padding: egui::epaint::MarginF32,
-    margin: egui::epaint::MarginF32,
     fragment_border_image: Option<&[egui::Shape]>,
     fragment_background_shapes: &[egui::Shape],
 ) -> egui::Shape {
     if matches!(shape, egui::Shape::Vec(_)) {
         let mut shapes = fragment_background_shapes.to_vec();
         shapes.extend(crate::box_decoration::shadow_shapes(
-            rect,
-            style,
+            geometry.border,
+            geometry.style,
             color,
             crate::box_decoration::ShadowPosition::Inset,
-            stroke,
-            padding,
-            margin,
+            geometry.stroke,
+            geometry.padding,
+            geometry.margin,
         ));
         if let Some(fragment_border_image) = fragment_border_image {
             shapes.extend(fragment_border_image.iter().cloned());
         } else {
-            shapes.extend(border_shapes(rect, style, color));
+            shapes.extend(border_shapes(geometry.border, geometry.style, color));
         }
         egui::Shape::Vec(shapes)
     } else {
@@ -2596,9 +2592,9 @@ fn first_letter_character_range(characters: &[char]) -> Option<std::ops::Range<u
             || is_first_letter_space(characters[cursor]) && characters[cursor] != ' '
             || is_combining_mark(characters[cursor]))
     {
-        if is_first_letter_suffix_punctuation(characters[cursor]) {
-            suffix_end = Some(cursor + 1);
-        } else if is_combining_mark(characters[cursor]) && suffix_end.is_some() {
+        if is_first_letter_suffix_punctuation(characters[cursor])
+            || is_combining_mark(characters[cursor]) && suffix_end.is_some()
+        {
             suffix_end = Some(cursor + 1);
         }
         cursor += 1;
@@ -2686,16 +2682,28 @@ fn pseudo_decoration_property_applies(pseudo: crate::css::PseudoElementKind, nam
     }
 }
 
-fn pseudo_decoration_shapes(
-    context: &Context,
-    stylesheet: &Stylesheet,
+struct PseudoDecorationInput<'a> {
+    context: &'a Context,
+    stylesheet: &'a Stylesheet,
     rect: Rect,
-    style: &BoxStyle,
+    style: &'a BoxStyle,
     percentage_basis: f32,
     fill: Color32,
     current: Color32,
-    blocked_element_ids: &HashSet<String>,
-) -> Vec<egui::Shape> {
+    blocked_element_ids: &'a HashSet<String>,
+}
+
+fn pseudo_decoration_shapes(input: PseudoDecorationInput<'_>) -> Vec<egui::Shape> {
+    let PseudoDecorationInput {
+        context,
+        stylesheet,
+        rect,
+        style,
+        percentage_basis,
+        fill,
+        current,
+        blocked_element_ids,
+    } = input;
     let basis = percentage_basis;
     let edge = |value: taffy::LengthPercentageAuto, basis| {
         resolve(value.into_raw(), basis).unwrap_or(0.0).max(0.0)
@@ -2732,6 +2740,7 @@ fn pseudo_decoration_shapes(
             rect.bottom() + padding.bottom + stroke.bottom,
         ),
     );
+    let geometry = BoxDecorationGeometry::new(border, style, stroke, padding, margin);
     let mut shapes = crate::box_decoration::shadow_shapes(
         border,
         style,
@@ -2744,11 +2753,7 @@ fn pseudo_decoration_shapes(
     if fill.a() > 0 {
         shapes.push(box_surface_shape(
             border,
-            border,
-            style,
-            stroke,
-            padding,
-            margin,
+            &geometry,
             crate::css::BackgroundClip::Border,
             fill,
             egui::CornerRadius::ZERO,
@@ -2824,15 +2829,18 @@ fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> Backg
 }
 
 fn background_clip_path(
-    border: Rect,
-    style: &BoxStyle,
-    stroke: egui::epaint::MarginF32,
-    padding: egui::epaint::MarginF32,
-    margin: egui::epaint::MarginF32,
-    widths: [f32; 4],
+    geometry: &BoxDecorationGeometry<'_>,
     clip: crate::css::BackgroundClip,
     fallback_radius: egui::CornerRadius,
 ) -> Option<crate::box_decoration::PathClip> {
+    let BoxDecorationGeometry {
+        border,
+        style,
+        stroke,
+        padding,
+        margin,
+        widths,
+    } = *geometry;
     if let Some(border_shape) = &style.decorations.border_shape {
         let (paths, fill_rule) =
             border_shape.background_paths(border, clip, stroke, padding, margin, widths);
@@ -2882,53 +2890,79 @@ fn background_clip_path(
     ))
 }
 
-fn fragment_background_shapes(
-    context: &Context,
-    images: &crate::background::ImageAssets,
-    background: &BackgroundPaint,
-    style: &BoxStyle,
+#[derive(Clone, Copy)]
+struct BoxDecorationGeometry<'a> {
     border: Rect,
+    style: &'a BoxStyle,
     stroke: egui::epaint::MarginF32,
     padding: egui::epaint::MarginF32,
     margin: egui::epaint::MarginF32,
-    fill: Color32,
-    color_clip: crate::css::BackgroundClip,
-    corner_radius: egui::CornerRadius,
-    scroll: Vec2,
-    invalid_elements: &HashSet<String>,
-) -> Vec<egui::Shape> {
-    let widths = style
-        .layout
-        .border
-        .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-    let shape_clip_for = |rect, clip| {
-        background_clip_path(
-            rect,
+    widths: [f32; 4],
+}
+
+impl<'a> BoxDecorationGeometry<'a> {
+    fn new(
+        border: Rect,
+        style: &'a BoxStyle,
+        stroke: egui::epaint::MarginF32,
+        padding: egui::epaint::MarginF32,
+        margin: egui::epaint::MarginF32,
+    ) -> Self {
+        let border_widths = style
+            .layout
+            .border
+            .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
+        Self {
+            border,
             style,
             stroke,
             padding,
             margin,
-            [widths.top, widths.right, widths.bottom, widths.left],
-            clip,
-            corner_radius,
-        )
+            widths: [
+                border_widths.top,
+                border_widths.right,
+                border_widths.bottom,
+                border_widths.left,
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ImageResources<'a> {
+    context: &'a Context,
+    images: &'a crate::background::ImageAssets,
+    invalid_elements: &'a HashSet<String>,
+}
+
+fn fragment_background_shapes(
+    resources: &ImageResources<'_>,
+    background: &BackgroundPaint,
+    geometry: &BoxDecorationGeometry<'_>,
+    fill: Color32,
+    color_clip: crate::css::BackgroundClip,
+    corner_radius: egui::CornerRadius,
+    scroll: Vec2,
+) -> Vec<egui::Shape> {
+    let context = resources.context;
+    let images = resources.images;
+    let invalid_elements = resources.invalid_elements;
+    let border = geometry.border;
+    let stroke = geometry.stroke;
+    let padding = geometry.padding;
+    let shape_clip_for = |rect, clip| {
+        let geometry = BoxDecorationGeometry {
+            border: rect,
+            ..*geometry
+        };
+        background_clip_path(&geometry, clip, corner_radius)
     };
     let color_surface = match color_clip {
         crate::css::BackgroundClip::Border => border,
         crate::css::BackgroundClip::Padding => border - stroke,
         crate::css::BackgroundClip::Content => border - stroke - padding,
     };
-    let color_shape = box_surface_shape(
-        color_surface,
-        border,
-        style,
-        stroke,
-        padding,
-        margin,
-        color_clip,
-        fill,
-        corner_radius,
-    );
+    let color_shape = box_surface_shape(color_surface, geometry, color_clip, fill, corner_radius);
     let color_clip_path = shape_clip_for(border, color_clip);
     let mut shapes = vec![clip_background_shape(color_shape, color_clip_path.as_ref())];
     let scale = context.pixels_per_point();
@@ -2958,11 +2992,7 @@ fn fragment_background_shapes(
             crate::css::BackgroundImage::SolidColor(color) => shapes.push(clip_background_shape(
                 box_surface_shape(
                     background_surface,
-                    border,
-                    style,
-                    stroke,
-                    padding,
-                    margin,
+                    geometry,
                     layer_clip,
                     *color,
                     corner_radius,
@@ -3399,18 +3429,21 @@ fn cross_fade_texture(
         return Some((texture, logical_size));
     }
     let area = Rect::from_min_size(Pos2::ZERO, logical_size);
+    let resources = ImageResources {
+        context,
+        images,
+        invalid_elements,
+    };
     let pixels = (0..height)
         .flat_map(|y| {
             (0..width).map(move |x| {
                 sample_image(
-                    context,
-                    images,
+                    &resources,
                     image,
                     scale,
                     (x as f32 + 0.5) / width as f32,
                     (y as f32 + 0.5) / height as f32,
                     area,
-                    invalid_elements,
                 )
             })
         })
@@ -3501,15 +3534,18 @@ fn intrinsic_image_size(
 }
 
 fn sample_image(
-    context: &Context,
-    images: &crate::background::ImageAssets,
+    resources: &ImageResources<'_>,
     image: &crate::css::BackgroundImage,
     scale: f32,
     u: f32,
     v: f32,
     area: Rect,
-    invalid_elements: &HashSet<String>,
 ) -> Color32 {
+    let ImageResources {
+        context,
+        images,
+        invalid_elements,
+    } = *resources;
     match image.for_scale(scale) {
         crate::css::BackgroundImage::None | crate::css::BackgroundImage::ImageSet(_) => {
             Color32::TRANSPARENT
@@ -3599,16 +3635,7 @@ fn sample_image(
             let normalization = total.max(1.0);
             let mut premultiplied = [0.0; 4];
             for item in &cross_fade.items {
-                let color = sample_image(
-                    context,
-                    images,
-                    &item.image,
-                    scale,
-                    u,
-                    v,
-                    area,
-                    invalid_elements,
-                );
+                let color = sample_image(resources, &item.image, scale, u, v, area);
                 let color = color.to_array();
                 let weight = item.weight / normalization;
                 for channel in 0..3 {
@@ -3639,7 +3666,8 @@ fn sample_element_image(image: &ElementImage, u: f32, v: f32) -> Color32 {
     let point = pos2(u * image.size.x, v * image.size.y);
     let mut output = [0.0; 4];
     for mesh in &image.meshes {
-        for triangle in mesh.indices.chunks_exact(3) {
+        let (triangles, _) = mesh.indices.as_chunks::<3>();
+        for triangle in triangles {
             let vertices = [
                 &mesh.vertices[triangle[0] as usize],
                 &mesh.vertices[triangle[1] as usize],
@@ -5478,13 +5506,11 @@ fn apply_first_letter_inline_spacing(
         .find(|section| section.byte_range.start.0 == range.start)
     {
         section.leading_space += start_spacing;
-        if writing.vertical() {
-            if block_extent > 0.0 {
-                let line_height = section.format.line_height.unwrap_or_else(|| {
-                    context.fonts_mut(|fonts| fonts.row_height(&section.format.font_id))
-                });
-                section.format.line_height = Some(line_height + block_extent);
-            }
+        if writing.vertical() && block_extent > 0.0 {
+            let line_height = section.format.line_height.unwrap_or_else(|| {
+                context.fonts_mut(|fonts| fonts.row_height(&section.format.font_id))
+            });
+            section.format.line_height = Some(line_height + block_extent);
         }
     }
     let mut trailing = 0.0;
@@ -5691,17 +5717,28 @@ fn inline_slice_offsets(surfaces: &[Rect], vertical: bool, forward: bool) -> Vec
         .collect()
 }
 
-fn fragment_shadow_clip(
-    surface: Rect,
-    mut clip: Rect,
+#[derive(Clone, Copy)]
+struct FragmentPosition {
     vertical: bool,
     forward: bool,
     index: usize,
     count: usize,
+}
+
+fn fragment_shadow_clip(
+    surface: Rect,
+    mut clip: Rect,
+    fragment: FragmentPosition,
     position: crate::box_decoration::ShadowPosition,
     inset_extent: f32,
     stroke: egui::epaint::MarginF32,
 ) -> Option<Rect> {
+    let FragmentPosition {
+        vertical,
+        forward,
+        index,
+        count,
+    } = fragment;
     let axis = usize::from(vertical);
     let (start_stroke, end_stroke) = if vertical {
         (stroke.top, stroke.bottom)
@@ -5804,13 +5841,15 @@ fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
             (crate::css::BackgroundClip::Padding, 0.0)
         };
         let (paths, fill_rule) = border_shape.overflow_paths(
-            paint.geometry.border,
             clip,
-            paint.geometry.stroke,
-            paint.geometry.padding,
-            paint.geometry.margin,
-            widths,
-            outset,
+            crate::box_decoration::OverflowGeometry {
+                border: paint.geometry.border,
+                stroke: paint.geometry.stroke,
+                padding: paint.geometry.padding,
+                margin: paint.geometry.margin,
+                widths,
+                outset,
+            },
         );
         return Some(crate::box_decoration::path_clip(paths, fill_rule));
     }
@@ -5941,26 +5980,20 @@ fn clip_painted_entry(
 
 fn box_surface_shape(
     rect: Rect,
-    border: Rect,
-    style: &BoxStyle,
-    stroke: egui::epaint::MarginF32,
-    padding: egui::epaint::MarginF32,
-    margin: egui::epaint::MarginF32,
+    geometry: &BoxDecorationGeometry<'_>,
     clip: crate::css::BackgroundClip,
     fill: Color32,
     fallback_radius: egui::CornerRadius,
 ) -> egui::Shape {
+    let BoxDecorationGeometry {
+        border,
+        style,
+        stroke,
+        padding,
+        margin,
+        widths,
+    } = *geometry;
     if let Some(border_shape) = &style.decorations.border_shape {
-        let border_widths = style
-            .layout
-            .border
-            .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-        let widths = [
-            border_widths.top,
-            border_widths.right,
-            border_widths.bottom,
-            border_widths.left,
-        ];
         let (paths, fill_rule) =
             border_shape.background_paths(border, clip, stroke, padding, margin, widths);
         return if paths.len() == 1 && border_shape.background_is_convex(clip) {
@@ -6174,11 +6207,13 @@ fn border_image_shapes(
                 }
             })
         }
-        crate::box_decoration::ImageWidth::Length(value) => value.resolve(if side % 2 == 0 {
-            area.height()
-        } else {
-            area.width()
-        }),
+        crate::box_decoration::ImageWidth::Length(value) => {
+            value.resolve(if side.is_multiple_of(2) {
+                area.height()
+            } else {
+                area.width()
+            })
+        }
     };
     let mut draw_widths = [width_for(0), width_for(1), width_for(2), width_for(3)];
     let factor = (area.width() / (draw_widths[1] + draw_widths[3]).max(0.001))
@@ -7042,16 +7077,28 @@ fn text_runs(
     }
     (runs, minimum)
 }
-fn replace_fragmented_text(
-    context: &Context,
+struct FragmentedTextInput<'a> {
+    context: &'a Context,
     layer: egui::LayerId,
     start: egui::layers::ShapeIdx,
     end: egui::layers::ShapeIdx,
-    geometry: &Geometry,
-    job: &egui::text::LayoutJob,
-    format: &crate::formatting::Formatting,
-    selection_visuals: &egui::Visuals,
-) {
+    geometry: &'a Geometry,
+    job: &'a egui::text::LayoutJob,
+    format: &'a crate::formatting::Formatting,
+    selection_visuals: &'a egui::Visuals,
+}
+
+fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
+    let FragmentedTextInput {
+        context,
+        layer,
+        start,
+        end,
+        geometry,
+        job,
+        format,
+        selection_visuals,
+    } = input;
     let original = context.graphics(|layers| {
         layers
             .get(layer)?
@@ -7071,9 +7118,11 @@ fn replace_fragmented_text(
     };
     let selection_color = selection_visuals.selection.bg_fill;
     let selection_by_range = template.galley.job.text == job.text;
-    let selected_ranges = selection_by_range
-        .then(|| galley_selection_ranges(&template.galley, selection_color))
-        .unwrap_or_default();
+    let selected_ranges = if selection_by_range {
+        galley_selection_ranges(&template.galley, selection_color)
+    } else {
+        Default::default()
+    };
     let selection_rects = galley_selection_rects(&template.galley, template.pos, selection_color);
     context.graphics_mut(|layers| {
         let list = layers.entry(layer);
