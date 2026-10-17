@@ -41,8 +41,6 @@
   border: 1px solid #294a78;
   border-radius: 12px;
   background: linear-gradient(120deg, #173760, #345ca4);
-  background-attachment: scroll;
-  background-clip: padding-box;
 }
 
 .eyebrow,

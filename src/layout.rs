@@ -6737,20 +6737,30 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
         outer_radii[3] - vec2(widths.left, widths.bottom),
     ]
     .map(|radius| radius.max(Vec2::ZERO));
-    let corners =
-        crate::box_decoration::rounded_path(rect, outer_radii, style.decorations.corner_shapes);
-    let inside =
-        crate::box_decoration::rounded_path(inner, inner_radii, style.decorations.corner_shapes);
+    let corner_segments = crate::box_decoration::rounded_corner_segments(outer_radii);
+    let corners = crate::box_decoration::rounded_path_with_segments(
+        rect,
+        outer_radii,
+        style.decorations.corner_shapes,
+        corner_segments,
+    );
+    let inside = crate::box_decoration::rounded_path_with_segments(
+        inner,
+        inner_radii,
+        style.decorations.corner_shapes,
+        corner_segments,
+    );
     let mut shapes = Vec::new();
     let mut side_distance = [0.0_f32; 4];
     let mut side_lengths = [0.0_f32; 4];
     let border_widths = [widths.top, widths.right, widths.bottom, widths.left];
     let mut segments = Vec::new();
+    let points_per_corner = corner_segments + 1;
     for index in 0..corners.len() {
-        let corner = index / 9;
-        let within = index % 9;
+        let corner = index / points_per_corner;
+        let within = index % points_per_corner;
         let [first_side, second_side] = [[3, 0], [0, 1], [1, 2], [2, 3]][corner];
-        if within == 8 {
+        if within == corner_segments {
             segments.push((index, second_side, 0.0, 1.0));
             continue;
         }
@@ -6760,15 +6770,25 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
         } else {
             0.5
         };
-        let parameter_start = within as f32 / 8.0;
-        let parameter_end = (within + 1) as f32 / 8.0;
+        let parameter_start = within as f32 / corner_segments as f32;
+        let parameter_end = (within + 1) as f32 / corner_segments as f32;
         if split > parameter_start {
             let end = split.min(parameter_end);
-            segments.push((index, first_side, 0.0, (end - parameter_start) * 8.0));
+            segments.push((
+                index,
+                first_side,
+                0.0,
+                (end - parameter_start) * corner_segments as f32,
+            ));
         }
         if split < parameter_end {
             let start = split.max(parameter_start);
-            segments.push((index, second_side, (start - parameter_start) * 8.0, 1.0));
+            segments.push((
+                index,
+                second_side,
+                (start - parameter_start) * corner_segments as f32,
+                1.0,
+            ));
         }
     }
     for (index, side, from, to) in &segments {
@@ -6777,7 +6797,7 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
     }
     for (index, side, part_start, part_end) in segments {
         let next = (index + 1) % corners.len();
-        let within = index % 9;
+        let within = index % points_per_corner;
         let width = [widths.top, widths.right, widths.bottom, widths.left][side];
         let distance = corners[index].distance(corners[next]);
         let segment_distance = distance * (part_end - part_start);
@@ -6793,7 +6813,7 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
         {
             continue;
         }
-        let in_corner = within != 8;
+        let in_corner = within != corner_segments;
         let percentage_basis = if side % 2 == 0 {
             rect.width()
         } else {

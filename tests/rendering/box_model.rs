@@ -2,6 +2,32 @@ use super::*;
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn rounded_border_corner_tracks_the_curve_without_faceting_test() {
+    let stylesheet = Stylesheet::parse(
+        ".round { box-sizing:border-box; width:48px; height:48px; border:1px solid black; border-radius:12px; background:white; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_at_scale(stylesheet, 4.0, move |ui| {
+        ui.add_space(4.0);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".round")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    // At 4×, this point is inside the ideal arc's antialias fringe but outside coarse chords.
+    let diagonal = 12.0 * (1.0 - std::f32::consts::FRAC_1_SQRT_2) * 4.0;
+    let sample_x = (rect.left() * 4.0 + diagonal).floor() as usize - 1;
+    let sample_y = (rect.top() * 4.0 + diagonal).floor() as usize;
+    let sample = pixels[sample_y * WIDTH as usize + sample_x];
+    assert!(
+        sample[0] <= 160,
+        "the corner edge is too far inside its ideal curve: {sample:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn content_and_border_box_sizes_include_the_correct_edges_test() {
     let stylesheet = Stylesheet::parse(
         ".content { width: 60px; height: 20px; padding: 5px 10px; border: 2px solid #00f; background-color: #f00; }\

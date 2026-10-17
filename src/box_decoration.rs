@@ -3,6 +3,10 @@ use egui::{Color32, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 
 use crate::layout_style::{BoxStyle, Units};
 
+const MIN_ROUNDED_CORNER_SEGMENTS: usize = 8;
+const MAX_ROUNDED_CORNER_SEGMENTS: usize = 128;
+const MAX_ROUNDED_CORNER_ERROR: f32 = 0.02;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LengthPercentage {
     Length(f32),
@@ -2518,8 +2522,34 @@ pub(crate) fn intersect_intervals(left: &[(f32, f32)], right: &[(f32, f32)]) -> 
     result
 }
 
+pub(crate) fn rounded_corner_segments(radii: [Vec2; 4]) -> usize {
+    let radius = radii
+        .iter()
+        .map(|radius| radius.max_elem())
+        .fold(0.0_f32, f32::max);
+    if !radius.is_finite() {
+        return MAX_ROUNDED_CORNER_SEGMENTS;
+    }
+    if radius <= MAX_ROUNDED_CORNER_ERROR {
+        return MIN_ROUNDED_CORNER_SEGMENTS;
+    }
+    // Bound the circular chord sagitta: r * (1 - cos(pi / (4n))) <= error.
+    let half_angle = (1.0 - MAX_ROUNDED_CORNER_ERROR / radius).acos();
+    let segments = (std::f32::consts::FRAC_PI_2 / (2.0 * half_angle)).ceil() as usize;
+    segments.clamp(MIN_ROUNDED_CORNER_SEGMENTS, MAX_ROUNDED_CORNER_SEGMENTS)
+}
+
 pub(crate) fn rounded_path(rect: Rect, radii: [Vec2; 4], shapes: [CornerShape; 4]) -> Vec<Pos2> {
-    let mut points = Vec::with_capacity(40);
+    rounded_path_with_segments(rect, radii, shapes, rounded_corner_segments(radii))
+}
+
+pub(crate) fn rounded_path_with_segments(
+    rect: Rect,
+    radii: [Vec2; 4],
+    shapes: [CornerShape; 4],
+    segments: usize,
+) -> Vec<Pos2> {
+    let mut points = Vec::with_capacity((segments + 1) * 4);
     for corner in 0..4 {
         let radius = radii[corner];
         if radius.x <= 0.0 || radius.y <= 0.0 {
@@ -2529,11 +2559,11 @@ pub(crate) fn rounded_path(rect: Rect, radii: [Vec2; 4], shapes: [CornerShape; 4
                 2 => pos2(rect.right(), rect.bottom()),
                 _ => pos2(rect.left(), rect.bottom()),
             };
-            points.extend(std::iter::repeat_n(point, 9));
+            points.extend(std::iter::repeat_n(point, segments + 1));
             continue;
         }
-        for step in 0..=8 {
-            let t = step as f32 / 8.0;
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
             let k = shapes[corner].parameter();
             let (mut x, mut y) = if k == 0.0 {
                 (t, 1.0 - t)
