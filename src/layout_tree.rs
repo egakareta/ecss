@@ -40,6 +40,7 @@ pub(crate) struct Node {
     pub atomic: bool,
     pub edges: [crate::formatting::CollapsedBorder; 4],
     pub collapsed: Option<[crate::formatting::CollapsedBorder; 4]>,
+    pub collapsed_segments: Vec<crate::formatting::CollapsedBorderSegment>,
     pub parent_style: Style,
     pub visibility_collapsed: bool,
     pub intrinsic_min: Size<Option<crate::layout_style::IntrinsicSizing>>,
@@ -131,6 +132,7 @@ impl<'a> Tree<'a> {
             atomic: false,
             edges: Default::default(),
             collapsed: None,
+            collapsed_segments: Vec::new(),
             cache: Cache::new(),
             hoisted: Vec::new(),
         });
@@ -411,11 +413,11 @@ impl<'a> Tree<'a> {
             let mode = self.nodes[index].format.writing;
             if mode.vertical() {
                 self.nodes[index].style = transpose_style(&self.nodes[index].style, mode, false);
-                let e = self.nodes[index].edges;
+                let e = self.nodes[index].edges.clone();
                 self.nodes[index].edges = if mode.reverse() {
-                    [e[1], e[2], e[3], e[0]]
+                    [e[1].clone(), e[2].clone(), e[3].clone(), e[0].clone()]
                 } else {
-                    [e[3], e[2], e[1], e[0]]
+                    [e[3].clone(), e[2].clone(), e[1].clone(), e[0].clone()]
                 };
             }
             self.nodes[index].axes_prepared = true;

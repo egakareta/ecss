@@ -127,6 +127,23 @@ impl Expression {
             _ => false,
         }
     }
+    fn percentage_only(&self) -> bool {
+        match &self.value {
+            Value::Percentage(_) => true,
+            Value::Binary(operator, left, right) => match operator {
+                '+' | '-' => left.percentage_only() && right.percentage_only(),
+                '*' => {
+                    left.percentage_only() && right.kind == Kind::Number
+                        || right.percentage_only() && left.kind == Kind::Number
+                }
+                '/' => left.percentage_only() && right.kind == Kind::Number,
+                _ => false,
+            },
+            Value::Function(_, arguments) => arguments.iter().all(Self::percentage_only),
+            Value::Clamp(value) => value.percentage_only(),
+            _ => false,
+        }
+    }
 }
 
 impl Arena {
@@ -291,6 +308,37 @@ pub(crate) fn number(value: &str, units: Units<'_>) -> Result<Option<f32>, &'sta
         return Err("CSS number math must produce a number");
     }
     Ok(Some(result.evaluate(0.0)))
+}
+
+pub(crate) fn percentage(
+    value: &str,
+    units: Units<'_>,
+    negative: bool,
+) -> Result<Option<*const ()>, &'static str> {
+    if !value.contains('(') {
+        return Ok(None);
+    }
+    let mut parser = Parser::new(value);
+    let mut result = sum(&mut parser, units).map_err(|_| "invalid CSS percentage expression")?;
+    parser
+        .expect_exhausted()
+        .map_err(|_| "unexpected CSS percentage input")?;
+    if result.kind != Kind::Length || !result.percentage_only() {
+        return Ok(None);
+    }
+    if !negative {
+        result = Expression {
+            kind: Kind::Length,
+            value: Value::Clamp(Box::new(result)),
+        };
+    }
+    let key = NEXT
+        .fetch_add(1, Ordering::Relaxed)
+        .checked_mul(8)
+        .expect("CSS expression handle overflow");
+    VALUES.with(|values| values.borrow_mut().insert(key, result));
+    units.math.0.borrow_mut().push(key);
+    Ok(Some(key as *const ()))
 }
 
 type ResultExpr = Result<Expression, ParseError<&'static str>>;

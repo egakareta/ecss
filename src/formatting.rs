@@ -1,20 +1,44 @@
 use crate::layout_style::{BoxStyle, Units};
 use cssparser::{Parser, Token};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CollapsedStripeThickness {
+    Length(f32),
+    Flex(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CollapsedBorderStripe {
+    pub color: Color32,
+    pub thickness: CollapsedStripeThickness,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CollapsedBorder {
     pub width: f32,
     pub color: Color32,
     pub style: crate::layout_style::BorderStyle,
+    pub stripes: Option<Arc<[CollapsedBorderStripe]>>,
+    pub source_side: usize,
     pub draw: bool,
     pub priority: u8,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CollapsedBorderSegment {
+    pub rect: egui::Rect,
+    pub edges: [CollapsedBorder; 4],
+}
+
 impl Default for CollapsedBorder {
     fn default() -> Self {
         Self {
             width: 0.0,
             color: Color32::BLACK,
             style: Default::default(),
+            stripes: None,
+            source_side: 0,
             draw: false,
             priority: 0,
         }

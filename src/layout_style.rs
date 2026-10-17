@@ -120,6 +120,7 @@ pub(crate) struct Units<'a> {
     pub font: f32,
     pub root_font: f32,
     pub viewport: Vec2,
+    pub pixels_per_point: f32,
 }
 
 pub(crate) fn parse(
@@ -149,6 +150,7 @@ pub(crate) fn parse(
                 font: 16.0,
                 root_font: 16.0,
                 viewport: Vec2::splat(1000.0),
+                pixels_per_point: 1.0,
             },
         )?;
     }
@@ -488,12 +490,14 @@ impl Declaration {
                                 "inline-start",
                                 output.layout.direction,
                                 output.format.writing,
+                                &output.format.text_orientation,
                             )
                             .unwrap(),
                             logical_side(
                                 "inline-end",
                                 output.layout.direction,
                                 output.format.writing,
+                                &output.format.text_orientation,
                             )
                             .unwrap(),
                         ]
@@ -503,12 +507,14 @@ impl Declaration {
                                 "block-start",
                                 output.layout.direction,
                                 output.format.writing,
+                                &output.format.text_orientation,
                             )
                             .unwrap(),
                             logical_side(
                                 "block-end",
                                 output.layout.direction,
                                 output.format.writing,
+                                &output.format.text_orientation,
                             )
                             .unwrap(),
                         ]
@@ -525,16 +531,25 @@ impl Declaration {
                     set_edge(
                         output,
                         group,
-                        logical_side(suffix, output.layout.direction, output.format.writing)
-                            .ok_or("invalid side")?,
+                        logical_side(
+                            suffix,
+                            output.layout.direction,
+                            output.format.writing,
+                            &output.format.text_orientation,
+                        )
+                        .ok_or("invalid side")?,
                         value,
                         units,
                     )?;
                 }
             }
             _ if name.starts_with("border-inline") || name.starts_with("border-block") => {
-                let physical =
-                    physical_borders(name, output.layout.direction, output.format.writing);
+                let physical = physical_borders(
+                    name,
+                    output.layout.direction,
+                    output.format.writing,
+                    &output.format.text_orientation,
+                );
                 let pair = physical.len() == 2
                     && matches!(name.rsplit('-').next(), Some("width" | "style" | "color"));
                 if pair && (parts.is_empty() || parts.len() > 2) {
@@ -608,12 +623,14 @@ impl Declaration {
                     },
                     s.direction,
                     output.format.writing,
+                    &output.format.text_orientation,
                 )
                 .unwrap();
                 let end = logical_side(
                     if inline { "inline-end" } else { "block-end" },
                     s.direction,
                     output.format.writing,
+                    &output.format.text_orientation,
                 )
                 .unwrap();
                 output.overflow_clip_margin[start] = clip_margin_length(&parts[0], units)?;
@@ -622,9 +639,14 @@ impl Declaration {
             }
             _ if name.starts_with("overflow-clip-margin-") => {
                 let side_name = name.trim_start_matches("overflow-clip-margin-");
-                let edge = logical_side(side_name, s.direction, output.format.writing)
-                    .or_else(|| side(side_name))
-                    .ok_or("invalid overflow-clip-margin side")?;
+                let edge = logical_side(
+                    side_name,
+                    s.direction,
+                    output.format.writing,
+                    &output.format.text_orientation,
+                )
+                .or_else(|| side(side_name))
+                .ok_or("invalid overflow-clip-margin side")?;
                 output.overflow_clip_margin[edge] = clip_margin_length(value, units)?;
             }
             "visibility" => match value {
@@ -854,13 +876,22 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     }
     if let Some(side_name) = name.strip_prefix("overflow-clip-margin-") {
         let copy_side = |side_name: &str, out: &mut BoxStyle, source: &BoxStyle| {
-            let target = logical_side(side_name, out.layout.direction, out.format.writing)
-                .or_else(|| side(side_name))
-                .unwrap();
-            let source_edge =
-                logical_side(side_name, source.layout.direction, source.format.writing)
-                    .or_else(|| side(side_name))
-                    .unwrap();
+            let target = logical_side(
+                side_name,
+                out.layout.direction,
+                out.format.writing,
+                &out.format.text_orientation,
+            )
+            .or_else(|| side(side_name))
+            .unwrap();
+            let source_edge = logical_side(
+                side_name,
+                source.layout.direction,
+                source.format.writing,
+                &source.format.text_orientation,
+            )
+            .or_else(|| side(side_name))
+            .unwrap();
             out.overflow_clip_margin[target] = source.overflow_clip_margin[source_edge];
         };
         match side_name {
@@ -920,8 +951,20 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
             _ => vec![logical],
         };
         for side in sides {
-            let to = logical_side(side, out.layout.direction, out.format.writing).unwrap();
-            let from = logical_side(side, source.layout.direction, source.format.writing).unwrap();
+            let to = logical_side(
+                side,
+                out.layout.direction,
+                out.format.writing,
+                &out.format.text_orientation,
+            )
+            .unwrap();
+            let from = logical_side(
+                side,
+                source.layout.direction,
+                source.format.writing,
+                &source.format.text_orientation,
+            )
+            .unwrap();
             match group {
                 "margin" => {
                     *edge_mut(&mut out.layout.margin, to) =
@@ -942,7 +985,12 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     }
 
     if name.starts_with("border-inline") || name.starts_with("border-block") {
-        for physical in physical_borders(name, out.layout.direction, out.format.writing) {
+        for physical in physical_borders(
+            name,
+            out.layout.direction,
+            out.format.writing,
+            &out.format.text_orientation,
+        ) {
             copy_property(&physical, out, source);
         }
         return;
@@ -1134,7 +1182,14 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
                     "" => true,
                     "inline" => i == 1 || i == 3,
                     "block" => i == 0 || i == 2,
-                    _ => logical_side(suffix, to.direction, out.format.writing) == Some(i),
+                    _ => {
+                        logical_side(
+                            suffix,
+                            to.direction,
+                            out.format.writing,
+                            &out.format.text_orientation,
+                        ) == Some(i)
+                    }
                 };
                 if !included {
                     continue;
@@ -1629,7 +1684,7 @@ fn placement_pair(value: &str) -> Result<taffy::Line<GridPlacement<String>>, &'s
 }
 
 pub(crate) fn border_style(value: &str) -> Result<BorderStyle, &'static str> {
-    Ok(match value {
+    Ok(match value.to_ascii_lowercase().as_str() {
         "none" => BorderStyle::None,
         "hidden" => BorderStyle::Hidden,
         "solid" => BorderStyle::Solid,
@@ -1647,7 +1702,8 @@ pub(crate) fn border_width(value: &str, units: Units) -> Result<f32, &'static st
     if let Some(handle) = crate::math::length(value, units, false, false)? {
         return Ok(crate::math::resolve(handle, 0.0));
     }
-    match value {
+    match value.to_ascii_lowercase().as_str() {
+        "hairline" => Ok(1.0 / units.pixels_per_point.max(f32::MIN_POSITIVE)),
         "thin" => Ok(1.0),
         "medium" => Ok(3.0),
         "thick" => Ok(5.0),
@@ -1662,7 +1718,7 @@ pub(crate) fn border_width(value: &str, units: Units) -> Result<f32, &'static st
     }
 }
 pub(crate) fn border_color(value: &str) -> Result<Option<Color32>, &'static str> {
-    if value == "currentcolor" || value == "currentColor" {
+    if value.eq_ignore_ascii_case("currentcolor") {
         return Ok(None);
     }
     crate::css::parse_color(&mut Parser::new(value))
@@ -2083,7 +2139,13 @@ pub(crate) fn logical_side(
     value: &str,
     direction: taffy::Direction,
     writing: crate::formatting::Writing,
+    text_orientation: &str,
 ) -> Option<usize> {
+    let direction = if writing.vertical() && text_orientation.eq_ignore_ascii_case("upright") {
+        taffy::Direction::Ltr
+    } else {
+        direction
+    };
     if writing.vertical() {
         return match value {
             "inline-start" => Some(if direction == taffy::Direction::Rtl {
@@ -2115,6 +2177,7 @@ fn physical_borders(
     name: &str,
     direction: taffy::Direction,
     writing: crate::formatting::Writing,
+    text_orientation: &str,
 ) -> Vec<String> {
     let parts: Vec<_> = name.split('-').skip(1).collect();
     let inline = parts[0] == "inline";
@@ -2126,8 +2189,8 @@ fn physical_borders(
     };
     let end = if inline { "inline-end" } else { "block-end" };
     let edges = [
-        names[logical_side(start, direction, writing).unwrap()],
-        names[logical_side(end, direction, writing).unwrap()],
+        names[logical_side(start, direction, writing, text_orientation).unwrap()],
+        names[logical_side(end, direction, writing, text_orientation).unwrap()],
     ];
     let (indices, suffix): (&[usize], &[&str]) = match parts.get(1) {
         Some(&"start") => (&[0], &parts[2..]),

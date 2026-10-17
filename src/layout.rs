@@ -1,12 +1,14 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use egui::{Color32, Context, Id, Pos2, Rect, Response, Ui, Vec2, Widget, pos2, vec2};
 use taffy::{Overflow, prelude::*};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 use crate::{
     Stylesheet,
@@ -16,6 +18,8 @@ use crate::{
 
 const ACTIVE: &str = "ecss.layout.active";
 const LABEL_SELECTION_PRESS: &str = "ecss.text_selection.press";
+const ELEMENT_IMAGES: &str = "ecss.element-images";
+const ELEMENT_OCCURRENCES: &str = "ecss.element-occurrences";
 
 #[derive(Clone, Debug, PartialEq)]
 struct Geometry {
@@ -30,6 +34,7 @@ struct Geometry {
     rules: Vec<egui::Rect>,
     text_vertical: bool,
     collapsed: Option<[crate::formatting::CollapsedBorder; 4]>,
+    collapsed_segments: Vec<crate::formatting::CollapsedBorderSegment>,
 }
 
 impl Geometry {
@@ -39,6 +44,14 @@ impl Geometry {
     fn translated(&self, offset: Vec2) -> Self {
         Self {
             border: self.border.translate(offset),
+            collapsed_segments: self
+                .collapsed_segments
+                .iter()
+                .map(|segment| crate::formatting::CollapsedBorderSegment {
+                    rect: segment.rect.translate(offset),
+                    edges: segment.edges.clone(),
+                })
+                .collect(),
             ..self.clone()
         }
     }
@@ -52,6 +65,9 @@ struct Cache {
 
 struct Node {
     id: Id,
+    element_id: Option<String>,
+    element_first_occurrence: bool,
+    element_references: HashSet<String>,
     style: BoxStyle,
     children: Vec<usize>,
     parent: Option<usize>,
@@ -75,6 +91,8 @@ struct PaintRecord {
     scrollbars: Vec<Response>,
     geometry: Geometry,
     clip: Rect,
+    fragment_border_images: Vec<Option<Vec<egui::Shape>>>,
+    fragment_background_shapes: Vec<Vec<egui::Shape>>,
 }
 
 struct TextMeasurement {
@@ -123,6 +141,10 @@ pub(crate) fn show(
     stylesheet: &Stylesheet,
     class: &str,
 ) -> Response {
+    let element_id = class.strip_prefix("@id:").map(str::to_owned);
+    let first_element_occurrence = element_id
+        .as_deref()
+        .is_none_or(|element_id| first_element_occurrence(ui.ctx(), element_id));
     let id = ui.next_auto_id().with("ecss.layout");
     ui.skip_ahead_auto_ids(1);
     let active = ui.ctx().data(|d| d.get_temp::<u64>(Id::new(ACTIVE)));
@@ -197,6 +219,7 @@ pub(crate) fn show(
         font: base_font_size,
         root_font: 16.0,
         viewport: ui.ctx().viewport_rect().size(),
+        pixels_per_point: ui.ctx().pixels_per_point(),
     };
     for rule in matching_rules(stylesheet, class).filter(|r| {
         r.state == RuleState::Base
@@ -222,7 +245,10 @@ pub(crate) fn show(
     }) {
         for declaration in &rule.declarations {
             if let Declaration::Layout(declaration) = declaration
-                && matches!(declaration.name.as_str(), "direction" | "writing-mode")
+                && matches!(
+                    declaration.name.as_str(),
+                    "direction" | "writing-mode" | "text-orientation"
+                )
             {
                 declaration
                     .apply_with_parent(&mut style, &parent_style, units)
@@ -278,6 +304,9 @@ pub(crate) fn show(
         }
         frame.nodes.push(Node {
             id,
+            element_id: element_id.clone(),
+            element_first_occurrence: first_element_occurrence,
+            element_references: HashSet::new(),
             style: style.clone(),
             children: Vec::new(),
             parent,
@@ -442,7 +471,6 @@ pub(crate) fn show(
     }
     {
         let mut frame = active.0.borrow_mut();
-        frame.nodes[index].measured = measured;
         frame.nodes[index].color = content_ui
             .visuals()
             .widgets
@@ -450,8 +478,115 @@ pub(crate) fn show(
             .fg_stroke
             .color;
         if frame.nodes[index].children.is_empty() {
-            frame.nodes[index].text =
-                measure_text(ui.ctx(), layer, start, end, measured, &style.format);
+            let color = frame.nodes[index].color;
+            let mut text = measure_text(ui.ctx(), layer, start, end, measured, &style.format);
+            if let Some(text) = &mut text
+                && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+                    stylesheet,
+                    class,
+                    crate::css::PseudoElementKind::FirstLetter,
+                    state,
+                    &style,
+                    units,
+                    color,
+                )
+            {
+                if let Some((trailing, inline_extent)) = apply_first_letter_inline_spacing(
+                    ui.ctx(),
+                    &mut text.job,
+                    &pseudo_style,
+                    geometry.content().width(),
+                    style.format.writing,
+                    style.layout.direction,
+                ) {
+                    text.extra.x += trailing;
+                    text.minimum = minimum_text_width(ui.ctx(), &text.job);
+                    let measured_text = ui
+                        .ctx()
+                        .fonts_mut(|fonts| fonts.layout_job(text.job.clone()).size())
+                        + text.extra;
+                    let expected_width = (measured.x + inline_extent).max(0.0);
+                    frame.nodes[index].measured = vec2(
+                        if inline_extent >= 0.0 {
+                            measured_text.x.max(expected_width)
+                        } else {
+                            measured_text.x.min(expected_width)
+                        },
+                        measured_text.y,
+                    );
+                } else {
+                    frame.nodes[index].measured = measured;
+                }
+            } else {
+                frame.nodes[index].measured = measured;
+            }
+            frame.nodes[index].text = text;
+        } else {
+            frame.nodes[index].measured = measured;
+        }
+    }
+    let descendant_text_color = {
+        let frame = active.0.borrow();
+        (!frame.nodes[index].children.is_empty()).then_some(frame.nodes[index].color)
+    };
+    if let Some(color) = descendant_text_color
+        && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+            stylesheet,
+            class,
+            crate::css::PseudoElementKind::FirstLetter,
+            state,
+            &style,
+            units,
+            color,
+        )
+    {
+        let update = {
+            let mut frame = active.0.borrow_mut();
+            let target = first_text_descendant(&frame, index);
+            target.and_then(|target| {
+                let node = &mut frame.nodes[target];
+                let text = node.text.as_mut()?;
+                let (trailing, inline_extent) = apply_first_letter_inline_spacing(
+                    ui.ctx(),
+                    &mut text.job,
+                    &pseudo_style,
+                    geometry.content().width(),
+                    style.format.writing,
+                    style.layout.direction,
+                )?;
+                text.extra.x += trailing;
+                text.minimum = minimum_text_width(ui.ctx(), &text.job);
+                let measured = ui
+                    .ctx()
+                    .fonts_mut(|fonts| fonts.layout_job(text.job.clone()).size())
+                    + text.extra;
+                let expected_width = (node.measured.x + inline_extent).max(0.0);
+                node.measured = vec2(
+                    if inline_extent >= 0.0 {
+                        measured.x.max(expected_width)
+                    } else {
+                        measured.x.min(expected_width)
+                    },
+                    measured.y,
+                );
+                let paint = node.paint.as_ref()?;
+                Some((
+                    paint.ui.layer_id(),
+                    paint.start,
+                    paint.end,
+                    text.job.clone(),
+                ))
+            })
+        };
+        if let Some((layer, start, end, job)) = update {
+            reflow_text(
+                ui.ctx(),
+                layer,
+                start,
+                end,
+                &job,
+                content_ui.visuals().selection.bg_fill,
+            );
         }
     }
     let content_size = active.0.borrow().nodes[index]
@@ -578,6 +713,11 @@ pub(crate) fn show(
         }
         geometry
     };
+    let mut decoration_style = style.clone();
+    if final_geometry.collapsed.is_some() {
+        decoration_style.decorations.radii = [crate::box_decoration::CornerRadius::default(); 4];
+        decoration_style.decorations.corner_shapes = [crate::box_decoration::CornerShape::Round; 4];
+    }
     let border = final_geometry.border;
     let visual = if final_geometry.slices.is_empty() {
         border
@@ -611,6 +751,8 @@ pub(crate) fn show(
         u8::from(response.hovered()) | (u8::from(response.is_pointer_button_down_on()) << 1);
     ui.ctx()
         .data_mut(|d| d.insert_temp(id.with("state"), current_state));
+    active.0.borrow_mut().nodes[index].element_references =
+        resolved_element_references(stylesheet, class, current_state);
     let interaction_layout_changed = [(1, RuleState::Hovered), (2, RuleState::Active)]
         .into_iter()
         .any(|(mask, rule_state)| {
@@ -629,6 +771,8 @@ pub(crate) fn show(
     }
     let overlay = shape_index(ui.ctx(), layer);
     let mut scrollbars = Vec::new();
+    let mut fragment_border_images = Vec::new();
+    let mut fragment_backgrounds = Vec::new();
     let empty_cell = style.format.display == crate::formatting::DisplayKind::Cell
         && style.format.hide_empty
         && !style.format.collapse
@@ -641,7 +785,9 @@ pub(crate) fn show(
             .widgets
             .state(response.widget_state());
         let background_style = resolved_background(stylesheet, class, current_state);
-        let corner_radius = if frame_stroke.is_some()
+        let corner_radius = if final_geometry.collapsed.is_some() {
+            egui::CornerRadius::ZERO
+        } else if frame_stroke.is_some()
             || matching_rules(stylesheet, class).any(|r| {
                 (r.state == RuleState::Base
                     || r.state == RuleState::Hovered && current_state & 1 != 0
@@ -657,6 +803,8 @@ pub(crate) fn show(
         };
         let fill = background_style.color;
         let last_background_layer = background_style.images.len().saturating_sub(1);
+        let blocked_element_ids =
+            invalid_element_references(ui.ctx(), stylesheet, index, &active.0.borrow());
         let color_clip = if background_style.clips.is_empty() {
             crate::css::BackgroundClip::Border
         } else {
@@ -741,12 +889,84 @@ pub(crate) fn show(
                     | crate::formatting::DisplayKind::ColumnGroup
             );
         let surface_count = surfaces.len();
+        let inline_slice_background =
+            inline_fragmented && !style.format.clone_decoration && surface_count > 1;
+        let inline_background_offsets = if inline_slice_background {
+            inline_slice_offsets(&surfaces, inline_vertical, inline_forward)
+        } else {
+            vec![Vec2::ZERO; surface_count]
+        };
+        let inline_slice_border_image = if inline_slice_background {
+            let composite = surfaces
+                .iter()
+                .zip(&inline_background_offsets)
+                .map(|(surface, offset)| surface.translate(*offset))
+                .fold(Rect::NOTHING, Rect::union);
+            border_image_shapes(
+                composite,
+                &style,
+                &stylesheet.background_images,
+                ui.ctx(),
+                &blocked_element_ids,
+            )
+        } else {
+            None
+        };
+        if style.format.clone_decoration && final_geometry.collapsed.is_none() {
+            fragment_border_images = final_geometry
+                .slices
+                .iter()
+                .map(|slice| {
+                    let source = slice.source.translate(border.min.to_vec2());
+                    border_image_shapes(
+                        source,
+                        &style,
+                        &stylesheet.background_images,
+                        ui.ctx(),
+                        &blocked_element_ids,
+                    )
+                    .map(|shapes| {
+                        clip_border_image_shapes(
+                            ui.ctx(),
+                            source,
+                            &style,
+                            final_geometry.stroke,
+                            final_geometry.padding,
+                            final_geometry.margin,
+                            shapes,
+                        )
+                    })
+                })
+                .collect();
+            fragment_backgrounds = final_geometry
+                .slices
+                .iter()
+                .map(|slice| {
+                    let source = slice.source.translate(border.min.to_vec2());
+                    fragment_background_shapes(
+                        ui.ctx(),
+                        &stylesheet.background_images,
+                        &background_style,
+                        &decoration_style,
+                        source,
+                        final_geometry.stroke,
+                        final_geometry.padding,
+                        final_geometry.margin,
+                        fill,
+                        color_clip,
+                        corner_radius,
+                        scroll,
+                        &blocked_element_ids,
+                    )
+                })
+                .collect();
+        }
         let mut shapes = Vec::new();
         if !suppress_outer_shadow && final_geometry.slices.is_empty() {
             for (surface_index, surface) in surfaces.iter().copied().enumerate() {
                 let shadow = crate::box_decoration::shadow_shapes(
                     if inline_fragmented { surface } else { border },
-                    &style,
+                    &decoration_style,
                     visuals.fg_stroke.color,
                     crate::box_decoration::ShadowPosition::Outset,
                     final_geometry.stroke,
@@ -771,7 +991,8 @@ pub(crate) fn show(
                 }
             }
         }
-        for (surface_index, surface) in surfaces.into_iter().enumerate() {
+        for (surface_index, surface) in surfaces.iter().copied().enumerate() {
+            let background_offset = inline_background_offsets[surface_index];
             let color_surface = match color_clip {
                 crate::css::BackgroundClip::Border => surface,
                 crate::css::BackgroundClip::Padding => surface - final_geometry.stroke,
@@ -782,7 +1003,7 @@ pub(crate) fn show(
             shapes.push(box_surface_shape(
                 color_surface,
                 border,
-                &style,
+                &decoration_style,
                 final_geometry.stroke,
                 final_geometry.padding,
                 final_geometry.margin,
@@ -811,6 +1032,31 @@ pub(crate) fn show(
                         surface - final_geometry.stroke - final_geometry.padding
                     }
                 };
+                let inline_layer_background_area = if inline_slice_background {
+                    surfaces
+                        .iter()
+                        .zip(&inline_background_offsets)
+                        .map(|(fragment, offset)| {
+                            let area = match layer_clip {
+                                crate::css::BackgroundClip::Border => *fragment,
+                                crate::css::BackgroundClip::Padding => {
+                                    *fragment - final_geometry.stroke
+                                }
+                                crate::css::BackgroundClip::Content => {
+                                    *fragment - final_geometry.stroke - final_geometry.padding
+                                }
+                            };
+                            area.translate(*offset)
+                        })
+                        .fold(Rect::NOTHING, Rect::union)
+                } else {
+                    background_surface
+                };
+                let background_sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_offset,
+                    crate::css::BackgroundAttachment::Local => background_offset - scroll,
+                    crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
                 let shape_clip = shape_clip_for(layer_clip);
                 let image_resolution =
                     layer_image.resolution_for_scale(ui.ctx().pixels_per_point());
@@ -820,7 +1066,7 @@ pub(crate) fn show(
                         box_surface_shape(
                             background_surface,
                             border,
-                            &style,
+                            &decoration_style,
                             final_geometry.stroke,
                             final_geometry.padding,
                             final_geometry.margin,
@@ -832,46 +1078,88 @@ pub(crate) fn show(
                     ));
                 }
                 if let crate::css::BackgroundImage::RadialGradient(gradient) = background_image {
-                    let paint_area = match attachment {
+                    let mut paint_area = match attachment {
                         crate::css::BackgroundAttachment::Scroll => background_surface,
                         crate::css::BackgroundAttachment::Local => {
                             background_surface.translate(-scroll)
                         }
                         crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
                     };
+                    if inline_slice_background
+                        && attachment != crate::css::BackgroundAttachment::Fixed
+                    {
+                        paint_area = inline_layer_background_area;
+                        if attachment == crate::css::BackgroundAttachment::Local {
+                            paint_area = paint_area.translate(-scroll);
+                        }
+                    }
                     shapes.push(clip_background_shape(
                         egui::Shape::Mesh(
-                            radial_gradient_mesh(background_surface, paint_area, gradient).into(),
+                            radial_gradient_mesh(
+                                background_surface,
+                                paint_area,
+                                background_sample_offset,
+                                gradient,
+                            )
+                            .into(),
                         ),
                         shape_clip.as_ref(),
                     ));
                 }
                 if let crate::css::BackgroundImage::LinearGradient(gradient) = background_image {
-                    let paint_area = match attachment {
+                    let mut paint_area = match attachment {
                         crate::css::BackgroundAttachment::Scroll => background_surface,
                         crate::css::BackgroundAttachment::Local => {
                             background_surface.translate(-scroll)
                         }
                         crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
                     };
+                    if inline_slice_background
+                        && attachment != crate::css::BackgroundAttachment::Fixed
+                    {
+                        paint_area = inline_layer_background_area;
+                        if attachment == crate::css::BackgroundAttachment::Local {
+                            paint_area = paint_area.translate(-scroll);
+                        }
+                    }
                     shapes.push(clip_background_shape(
                         egui::Shape::Mesh(
-                            linear_gradient_mesh(background_surface, paint_area, gradient).into(),
+                            linear_gradient_mesh(
+                                background_surface,
+                                paint_area,
+                                background_sample_offset,
+                                gradient,
+                            )
+                            .into(),
                         ),
                         shape_clip.as_ref(),
                     ));
                 }
                 if let crate::css::BackgroundImage::ConicGradient(gradient) = background_image {
-                    let paint_area = match attachment {
+                    let mut paint_area = match attachment {
                         crate::css::BackgroundAttachment::Scroll => background_surface,
                         crate::css::BackgroundAttachment::Local => {
                             background_surface.translate(-scroll)
                         }
                         crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
                     };
+                    if inline_slice_background
+                        && attachment != crate::css::BackgroundAttachment::Fixed
+                    {
+                        paint_area = inline_layer_background_area;
+                        if attachment == crate::css::BackgroundAttachment::Local {
+                            paint_area = paint_area.translate(-scroll);
+                        }
+                    }
                     shapes.push(clip_background_shape(
                         egui::Shape::Mesh(
-                            conic_gradient_mesh(background_surface, paint_area, gradient).into(),
+                            conic_gradient_mesh(
+                                background_surface,
+                                paint_area,
+                                background_sample_offset,
+                                gradient,
+                            )
+                            .into(),
                         ),
                         shape_clip.as_ref(),
                     ));
@@ -896,43 +1184,60 @@ pub(crate) fn show(
                         ui.ctx(),
                         &stylesheet.background_images,
                         background_image,
-                        background_surface.size(),
+                        if inline_slice_background {
+                            inline_layer_background_area.size()
+                        } else {
+                            background_surface.size()
+                        },
                         ui.ctx().pixels_per_point() / image_resolution,
+                        &blocked_element_ids,
                     )
                     .map(|(texture, size)| (texture, size / image_resolution)),
                     _ => None,
                 };
+                let element_source = match background_image {
+                    crate::css::BackgroundImage::Element(id)
+                        if !blocked_element_ids.contains(id) =>
+                    {
+                        element_image(ui.ctx(), id)
+                    }
+                    _ => None,
+                };
                 if let Some((texture, image_size)) = image_texture {
                     let viewport = ui.ctx().viewport_rect();
+                    let tile_surface = background_surface.translate(background_sample_offset);
                     let origin = match attachment {
+                        crate::css::BackgroundAttachment::Scroll if inline_slice_background => {
+                            inline_layer_background_area.min
+                        }
                         crate::css::BackgroundAttachment::Scroll => background_surface.min,
+                        crate::css::BackgroundAttachment::Local if inline_slice_background => {
+                            inline_layer_background_area.min - scroll
+                        }
                         crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
                         crate::css::BackgroundAttachment::Fixed => viewport.min,
                     };
-                    let min_x =
-                        ((background_surface.left() - origin.x) / image_size.x).floor() as i32;
-                    let max_x =
-                        ((background_surface.right() - origin.x) / image_size.x).ceil() as i32;
-                    let min_y =
-                        ((background_surface.top() - origin.y) / image_size.y).floor() as i32;
-                    let max_y =
-                        ((background_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
+                    let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
+                    let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
+                    let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
+                    let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
                     for y in min_y..max_y {
                         for x in min_x..max_x {
                             let tile = Rect::from_min_size(
                                 origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
                                 image_size,
                             );
-                            let visible = tile.intersect(background_surface);
-                            if visible.is_positive() {
+                            let visible_virtual = tile.intersect(tile_surface);
+                            if visible_virtual.is_positive() {
+                                let visible = visible_virtual.translate(-background_sample_offset);
                                 let uv = Rect::from_min_max(
                                     pos2(
-                                        (visible.left() - tile.left()) / tile.width(),
-                                        (visible.top() - tile.top()) / tile.height(),
+                                        (visible_virtual.left() - tile.left()) / tile.width(),
+                                        (visible_virtual.top() - tile.top()) / tile.height(),
                                     ),
                                     pos2(
-                                        (visible.right() - tile.left()) / tile.width(),
-                                        (visible.bottom() - tile.top()) / tile.height(),
+                                        (visible_virtual.right() - tile.left()) / tile.width(),
+                                        (visible_virtual.bottom() - tile.top()) / tile.height(),
                                     ),
                                 );
                                 shapes.push(clip_background_shape(
@@ -943,10 +1248,60 @@ pub(crate) fn show(
                         }
                     }
                 }
+                if let Some(element) = element_source {
+                    let image_size = element.size;
+                    let viewport = ui.ctx().viewport_rect();
+                    let tile_surface = background_surface.translate(background_sample_offset);
+                    let origin = match attachment {
+                        crate::css::BackgroundAttachment::Scroll if inline_slice_background => {
+                            inline_layer_background_area.min
+                        }
+                        crate::css::BackgroundAttachment::Scroll => background_surface.min,
+                        crate::css::BackgroundAttachment::Local if inline_slice_background => {
+                            inline_layer_background_area.min - scroll
+                        }
+                        crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
+                        crate::css::BackgroundAttachment::Fixed => viewport.min,
+                    };
+                    let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
+                    let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
+                    let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
+                    let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
+                    for y in min_y..max_y {
+                        for x in min_x..max_x {
+                            let tile = Rect::from_min_size(
+                                origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
+                                image_size,
+                            );
+                            let visible = tile.intersect(tile_surface);
+                            if !visible.is_positive() {
+                                continue;
+                            }
+                            let uv = Rect::from_min_max(
+                                pos2(
+                                    (visible.left() - tile.left()) / tile.width(),
+                                    (visible.top() - tile.top()) / tile.height(),
+                                ),
+                                pos2(
+                                    (visible.right() - tile.left()) / tile.width(),
+                                    (visible.bottom() - tile.top()) / tile.height(),
+                                ),
+                            );
+                            let source = Rect::from_min_max(
+                                pos2(uv.left() * image_size.x, uv.top() * image_size.y),
+                                pos2(uv.right() * image_size.x, uv.bottom() * image_size.y),
+                            );
+                            let destination = visible.translate(-background_sample_offset);
+                            for shape in element_slice_shapes(&element, source, destination) {
+                                shapes.push(clip_background_shape(shape, shape_clip.as_ref()));
+                            }
+                        }
+                    }
+                }
             }
             let inset_shadow = crate::box_decoration::shadow_shapes(
                 surface,
-                &style,
+                &decoration_style,
                 visuals.fg_stroke.color,
                 crate::box_decoration::ShadowPosition::Inset,
                 final_geometry.stroke,
@@ -978,37 +1333,15 @@ pub(crate) fn show(
                     egui::StrokeKind::Inside,
                 )));
             }
-            if let Some(edges) = final_geometry.collapsed {
-                let mut paint_style = style.clone();
-                let widths = edges.map(|edge| edge.width);
-                let surface = surface
-                    + egui::epaint::MarginF32 {
-                        top: widths[0] * 0.5,
-                        right: widths[1] * 0.5,
-                        bottom: widths[2] * 0.5,
-                        left: widths[3] * 0.5,
-                    };
-                paint_style.layout.border = taffy::Rect {
-                    top: length(widths[0]),
-                    right: length(widths[1]),
-                    bottom: length(widths[2]),
-                    left: length(widths[3]),
-                };
-                paint_style.border_colors = edges.map(|edge| Some(edge.color));
-                paint_style.border_styles = edges.map(|edge| {
-                    if edge.draw {
-                        edge.style
-                    } else {
-                        crate::layout_style::BorderStyle::None
-                    }
-                });
-                shapes.extend(border_shapes(
+            if let Some(edges) = final_geometry.collapsed.as_ref() {
+                shapes.extend(collapsed_border_shapes(
                     surface,
-                    &paint_style,
+                    &decoration_style,
+                    edges,
                     visuals.fg_stroke.color,
                 ));
             } else {
-                let mut fragment_style = style.clone();
+                let mut fragment_style = decoration_style.clone();
                 if style.format.display == crate::formatting::DisplayKind::Inline
                     && !style.format.clone_decoration
                 {
@@ -1026,37 +1359,49 @@ pub(crate) fn show(
                         fragment_style.border_styles[end] = BorderStyle::None;
                     }
                 }
-                if let Some(border_image) = border_image_shapes(
-                    surface,
-                    &fragment_style,
-                    &stylesheet.background_images,
-                    ui.ctx(),
-                ) {
-                    if let Some(border_shape) = &fragment_style.decorations.border_shape {
-                        let border_widths = fragment_style
-                            .layout
-                            .border
-                            .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-                        let (paths, fill_rule) = border_shape.background_paths(
-                            surface,
-                            crate::css::BackgroundClip::Border,
-                            final_geometry.stroke,
-                            final_geometry.padding,
-                            final_geometry.margin,
-                            [
-                                border_widths.top,
-                                border_widths.right,
-                                border_widths.bottom,
-                                border_widths.left,
-                            ],
-                        );
-                        let clip = crate::box_decoration::path_clip(paths, fill_rule);
-                        for shape in border_image {
-                            shapes.extend(clip_shape_to_paths(ui.ctx(), shape, &clip));
-                        }
-                    } else {
-                        shapes.extend(border_image);
-                    }
+                let border_image = if let Some(composite_shapes) = &inline_slice_border_image {
+                    let offset = inline_background_offsets[surface_index];
+                    let clip = surface.translate(offset) + border_image_outset(&style);
+                    let clip = crate::box_decoration::path_clip(
+                        vec![vec![
+                            clip.left_top(),
+                            clip.right_top(),
+                            clip.right_bottom(),
+                            clip.left_bottom(),
+                        ]],
+                        crate::box_decoration::FillRule::Nonzero,
+                    );
+                    Some(
+                        composite_shapes
+                            .iter()
+                            .cloned()
+                            .flat_map(|shape| clip_shape_to_paths(ui.ctx(), shape, &clip))
+                            .map(|mut shape| {
+                                shape
+                                    .transform(egui::emath::TSTransform::from_translation(-offset));
+                                shape
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    border_image_shapes(
+                        surface,
+                        &fragment_style,
+                        &stylesheet.background_images,
+                        ui.ctx(),
+                        &blocked_element_ids,
+                    )
+                };
+                if let Some(border_image) = border_image {
+                    shapes.extend(clip_border_image_shapes(
+                        ui.ctx(),
+                        surface,
+                        &fragment_style,
+                        final_geometry.stroke,
+                        final_geometry.padding,
+                        final_geometry.margin,
+                        border_image,
+                    ));
                 } else if let Some(border_shape) = border_shape_shapes(
                     surface,
                     &fragment_style,
@@ -1073,6 +1418,15 @@ pub(crate) fn show(
                         visuals.fg_stroke.color,
                     ));
                 }
+            }
+            let collapsed_segment_style = BoxStyle::default();
+            for segment in &final_geometry.collapsed_segments {
+                shapes.extend(collapsed_border_shapes(
+                    segment.rect,
+                    &collapsed_segment_style,
+                    &segment.edges,
+                    visuals.fg_stroke.color,
+                ));
             }
         }
         let rule_style = style.format.column_rule;
@@ -1092,6 +1446,47 @@ pub(crate) fn show(
                     rect.expand2(vec2(0.0, width * 0.5))
                 };
                 shapes.extend(border_shapes(rect, &stroke, visuals.fg_stroke.color));
+            }
+        }
+        if !absent {
+            for pseudo in [
+                crate::css::PseudoElementKind::FirstLine,
+                crate::css::PseudoElementKind::FirstLetter,
+            ] {
+                let Some((pseudo_style, fill, color)) = pseudo_decoration_style(
+                    stylesheet,
+                    class,
+                    pseudo,
+                    state,
+                    &style,
+                    units,
+                    visuals.fg_stroke.color,
+                ) else {
+                    continue;
+                };
+                let text_rects = pseudo_text_rects(
+                    ui.ctx(),
+                    layer,
+                    start,
+                    end,
+                    pseudo,
+                    style.format.writing.vertical(),
+                );
+                if text_rects.is_empty() {
+                    continue;
+                }
+                for text_rect in text_rects {
+                    shapes.extend(pseudo_decoration_shapes(
+                        ui.ctx(),
+                        stylesheet,
+                        text_rect,
+                        &pseudo_style,
+                        final_geometry.content().width(),
+                        fill,
+                        color,
+                        &blocked_element_ids,
+                    ));
+                }
             }
         }
 
@@ -1117,11 +1512,271 @@ pub(crate) fn show(
         scrollbars,
         geometry: final_geometry.clone(),
         clip: ui.clip_rect(),
+        fragment_border_images,
+        fragment_background_shapes: fragment_backgrounds,
     });
+    if first_element_occurrence && let Some(element_id) = element_id {
+        if !element_source_is_eligible(&active.0.borrow(), index) {
+            remove_element_image(ui.ctx(), &element_id);
+        } else if let Some(image) = capture_element_image(
+            ui.ctx(),
+            layer,
+            background,
+            paint_end,
+            element_image_bounds(visual, &style),
+            element_descendant_dependencies(&active.0.borrow())
+                .remove(&element_id)
+                .unwrap_or_default(),
+        ) {
+            publish_element_image(ui.ctx(), element_id.clone(), image);
+        } else {
+            remove_element_image(ui.ctx(), &element_id);
+        }
+    }
     if root {
         reorder_paint(&active.0.borrow(), ui.ctx());
     }
     response
+}
+
+struct ElementImage {
+    size: Vec2,
+    meshes: Vec<egui::epaint::Mesh>,
+    textures: HashMap<egui::TextureId, Arc<egui::ColorImage>>,
+    dependencies: HashSet<String>,
+    fingerprint: u64,
+    captured_frame: u64,
+}
+
+fn element_image_bounds(visual: Rect, style: &BoxStyle) -> Rect {
+    visual + border_image_outset(style)
+}
+
+fn capture_element_image(
+    context: &Context,
+    layer: egui::LayerId,
+    start: egui::layers::ShapeIdx,
+    end: egui::layers::ShapeIdx,
+    bounds: Rect,
+    dependencies: HashSet<String>,
+) -> Option<ElementImage> {
+    if !bounds.is_positive() || !bounds.is_finite() {
+        return None;
+    }
+    let shapes = context.graphics(|layers| {
+        let list = layers.get(layer)?;
+        Some(
+            list.all_entries()
+                .skip(start.0)
+                .take(end.0.saturating_sub(start.0))
+                .filter_map(|entry| {
+                    let clip_rect = entry.clip_rect.intersect(bounds);
+                    clip_rect.is_positive().then(|| egui::epaint::ClippedShape {
+                        clip_rect,
+                        shape: entry.shape.clone(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+    })?;
+    let clip = crate::box_decoration::path_clip(
+        vec![vec![
+            bounds.left_top(),
+            bounds.right_top(),
+            bounds.right_bottom(),
+            bounds.left_bottom(),
+        ]],
+        crate::box_decoration::FillRule::Nonzero,
+    );
+    let meshes = context
+        .tessellate(shapes, context.pixels_per_point())
+        .into_iter()
+        .filter_map(|primitive| match primitive.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => {
+                let mut mesh = crate::box_decoration::clip_mesh_to_paths(mesh, &clip);
+                if mesh.indices.is_empty() {
+                    return None;
+                }
+                for vertex in &mut mesh.vertices {
+                    vertex.pos -= bounds.min.to_vec2();
+                }
+                Some(mesh)
+            }
+            egui::epaint::Primitive::Callback(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let mut textures = HashMap::new();
+    for texture_id in meshes
+        .iter()
+        .map(|mesh| mesh.texture_id)
+        .collect::<HashSet<_>>()
+    {
+        let image = if texture_id == egui::TextureId::default() {
+            let image = context.fonts_mut(|fonts| fonts.image());
+            crate::background::remember_texture_image(context, texture_id, image);
+            crate::background::texture_image(context, texture_id)
+        } else {
+            crate::background::texture_image(context, texture_id)
+        };
+        if let Some(image) = image {
+            textures.insert(texture_id, image);
+        }
+    }
+    let fingerprint = element_image_fingerprint(bounds.size(), &meshes, &textures);
+    Some(ElementImage {
+        size: bounds.size(),
+        meshes,
+        textures,
+        dependencies,
+        fingerprint,
+        captured_frame: context.cumulative_frame_nr(),
+    })
+}
+
+fn element_image_fingerprint(
+    size: Vec2,
+    meshes: &[egui::epaint::Mesh],
+    textures: &HashMap<egui::TextureId, Arc<egui::ColorImage>>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    size.x.to_bits().hash(&mut hasher);
+    size.y.to_bits().hash(&mut hasher);
+    for mesh in meshes {
+        mesh.texture_id.hash(&mut hasher);
+        mesh.indices.hash(&mut hasher);
+        for vertex in &mesh.vertices {
+            vertex.pos.x.to_bits().hash(&mut hasher);
+            vertex.pos.y.to_bits().hash(&mut hasher);
+            vertex.uv.x.to_bits().hash(&mut hasher);
+            vertex.uv.y.to_bits().hash(&mut hasher);
+            vertex.color.to_array().hash(&mut hasher);
+        }
+        if let Some(image) = textures.get(&mesh.texture_id) {
+            image.size.hash(&mut hasher);
+            for pixel in &image.pixels {
+                pixel.to_array().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+fn publish_element_image(context: &Context, id: String, image: ElementImage) {
+    let changed = context.data_mut(|data| {
+        let key = Id::new(ELEMENT_IMAGES);
+        let mut images = data
+            .get_temp::<HashMap<String, Arc<ElementImage>>>(key)
+            .unwrap_or_default();
+        let changed = images.get(&id).is_none_or(|previous| {
+            previous.fingerprint != image.fingerprint || previous.dependencies != image.dependencies
+        });
+        images.insert(id, Arc::new(image));
+        data.insert_temp(key, images);
+        changed
+    });
+    if changed {
+        context.request_repaint();
+    }
+}
+
+fn remove_element_image(context: &Context, id: &str) {
+    let removed = context.data_mut(|data| {
+        let key = Id::new(ELEMENT_IMAGES);
+        let Some(mut images) = data.get_temp::<HashMap<String, Arc<ElementImage>>>(key) else {
+            return false;
+        };
+        let removed = images.remove(id).is_some();
+        data.insert_temp(key, images);
+        removed
+    });
+    if removed {
+        context.request_repaint();
+    }
+}
+
+fn first_element_occurrence(context: &Context, id: &str) -> bool {
+    let pass = context.cumulative_pass_nr();
+    context.data_mut(|data| {
+        let key = Id::new(ELEMENT_OCCURRENCES);
+        let (seen_pass, mut seen) = data
+            .get_temp::<(u64, HashSet<String>)>(key)
+            .filter(|(seen_pass, _)| *seen_pass == pass)
+            .unwrap_or_else(|| (pass, HashSet::new()));
+        let first = seen.insert(id.to_owned());
+        data.insert_temp(key, (seen_pass, seen));
+        first
+    })
+}
+
+fn element_source_is_eligible(frame: &Frame, index: usize) -> bool {
+    let node = &frame.nodes[index];
+    if node.absent || node.style.contents {
+        return false;
+    }
+    let style = &node.style;
+    if style.fixed
+        || matches!(style.layout.position, Position::Fixed | Position::Sticky)
+        || style.positioned && style.z_index.is_some()
+    {
+        return true;
+    }
+    if style.z_index.is_none() {
+        return false;
+    }
+    let mut parent = node.parent;
+    while let Some(index) = parent {
+        let ancestor = &frame.nodes[index];
+        if ancestor.style.contents {
+            parent = ancestor.parent;
+            continue;
+        }
+        return matches!(ancestor.style.layout.display, Display::Flex | Display::Grid);
+    }
+    false
+}
+
+fn element_image(context: &Context, id: &str) -> Option<Arc<ElementImage>> {
+    let image = context.data(|data| {
+        data.get_temp::<HashMap<String, Arc<ElementImage>>>(Id::new(ELEMENT_IMAGES))
+            .and_then(|images| images.get(id).cloned())
+    })?;
+    (context
+        .cumulative_frame_nr()
+        .saturating_sub(image.captured_frame)
+        <= 1)
+        .then_some(image)
+}
+
+fn element_slice_shapes(image: &ElementImage, source: Rect, target: Rect) -> Vec<egui::Shape> {
+    if !source.is_positive() || !target.is_positive() {
+        return Vec::new();
+    }
+    let clip = crate::box_decoration::path_clip(
+        vec![vec![
+            source.left_top(),
+            source.right_top(),
+            source.right_bottom(),
+            source.left_bottom(),
+        ]],
+        crate::box_decoration::FillRule::Nonzero,
+    );
+    let scale = target.size() / source.size();
+    image
+        .meshes
+        .iter()
+        .filter_map(|source_mesh| {
+            let mut mesh = crate::box_decoration::clip_mesh_to_paths(source_mesh.clone(), &clip);
+            if mesh.indices.is_empty() {
+                return None;
+            }
+            for vertex in &mut mesh.vertices {
+                vertex.pos = target.min + (vertex.pos - source.min) * scale;
+            }
+            Some(egui::Shape::Mesh(mesh.into()))
+        })
+        .collect()
 }
 
 fn same_line(a: Rect, b: Rect, vertical: bool) -> bool {
@@ -1385,9 +2040,14 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                         }
                     }
                 }
+                let source_clip = if decoration {
+                    source + border_image_outset(&node.style)
+                } else {
+                    source
+                };
                 let clip = entry
                     .clip_rect
-                    .intersect(source)
+                    .intersect(source_clip)
                     .translate(slice.offset)
                     .intersect(paint.clip);
                 if !clip.is_positive() {
@@ -1402,6 +2062,14 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                         paint.geometry.stroke,
                         paint.geometry.padding,
                         paint.geometry.margin,
+                        paint
+                            .fragment_border_images
+                            .get(slice_index)
+                            .and_then(Option::as_deref),
+                        paint
+                            .fragment_background_shapes
+                            .get(slice_index)
+                            .map_or(&[], Vec::as_slice),
                     )
                 } else {
                     entry.shape.clone()
@@ -1484,13 +2152,11 @@ fn clone_decoration(
     stroke: egui::epaint::MarginF32,
     padding: egui::epaint::MarginF32,
     margin: egui::epaint::MarginF32,
+    fragment_border_image: Option<&[egui::Shape]>,
+    fragment_background_shapes: &[egui::Shape],
 ) -> egui::Shape {
-    if let egui::Shape::Vec(shapes) = shape
-        && let Some(egui::Shape::Rect(background)) = shapes.first()
-    {
-        let mut background = background.clone();
-        background.rect = rect;
-        let mut shapes = vec![egui::Shape::Rect(background)];
+    if matches!(shape, egui::Shape::Vec(_)) {
+        let mut shapes = fragment_background_shapes.to_vec();
         shapes.extend(crate::box_decoration::shadow_shapes(
             rect,
             style,
@@ -1500,7 +2166,11 @@ fn clone_decoration(
             padding,
             margin,
         ));
-        shapes.extend(border_shapes(rect, style, color));
+        if let Some(fragment_border_image) = fragment_border_image {
+            shapes.extend(fragment_border_image.iter().cloned());
+        } else {
+            shapes.extend(border_shapes(rect, style, color));
+        }
         egui::Shape::Vec(shapes)
     } else {
         shape.clone()
@@ -1667,18 +2337,416 @@ fn matching_rules<'a>(
     let rules = &stylesheet.rules;
     rules
         .iter()
-        .filter(|rule| rule.class.is_none() && rule.state == RuleState::Base)
+        .filter(|rule| {
+            rule.pseudo.is_none() && rule.class.is_none() && rule.state == RuleState::Base
+        })
         .chain(rules.iter().filter(move |rule| {
-            (rule.class.is_some()
-                && rule.class.as_deref() == Some(class)
-                && rule.state == RuleState::Base)
-                || (rule.class.is_none() && rule.state != RuleState::Base)
+            rule.pseudo.is_none()
+                && ((rule.class.is_some()
+                    && rule.class.as_deref() == Some(class)
+                    && rule.state == RuleState::Base)
+                    || (rule.class.is_none() && rule.state != RuleState::Base))
         }))
         .chain(rules.iter().filter(move |rule| {
-            rule.class.is_some()
+            rule.pseudo.is_none()
+                && rule.class.is_some()
                 && rule.class.as_deref() == Some(class)
                 && rule.state != RuleState::Base
         }))
+}
+
+fn matching_pseudo_rules<'a>(
+    stylesheet: &'a Stylesheet,
+    class: &'a str,
+    pseudo: crate::css::PseudoElementKind,
+    state: u8,
+) -> Vec<&'a crate::css::Rule> {
+    let applicable = |rule: &&crate::css::Rule| {
+        rule.pseudo == Some(pseudo)
+            && (rule.state == RuleState::Base
+                || rule.state == RuleState::Hovered && state & 1 != 0
+                || rule.state == RuleState::Active && state & 2 != 0)
+    };
+    let rules = &stylesheet.rules;
+    rules
+        .iter()
+        .filter(|rule| rule.class.is_none() && rule.state == RuleState::Base)
+        .filter(applicable)
+        .chain(
+            rules
+                .iter()
+                .filter(|rule| {
+                    (rule.class.is_some()
+                        && rule.class.as_deref() == Some(class)
+                        && rule.state == RuleState::Base)
+                        || (rule.class.is_none() && rule.state != RuleState::Base)
+                })
+                .filter(applicable),
+        )
+        .chain(
+            rules
+                .iter()
+                .filter(|rule| {
+                    rule.class.is_some()
+                        && rule.class.as_deref() == Some(class)
+                        && rule.state != RuleState::Base
+                })
+                .filter(applicable),
+        )
+        .collect()
+}
+
+fn pseudo_text_rects(
+    context: &Context,
+    layer: egui::LayerId,
+    start: egui::layers::ShapeIdx,
+    end: egui::layers::ShapeIdx,
+    pseudo: crate::css::PseudoElementKind,
+    vertical: bool,
+) -> Vec<Rect> {
+    fn collect(shape: &egui::Shape, text: &mut Vec<(Arc<egui::Galley>, Pos2)>) {
+        match shape {
+            egui::Shape::Text(shape) if shape.angle == 0.0 => {
+                text.push((shape.galley.clone(), shape.pos));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, text)),
+            _ => {}
+        }
+    }
+    let Some(text) = context.graphics(|layers| {
+        let list = layers.get(layer)?;
+        let mut text = Vec::new();
+        for entry in list.all_entries().skip(start.0).take(end.0 - start.0) {
+            collect(&entry.shape, &mut text);
+        }
+        Some(text)
+    }) else {
+        return Vec::new();
+    };
+    let lines = text
+        .iter()
+        .filter_map(|(galley, position)| {
+            let row = galley.rows.iter().find(|row| !row.glyphs.is_empty())?;
+            let rect = row
+                .rect_without_leading_space()
+                .translate(position.to_vec2());
+            let baseline = row
+                .glyphs
+                .first()
+                .map(|glyph| position.y + row.pos.y + glyph.pos.y)
+                .unwrap_or(rect.bottom());
+            rect.is_positive()
+                .then_some((row, *position, rect, baseline))
+        })
+        .collect::<Vec<_>>();
+    let Some((first_row, position, first_rect, first_baseline)) = lines.first() else {
+        return Vec::new();
+    };
+    match pseudo {
+        crate::css::PseudoElementKind::FirstLine => {
+            let reference = if vertical {
+                first_rect.left()
+            } else {
+                *first_baseline
+            };
+            let mut rect = Rect::NOTHING;
+            for (_, _, line, baseline) in lines {
+                let coordinate = if vertical { line.left() } else { baseline };
+                if (coordinate - reference).abs() <= 1.0 {
+                    rect = rect.union(line);
+                }
+            }
+            rect.is_positive().then_some(rect).into_iter().collect()
+        }
+        crate::css::PseudoElementKind::FirstLetter => {
+            let glyphs = &first_row.glyphs;
+            let characters = glyphs.iter().map(|glyph| glyph.chr).collect::<Vec<_>>();
+            let Some(range) = first_letter_character_range(&characters) else {
+                return Vec::new();
+            };
+            let row_offset = first_row.pos.to_vec2() + position.to_vec2();
+            let mut rect = Rect::NOTHING;
+            for glyph in &glyphs[range] {
+                let glyph_rect = if vertical {
+                    let vertex_start = glyph.first_vertex as usize;
+                    first_row
+                        .visuals
+                        .mesh
+                        .vertices
+                        .get(vertex_start..vertex_start.saturating_add(4))
+                        .filter(|vertices| vertices.len() == 4)
+                        .map(|vertices| {
+                            vertices.iter().fold(Rect::NOTHING, |bounds, vertex| {
+                                bounds.union(Rect::from_min_max(vertex.pos, vertex.pos))
+                            })
+                        })
+                        .map(|rect| rect.translate(row_offset))
+                } else {
+                    Some(glyph.logical_rect().translate(row_offset))
+                };
+                if let Some(glyph_rect) = glyph_rect {
+                    rect = rect.union(glyph_rect);
+                }
+            }
+            rect.is_positive().then_some(rect).into_iter().collect()
+        }
+    }
+}
+
+fn is_first_letter_punctuation(character: char) -> bool {
+    matches!(
+        get_general_category(character),
+        GeneralCategory::ClosePunctuation
+            | GeneralCategory::ConnectorPunctuation
+            | GeneralCategory::DashPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::OpenPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
+fn is_first_letter_character(character: char) -> bool {
+    matches!(
+        get_general_category(character),
+        GeneralCategory::CurrencySymbol
+            | GeneralCategory::DecimalNumber
+            | GeneralCategory::LetterNumber
+            | GeneralCategory::LowercaseLetter
+            | GeneralCategory::MathSymbol
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::ModifierSymbol
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::OtherNumber
+            | GeneralCategory::OtherSymbol
+            | GeneralCategory::TitlecaseLetter
+            | GeneralCategory::UppercaseLetter
+    )
+}
+
+fn is_first_letter_space(character: char) -> bool {
+    get_general_category(character) == GeneralCategory::SpaceSeparator && character != '\u{3000}'
+}
+
+fn is_first_letter_suffix_punctuation(character: char) -> bool {
+    is_first_letter_punctuation(character)
+        && !matches!(
+            get_general_category(character),
+            GeneralCategory::DashPunctuation | GeneralCategory::OpenPunctuation
+        )
+}
+
+fn first_letter_character_range(characters: &[char]) -> Option<std::ops::Range<usize>> {
+    let letter = characters
+        .iter()
+        .position(|character| is_first_letter_character(*character))?;
+
+    let mut prefix_start = letter;
+    while prefix_start > 0
+        && (is_first_letter_punctuation(characters[prefix_start - 1])
+            || is_first_letter_space(characters[prefix_start - 1])
+            || is_combining_mark(characters[prefix_start - 1]))
+    {
+        prefix_start -= 1;
+    }
+    let from = (prefix_start..letter)
+        .find(|index| is_first_letter_punctuation(characters[*index]))
+        .unwrap_or(letter);
+
+    let mut to = letter + 1;
+    while to < characters.len() && is_combining_mark(characters[to]) {
+        to += 1;
+    }
+    let mut suffix_end = None;
+    let mut cursor = to;
+    while cursor < characters.len()
+        && (is_first_letter_suffix_punctuation(characters[cursor])
+            || is_first_letter_space(characters[cursor]) && characters[cursor] != ' '
+            || is_combining_mark(characters[cursor]))
+    {
+        if is_first_letter_suffix_punctuation(characters[cursor]) {
+            suffix_end = Some(cursor + 1);
+        } else if is_combining_mark(characters[cursor]) && suffix_end.is_some() {
+            suffix_end = Some(cursor + 1);
+        }
+        cursor += 1;
+    }
+    if let Some(suffix_end) = suffix_end {
+        to = suffix_end;
+    }
+    Some(from..to)
+}
+
+fn is_combining_mark(character: char) -> bool {
+    matches!(
+        get_general_category(character),
+        GeneralCategory::EnclosingMark
+            | GeneralCategory::NonspacingMark
+            | GeneralCategory::SpacingMark
+    )
+}
+
+fn pseudo_decoration_style(
+    stylesheet: &Stylesheet,
+    class: &str,
+    pseudo: crate::css::PseudoElementKind,
+    state: u8,
+    parent: &BoxStyle,
+    units: Units,
+    current: Color32,
+) -> Option<(BoxStyle, Color32, Color32)> {
+    let rules = matching_pseudo_rules(stylesheet, class, pseudo, state);
+    if rules.is_empty() {
+        return None;
+    }
+    let mut style = BoxStyle::default();
+    style.layout.direction = parent.layout.direction;
+    style.format = parent.format.clone();
+    let mut fill = Color32::TRANSPARENT;
+    let mut color = current;
+    for rule in rules {
+        for declaration in &rule.declarations {
+            match declaration {
+                Declaration::Color(value) => color = *value,
+                Declaration::Background(value) => fill = *value,
+                Declaration::BackgroundShorthand(value) => fill = value.color,
+                Declaration::Layout(value)
+                    if pseudo_decoration_property_applies(pseudo, &value.name) =>
+                {
+                    value
+                        .apply_with_parent(&mut style, parent, units)
+                        .expect("validated pseudo-element decoration declaration");
+                }
+                Declaration::BorderRadius(radius) => {
+                    let radius = f32::from(*radius);
+                    let radius = crate::box_decoration::CornerRadius {
+                        x: crate::box_decoration::LengthPercentage::Length(radius),
+                        y: crate::box_decoration::LengthPercentage::Length(radius),
+                    };
+                    style.decorations.radii = [radius; 4];
+                }
+                _ => {}
+            }
+        }
+    }
+    style.finish();
+    Some((style, fill, color))
+}
+
+fn pseudo_decoration_property_applies(pseudo: crate::css::PseudoElementKind, name: &str) -> bool {
+    match pseudo {
+        crate::css::PseudoElementKind::FirstLetter => {
+            name.starts_with("border")
+                || name.starts_with("corner-")
+                || name.starts_with("box-shadow")
+                || name == "box-decoration-break"
+                || name == "padding"
+                || name.starts_with("padding-")
+                || name == "margin"
+                || name.starts_with("margin-")
+        }
+        crate::css::PseudoElementKind::FirstLine => {
+            name.starts_with("box-shadow")
+                || name.starts_with("border-image")
+                || name == "border-radius"
+                || name.ends_with("-radius")
+        }
+    }
+}
+
+fn pseudo_decoration_shapes(
+    context: &Context,
+    stylesheet: &Stylesheet,
+    rect: Rect,
+    style: &BoxStyle,
+    percentage_basis: f32,
+    fill: Color32,
+    current: Color32,
+    blocked_element_ids: &HashSet<String>,
+) -> Vec<egui::Shape> {
+    let basis = percentage_basis;
+    let edge = |value: taffy::LengthPercentageAuto, basis| {
+        resolve(value.into_raw(), basis).unwrap_or(0.0).max(0.0)
+    };
+    let padding = egui::epaint::MarginF32 {
+        top: edge(style.layout.padding.top.into(), basis),
+        right: edge(style.layout.padding.right.into(), basis),
+        bottom: edge(style.layout.padding.bottom.into(), basis),
+        left: edge(style.layout.padding.left.into(), basis),
+    };
+    let margin = egui::epaint::MarginF32 {
+        top: edge(style.layout.margin.top, basis),
+        right: edge(style.layout.margin.right, basis),
+        bottom: edge(style.layout.margin.bottom, basis),
+        left: edge(style.layout.margin.left, basis),
+    };
+    let border_widths = style
+        .layout
+        .border
+        .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0).max(0.0));
+    let stroke = egui::epaint::MarginF32 {
+        top: border_widths.top,
+        right: border_widths.right,
+        bottom: border_widths.bottom,
+        left: border_widths.left,
+    };
+    let border = Rect::from_min_max(
+        pos2(
+            rect.left() - padding.left - stroke.left,
+            rect.top() - padding.top - stroke.top,
+        ),
+        pos2(
+            rect.right() + padding.right + stroke.right,
+            rect.bottom() + padding.bottom + stroke.bottom,
+        ),
+    );
+    let mut shapes = crate::box_decoration::shadow_shapes(
+        border,
+        style,
+        current,
+        crate::box_decoration::ShadowPosition::Outset,
+        stroke,
+        padding,
+        margin,
+    );
+    if fill.a() > 0 {
+        shapes.push(box_surface_shape(
+            border,
+            border,
+            style,
+            stroke,
+            padding,
+            margin,
+            crate::css::BackgroundClip::Border,
+            fill,
+            egui::CornerRadius::ZERO,
+        ));
+    }
+    shapes.extend(crate::box_decoration::shadow_shapes(
+        border,
+        style,
+        current,
+        crate::box_decoration::ShadowPosition::Inset,
+        stroke,
+        padding,
+        margin,
+    ));
+    if let Some(border_image) = border_image_shapes(
+        border,
+        style,
+        &stylesheet.background_images,
+        context,
+        blocked_element_ids,
+    ) {
+        shapes.extend(border_image);
+    } else if let Some(border_shape) =
+        border_shape_shapes(border, style, stroke, padding, margin, current)
+    {
+        shapes.extend(border_shape);
+    } else {
+        shapes.extend(border_shapes(border, style, current));
+    }
+    shapes
 }
 
 struct BackgroundPaint {
@@ -1723,25 +2791,516 @@ fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> Backg
     background
 }
 
+fn fragment_background_shapes(
+    context: &Context,
+    images: &crate::background::ImageAssets,
+    background: &BackgroundPaint,
+    style: &BoxStyle,
+    border: Rect,
+    stroke: egui::epaint::MarginF32,
+    padding: egui::epaint::MarginF32,
+    margin: egui::epaint::MarginF32,
+    fill: Color32,
+    color_clip: crate::css::BackgroundClip,
+    corner_radius: egui::CornerRadius,
+    scroll: Vec2,
+    invalid_elements: &HashSet<String>,
+) -> Vec<egui::Shape> {
+    let widths = style
+        .layout
+        .border
+        .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
+    let shape_clip_for = |rect, clip| {
+        style.decorations.border_shape.as_ref().map(|border_shape| {
+            let (paths, fill_rule) = border_shape.background_paths(
+                rect,
+                clip,
+                stroke,
+                padding,
+                margin,
+                [widths.top, widths.right, widths.bottom, widths.left],
+            );
+            crate::box_decoration::path_clip(paths, fill_rule)
+        })
+    };
+    let color_surface = match color_clip {
+        crate::css::BackgroundClip::Border => border,
+        crate::css::BackgroundClip::Padding => border - stroke,
+        crate::css::BackgroundClip::Content => border - stroke - padding,
+    };
+    let color_shape = box_surface_shape(
+        color_surface,
+        border,
+        style,
+        stroke,
+        padding,
+        margin,
+        color_clip,
+        fill,
+        corner_radius,
+    );
+    let color_clip_path = shape_clip_for(border, color_clip);
+    let mut shapes = vec![clip_background_shape(color_shape, color_clip_path.as_ref())];
+    let scale = context.pixels_per_point();
+    let clip_count = background.clips.len().max(1);
+    let attachment_count = background.attachments.len().max(1);
+    for layer_index in (0..background.images.len()).rev() {
+        let layer_image = &background.images[layer_index];
+        let layer_clip = background
+            .clips
+            .get(layer_index % clip_count)
+            .copied()
+            .unwrap_or(crate::css::BackgroundClip::Border);
+        let attachment = background
+            .attachments
+            .get(layer_index % attachment_count)
+            .copied()
+            .unwrap_or(crate::css::BackgroundAttachment::Scroll);
+        let background_surface = match layer_clip {
+            crate::css::BackgroundClip::Border => border,
+            crate::css::BackgroundClip::Padding => border - stroke,
+            crate::css::BackgroundClip::Content => border - stroke - padding,
+        };
+        let shape_clip = shape_clip_for(border, layer_clip);
+        let image_resolution = layer_image.resolution_for_scale(scale);
+        let image = layer_image.for_scale(scale);
+        match image {
+            crate::css::BackgroundImage::SolidColor(color) => shapes.push(clip_background_shape(
+                box_surface_shape(
+                    background_surface,
+                    border,
+                    style,
+                    stroke,
+                    padding,
+                    margin,
+                    layer_clip,
+                    *color,
+                    corner_radius,
+                ),
+                shape_clip.as_ref(),
+            )),
+            crate::css::BackgroundImage::LinearGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(clip_background_shape(
+                    egui::Shape::Mesh(
+                        linear_gradient_mesh(
+                            background_surface,
+                            paint_area,
+                            sample_offset,
+                            gradient,
+                        )
+                        .into(),
+                    ),
+                    shape_clip.as_ref(),
+                ));
+            }
+            crate::css::BackgroundImage::RadialGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(clip_background_shape(
+                    egui::Shape::Mesh(
+                        radial_gradient_mesh(
+                            background_surface,
+                            paint_area,
+                            sample_offset,
+                            gradient,
+                        )
+                        .into(),
+                    ),
+                    shape_clip.as_ref(),
+                ));
+            }
+            crate::css::BackgroundImage::ConicGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(clip_background_shape(
+                    egui::Shape::Mesh(
+                        conic_gradient_mesh(
+                            background_surface,
+                            paint_area,
+                            sample_offset,
+                            gradient,
+                        )
+                        .into(),
+                    ),
+                    shape_clip.as_ref(),
+                ));
+            }
+            _ => {}
+        }
+
+        let image_texture = match image {
+            crate::css::BackgroundImage::Url(url) => {
+                match (images.texture(context, url), images.size(url)) {
+                    (Some(texture), Some(size)) => Some((
+                        texture,
+                        vec2(
+                            size[0].max(1) as f32 / image_resolution,
+                            size[1].max(1) as f32 / image_resolution,
+                        ),
+                    )),
+                    _ => None,
+                }
+            }
+            crate::css::BackgroundImage::CrossFade(_) => cross_fade_texture(
+                context,
+                images,
+                layer_image,
+                background_surface.size(),
+                scale / image_resolution,
+                invalid_elements,
+            )
+            .map(|(texture, size)| (texture, size / image_resolution)),
+            _ => None,
+        };
+        let element_source = match image {
+            crate::css::BackgroundImage::Element(id) if !invalid_elements.contains(id) => {
+                element_image(context, id)
+            }
+            _ => None,
+        };
+        let image_size = image_texture
+            .as_ref()
+            .map(|(_, size)| *size)
+            .or_else(|| element_source.as_ref().map(|image| image.size));
+        let Some(image_size) = image_size.filter(|size| size.is_finite() && size.min_elem() > 0.0)
+        else {
+            continue;
+        };
+        let sample_offset = match attachment {
+            crate::css::BackgroundAttachment::Scroll => Vec2::ZERO,
+            crate::css::BackgroundAttachment::Local => -scroll,
+            crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+        };
+        let tile_surface = background_surface.translate(sample_offset);
+        let origin = match attachment {
+            crate::css::BackgroundAttachment::Scroll => background_surface.min,
+            crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
+            crate::css::BackgroundAttachment::Fixed => context.viewport_rect().min,
+        };
+        let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
+        let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
+        let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
+        let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let tile = Rect::from_min_size(
+                    origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
+                    image_size,
+                );
+                let visible_virtual = tile.intersect(tile_surface);
+                if !visible_virtual.is_positive() {
+                    continue;
+                }
+                let visible = visible_virtual.translate(-sample_offset);
+                let uv = Rect::from_min_max(
+                    pos2(
+                        (visible_virtual.left() - tile.left()) / tile.width(),
+                        (visible_virtual.top() - tile.top()) / tile.height(),
+                    ),
+                    pos2(
+                        (visible_virtual.right() - tile.left()) / tile.width(),
+                        (visible_virtual.bottom() - tile.top()) / tile.height(),
+                    ),
+                );
+                if let Some((texture, _)) = &image_texture {
+                    shapes.push(clip_background_shape(
+                        egui::Shape::image(texture.id(), visible, uv, Color32::WHITE),
+                        shape_clip.as_ref(),
+                    ));
+                } else if let Some(element) = &element_source {
+                    let source = Rect::from_min_max(
+                        pos2(uv.left() * image_size.x, uv.top() * image_size.y),
+                        pos2(uv.right() * image_size.x, uv.bottom() * image_size.y),
+                    );
+                    for shape in element_slice_shapes(element, source, visible) {
+                        shapes.push(clip_background_shape(shape, shape_clip.as_ref()));
+                    }
+                }
+            }
+        }
+    }
+    shapes
+}
+
+fn resolved_element_references(stylesheet: &Stylesheet, class: &str, state: u8) -> HashSet<String> {
+    let mut references = HashSet::new();
+    let mut collect = |image: &crate::css::BackgroundImage| {
+        let mut ids = Vec::new();
+        image.collect_element_ids(&mut ids);
+        references.extend(ids);
+    };
+    for image in resolved_background(stylesheet, class, state).images {
+        collect(&image);
+    }
+    collect(&resolved_border_image_source(stylesheet, class, state));
+    for pseudo in [
+        crate::css::PseudoElementKind::FirstLetter,
+        crate::css::PseudoElementKind::FirstLine,
+    ] {
+        collect(&resolved_pseudo_border_image_source(
+            stylesheet, class, pseudo, state,
+        ));
+    }
+    references
+}
+
+fn invalid_element_references(
+    context: &Context,
+    stylesheet: &Stylesheet,
+    node_index: usize,
+    frame: &Frame,
+) -> HashSet<String> {
+    let mut element_ids = HashSet::new();
+    for rule in &stylesheet.rules {
+        if let Some(id) = rule
+            .class
+            .as_deref()
+            .and_then(|class| class.strip_prefix("@id:"))
+        {
+            element_ids.insert(id.to_owned());
+        }
+        collect_rule_element_ids(rule, &mut element_ids);
+    }
+    for node in &frame.nodes {
+        if let Some(id) = &node.element_id {
+            element_ids.insert(id.clone());
+        }
+        element_ids.extend(node.element_references.iter().cloned());
+    }
+
+    let current_dependencies = element_descendant_dependencies(frame);
+    for (id, targets) in &current_dependencies {
+        element_ids.insert(id.clone());
+        element_ids.extend(targets.iter().cloned());
+    }
+
+    let mut dependencies = HashMap::<String, HashSet<String>>::new();
+    for id in &element_ids {
+        let targets = if let Some(targets) = current_dependencies.get(id) {
+            targets.clone()
+        } else if let Some(image) = element_image(context, id) {
+            image.dependencies.clone()
+        } else {
+            resolved_element_references(stylesheet, &format!("@id:{id}"), 0)
+        };
+        dependencies.insert(id.clone(), targets);
+    }
+
+    fn reaches(
+        current: &str,
+        target: &str,
+        dependencies: &HashMap<String, HashSet<String>>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if current == target {
+            return true;
+        }
+        if !visited.insert(current.to_owned()) {
+            return false;
+        }
+        dependencies.get(current).is_some_and(|next| {
+            next.iter()
+                .any(|next| reaches(next, target, dependencies, visited))
+        })
+    }
+
+    let mut source_ancestors = HashSet::new();
+    let mut current = Some(node_index);
+    while let Some(index) = current {
+        let node = &frame.nodes[index];
+        if node.element_first_occurrence
+            && let Some(id) = &node.element_id
+        {
+            source_ancestors.insert(id.clone());
+        }
+        current = node.parent;
+    }
+
+    frame.nodes[node_index]
+        .element_references
+        .iter()
+        .filter(|target| {
+            source_ancestors
+                .iter()
+                .any(|ancestor| reaches(target, ancestor, &dependencies, &mut HashSet::new()))
+        })
+        .cloned()
+        .collect()
+}
+
+fn element_descendant_dependencies(frame: &Frame) -> HashMap<String, HashSet<String>> {
+    fn visit(
+        frame: &Frame,
+        node_index: usize,
+        ancestors: &[String],
+        dependencies: &mut HashMap<String, HashSet<String>>,
+    ) {
+        let node = &frame.nodes[node_index];
+        if node.absent {
+            return;
+        }
+        let mut source_ids = ancestors.to_vec();
+        if node.element_first_occurrence
+            && let Some(id) = &node.element_id
+        {
+            for ancestor in ancestors {
+                dependencies
+                    .entry(ancestor.clone())
+                    .or_default()
+                    .insert(id.clone());
+            }
+            dependencies.entry(id.clone()).or_default();
+            source_ids.push(id.clone());
+        }
+        for source_id in &source_ids {
+            dependencies
+                .entry(source_id.clone())
+                .or_default()
+                .extend(node.element_references.iter().cloned());
+        }
+        for child in &node.children {
+            visit(frame, *child, &source_ids, dependencies);
+        }
+    }
+
+    let mut dependencies = HashMap::new();
+    for (index, node) in frame.nodes.iter().enumerate() {
+        if node.parent.is_none() {
+            visit(frame, index, &[], &mut dependencies);
+        }
+    }
+    dependencies
+}
+
+fn collect_rule_element_ids(rule: &crate::css::Rule, ids: &mut HashSet<String>) {
+    fn collect(image: &crate::css::BackgroundImage, ids: &mut HashSet<String>) {
+        let mut image_ids = Vec::new();
+        image.collect_element_ids(&mut image_ids);
+        ids.extend(image_ids);
+    }
+
+    for declaration in &rule.declarations {
+        match declaration {
+            Declaration::BackgroundShorthand(background) => {
+                for image in &background.images {
+                    collect(image, ids);
+                }
+            }
+            Declaration::BackgroundImage(images) => {
+                for image in images {
+                    collect(image, ids);
+                }
+            }
+            Declaration::Layout(layout) if layout.name.starts_with("border-image") => {
+                if let Some(image) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                {
+                    collect(&image, ids);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn resolved_border_image_source(
+    stylesheet: &Stylesheet,
+    selector: &str,
+    state: u8,
+) -> crate::css::BackgroundImage {
+    let mut source = crate::css::BackgroundImage::None;
+    for rule in matching_rules(stylesheet, selector) {
+        if rule.state != RuleState::Base
+            && !(rule.state == RuleState::Hovered && state & 1 != 0)
+            && !(rule.state == RuleState::Active && state & 2 != 0)
+        {
+            continue;
+        }
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(layout) = declaration
+                && let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+            {
+                source = value;
+            }
+        }
+    }
+    source
+}
+
+fn resolved_pseudo_border_image_source(
+    stylesheet: &Stylesheet,
+    selector: &str,
+    pseudo: crate::css::PseudoElementKind,
+    state: u8,
+) -> crate::css::BackgroundImage {
+    let mut source = crate::css::BackgroundImage::None;
+    for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state) {
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(layout) = declaration
+                && let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+            {
+                source = value;
+            }
+        }
+    }
+    source
+}
+
 fn cross_fade_texture(
     context: &Context,
     images: &crate::background::ImageAssets,
     image: &crate::css::BackgroundImage,
     fallback_size: Vec2,
     scale: f32,
+    invalid_elements: &HashSet<String>,
 ) -> Option<(egui::TextureHandle, Vec2)> {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
         1.0
     };
-    let logical_size = intrinsic_image_size(image, images, scale).unwrap_or(fallback_size);
+    let logical_size = intrinsic_image_size(image, images, context, scale).unwrap_or(fallback_size);
     let logical_size = logical_size.max(Vec2::splat(1.0));
     let width = (logical_size.x * scale).ceil().clamp(1.0, 4096.0) as usize;
     let height = (logical_size.y * scale).ceil().clamp(1.0, 4096.0) as usize;
+    let source_revision = image_source_revision(image, context, scale, invalid_elements);
     let key = egui::Id::new((
         "ecss.cross-fade",
-        format!("{image:?}:{scale}:{logical_size:?}"),
+        format!("{image:?}:{scale}:{logical_size:?}:{source_revision}"),
     ));
     if let Some(texture) = context.data(|data| data.get_temp::<egui::TextureHandle>(key)) {
         return Some((texture, logical_size));
@@ -1751,28 +3310,72 @@ fn cross_fade_texture(
         .flat_map(|y| {
             (0..width).map(move |x| {
                 sample_image(
+                    context,
                     images,
                     image,
                     scale,
                     (x as f32 + 0.5) / width as f32,
                     (y as f32 + 0.5) / height as f32,
                     area,
+                    invalid_elements,
                 )
             })
         })
         .collect();
+    let pixels = egui::ColorImage::new([width, height], pixels);
     let texture = context.load_texture(
         key.value().to_string(),
-        egui::ColorImage::new([width, height], pixels),
+        pixels.clone(),
         egui::TextureOptions::LINEAR,
     );
+    crate::background::remember_texture_image(context, texture.id(), pixels);
     context.data_mut(|data| data.insert_temp(key, texture.clone()));
     Some((texture, logical_size))
+}
+
+fn image_source_revision(
+    image: &crate::css::BackgroundImage,
+    context: &Context,
+    scale: f32,
+    invalid_elements: &HashSet<String>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    fn visit(
+        image: &crate::css::BackgroundImage,
+        context: &Context,
+        scale: f32,
+        hasher: &mut impl Hasher,
+    ) {
+        match image.for_scale(scale) {
+            crate::css::BackgroundImage::Element(id) => {
+                id.hash(hasher);
+                if let Some(image) = element_image(context, id) {
+                    image.fingerprint.hash(hasher);
+                }
+            }
+            crate::css::BackgroundImage::CrossFade(cross_fade) => {
+                for item in &cross_fade.items {
+                    item.weight.to_bits().hash(hasher);
+                    visit(&item.image, context, scale, hasher);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    visit(image, context, scale, &mut hasher);
+    let mut invalid_elements = invalid_elements.iter().collect::<Vec<_>>();
+    invalid_elements.sort();
+    invalid_elements.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn intrinsic_image_size(
     image: &crate::css::BackgroundImage,
     images: &crate::background::ImageAssets,
+    context: &Context,
     scale: f32,
 ) -> Option<Vec2> {
     let selected = image.for_scale(scale);
@@ -1782,11 +3385,12 @@ fn intrinsic_image_size(
             let size = images.size(url)?;
             vec2(size[0] as f32, size[1] as f32)
         }
+        crate::css::BackgroundImage::Element(id) => element_image(context, id)?.size,
         crate::css::BackgroundImage::CrossFade(cross_fade) => {
             let mut weighted_size = Vec2::ZERO;
             let mut total_weight = 0.0;
             for item in &cross_fade.items {
-                if let Some(size) = intrinsic_image_size(&item.image, images, scale) {
+                if let Some(size) = intrinsic_image_size(&item.image, images, context, scale) {
                     weighted_size += size * item.weight;
                     total_weight += item.weight;
                 }
@@ -1804,17 +3408,26 @@ fn intrinsic_image_size(
 }
 
 fn sample_image(
+    context: &Context,
     images: &crate::background::ImageAssets,
     image: &crate::css::BackgroundImage,
     scale: f32,
     u: f32,
     v: f32,
     area: Rect,
+    invalid_elements: &HashSet<String>,
 ) -> Color32 {
     match image.for_scale(scale) {
         crate::css::BackgroundImage::None | crate::css::BackgroundImage::ImageSet(_) => {
             Color32::TRANSPARENT
         }
+        crate::css::BackgroundImage::Element(id) if invalid_elements.contains(id) => {
+            Color32::TRANSPARENT
+        }
+        crate::css::BackgroundImage::Element(id) => element_image(context, id)
+            .map_or(Color32::TRANSPARENT, |image| {
+                sample_element_image(&image, u, v)
+            }),
         crate::css::BackgroundImage::SolidColor(color) => *color,
         crate::css::BackgroundImage::Url(url) => {
             let Some(image) = images.image(url) else {
@@ -1893,14 +3506,22 @@ fn sample_image(
             let normalization = total.max(1.0);
             let mut premultiplied = [0.0; 4];
             for item in &cross_fade.items {
-                let color = sample_image(images, &item.image, scale, u, v, area);
+                let color = sample_image(
+                    context,
+                    images,
+                    &item.image,
+                    scale,
+                    u,
+                    v,
+                    area,
+                    invalid_elements,
+                );
                 let color = color.to_array();
-                let alpha = f32::from(color[3]) / 255.0;
                 let weight = item.weight / normalization;
                 for channel in 0..3 {
-                    premultiplied[channel] += f32::from(color[channel]) / 255.0 * alpha * weight;
+                    premultiplied[channel] += f32::from(color[channel]) / 255.0 * weight;
                 }
-                premultiplied[3] += alpha * weight;
+                premultiplied[3] += f32::from(color[3]) / 255.0 * weight;
             }
             let alpha = premultiplied[3].clamp(0.0, 1.0);
             let channels: [u8; 3] = std::array::from_fn(|channel| {
@@ -1911,7 +3532,7 @@ fn sample_image(
                 };
                 (value.clamp(0.0, 1.0) * 255.0).round() as u8
             });
-            Color32::from_rgba_unmultiplied(
+            Color32::from_rgba_premultiplied(
                 channels[0],
                 channels[1],
                 channels[2],
@@ -1921,9 +3542,125 @@ fn sample_image(
     }
 }
 
+fn sample_element_image(image: &ElementImage, u: f32, v: f32) -> Color32 {
+    let point = pos2(u * image.size.x, v * image.size.y);
+    let mut output = [0.0; 4];
+    for mesh in &image.meshes {
+        for triangle in mesh.indices.chunks_exact(3) {
+            let vertices = [
+                &mesh.vertices[triangle[0] as usize],
+                &mesh.vertices[triangle[1] as usize],
+                &mesh.vertices[triangle[2] as usize],
+            ];
+            let Some(weights) =
+                barycentric_weights(point, vertices[0].pos, vertices[1].pos, vertices[2].pos)
+            else {
+                continue;
+            };
+            let uv = pos2(
+                vertices
+                    .iter()
+                    .zip(weights)
+                    .map(|(vertex, weight)| vertex.uv.x * weight)
+                    .sum(),
+                vertices
+                    .iter()
+                    .zip(weights)
+                    .map(|(vertex, weight)| vertex.uv.y * weight)
+                    .sum(),
+            );
+            let texture = image
+                .textures
+                .get(&mesh.texture_id)
+                .map_or(Color32::WHITE, |texture| sample_color_image(texture, uv));
+            let texture = texture.to_array();
+            let colors = vertices.map(|vertex| {
+                let color = vertex.color.to_array();
+                std::array::from_fn::<_, 4, _>(|channel| {
+                    (u16::from(color[channel]) * u16::from(texture[channel]) / 255) as u8
+                })
+            });
+            let source = std::array::from_fn::<_, 4, _>(|channel| {
+                colors
+                    .iter()
+                    .zip(weights)
+                    .map(|(color, weight)| f32::from(color[channel]) * weight / 255.0)
+                    .sum::<f32>()
+                    .clamp(0.0, 1.0)
+            });
+            let alpha = source[3];
+            for channel in 0..3 {
+                output[channel] = source[channel] + output[channel] * (1.0 - alpha);
+            }
+            output[3] = alpha + output[3] * (1.0 - alpha);
+        }
+    }
+    let alpha = output[3];
+    let channels = std::array::from_fn::<_, 3, _>(|channel| {
+        let value = if alpha > f32::EPSILON {
+            output[channel] / alpha
+        } else {
+            0.0
+        };
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    });
+    Color32::from_rgba_premultiplied(
+        channels[0],
+        channels[1],
+        channels[2],
+        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+fn sample_color_image(image: &egui::ColorImage, uv: Pos2) -> Color32 {
+    if image.size[0] == 0 || image.size[1] == 0 {
+        return Color32::TRANSPARENT;
+    }
+    let x = (uv.x.clamp(0.0, 1.0) * image.size[0] as f32 - 0.5)
+        .clamp(0.0, image.size[0].saturating_sub(1) as f32);
+    let y = (uv.y.clamp(0.0, 1.0) * image.size[1] as f32 - 0.5)
+        .clamp(0.0, image.size[1].saturating_sub(1) as f32);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(image.size[0] - 1);
+    let y1 = (y0 + 1).min(image.size[1] - 1);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+    let colors = [
+        image.pixels[y0 * image.size[0] + x0].to_array(),
+        image.pixels[y0 * image.size[0] + x1].to_array(),
+        image.pixels[y1 * image.size[0] + x0].to_array(),
+        image.pixels[y1 * image.size[0] + x1].to_array(),
+    ];
+    let values = std::array::from_fn::<_, 4, _>(|channel| {
+        let top = egui::emath::lerp(
+            f32::from(colors[0][channel])..=f32::from(colors[1][channel]),
+            tx,
+        );
+        let bottom = egui::emath::lerp(
+            f32::from(colors[2][channel])..=f32::from(colors[3][channel]),
+            tx,
+        );
+        egui::emath::lerp(top..=bottom, ty).round() as u8
+    });
+    Color32::from_rgba_premultiplied(values[0], values[1], values[2], values[3])
+}
+
+fn barycentric_weights(point: Pos2, a: Pos2, b: Pos2, c: Pos2) -> Option<[f32; 3]> {
+    let denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+    if denominator.abs() <= f32::EPSILON {
+        return None;
+    }
+    let first = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
+    let second = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
+    let third = 1.0 - first - second;
+    (first >= -1.0e-5 && second >= -1.0e-5 && third >= -1.0e-5).then_some([first, second, third])
+}
+
 fn linear_gradient_mesh(
     clip: Rect,
     paint_area: Rect,
+    sample_offset: Vec2,
     gradient: &crate::css::LinearGradient,
 ) -> egui::epaint::Mesh {
     use egui::epaint::{Mesh, Vertex};
@@ -1952,8 +3689,9 @@ fn linear_gradient_mesh(
                 egui::emath::lerp(clip.left()..=clip.right(), x as f32 / steps as f32),
                 egui::emath::lerp(clip.top()..=clip.bottom(), y as f32 / steps as f32),
             );
-            let t = ((point.to_vec2().dot(direction) - min) / (max - min).max(f32::EPSILON))
-                .clamp(0.0, 1.0);
+            let t = (((point + sample_offset).to_vec2().dot(direction) - min)
+                / (max - min).max(f32::EPSILON))
+            .clamp(0.0, 1.0);
             mesh.vertices.push(Vertex {
                 pos: point,
                 uv: Pos2::ZERO,
@@ -2038,6 +3776,7 @@ fn linear_gradient_slice_mesh(
 fn radial_gradient_mesh(
     clip: Rect,
     paint_area: Rect,
+    sample_offset: Vec2,
     gradient: &crate::css::RadialGradient,
 ) -> egui::epaint::Mesh {
     use egui::epaint::{Mesh, Vertex};
@@ -2056,7 +3795,7 @@ fn radial_gradient_mesh(
                 uv: Pos2::ZERO,
                 color: gradient_color(
                     &gradient.stops,
-                    radial_gradient_position(point, center, radii, corner_extent),
+                    radial_gradient_position(point + sample_offset, center, radii, corner_extent),
                     gradient.repeating,
                     gradient.color_space,
                 ),
@@ -2223,6 +3962,7 @@ fn radial_gradient_position(point: Pos2, center: Pos2, radii: Vec2, corner_exten
 fn conic_gradient_mesh(
     clip: Rect,
     paint_area: Rect,
+    sample_offset: Vec2,
     gradient: &crate::css::ConicGradient,
 ) -> egui::epaint::Mesh {
     use egui::epaint::{Mesh, Vertex};
@@ -2244,7 +3984,7 @@ fn conic_gradient_mesh(
                 uv: Pos2::ZERO,
                 color: gradient_color(
                     &gradient.stops,
-                    conic_gradient_position(point, center, gradient.from_angle),
+                    conic_gradient_position(point + sample_offset, center, gradient.from_angle),
                     gradient.repeating,
                     gradient.color_space,
                 ),
@@ -2545,6 +4285,7 @@ fn guess(style: &BoxStyle, available: Rect) -> Geometry {
         rules: Vec::new(),
         text_vertical: false,
         collapsed: None,
+        collapsed_segments: Vec::new(),
     }
 }
 
@@ -2694,6 +4435,7 @@ fn trim_child_margins(frame: &Frame, child: usize, style: &mut Style) {
             name,
             container.layout.direction,
             container.format.writing,
+            &container.format.text_orientation,
         )
         .unwrap();
         let zero = taffy::LengthPercentageAuto::length(0.0);
@@ -2892,12 +4634,35 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
                 },
                 color: node.style.border_colors[side].unwrap_or(node.color),
                 style: node.style.border_styles[side],
+                source_side: side,
+                stripes: node.style.border_stripes[side].as_ref().map(|stripes| {
+                    Arc::from(
+                        stripes
+                            .iter()
+                            .map(|stripe| crate::formatting::CollapsedBorderStripe {
+                                color: stripe.color.unwrap_or(node.color),
+                                thickness: match stripe.thickness {
+                                    crate::box_decoration::ClipPart::Length(value) => {
+                                        crate::formatting::CollapsedStripeThickness::Length(
+                                            value.resolve(node.style.border_widths[side]),
+                                        )
+                                    }
+                                    crate::box_decoration::ClipPart::Flex(value) => {
+                                        crate::formatting::CollapsedStripeThickness::Flex(value)
+                                    }
+                                },
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
                 draw: true,
                 priority: match node.style.format.display {
                     crate::formatting::DisplayKind::Table => 0,
                     crate::formatting::DisplayKind::RowGroup
                     | crate::formatting::DisplayKind::Header
                     | crate::formatting::DisplayKind::Footer => 3,
+                    crate::formatting::DisplayKind::ColumnGroup => 1,
+                    crate::formatting::DisplayKind::Column => 2,
                     crate::formatting::DisplayKind::Row => 4,
                     _ => 5,
                 },
@@ -3149,16 +4914,44 @@ fn solve(frame: &Frame, context: &Context) -> Cache {
                     .map(|rect| node.style.format.writing.rect(*rect, layout.size.width))
                     .collect(),
                 text_vertical: node.text.is_some() && node.style.format.writing.vertical(),
-                collapsed: tree.nodes[usize::from(ids[i])].collapsed.map(|e| {
+                collapsed: tree.nodes[usize::from(ids[i])].collapsed.clone().map(|e| {
                     let mode = tree.nodes[usize::from(ids[i])].layout_axes;
                     if !mode.vertical() {
                         e
                     } else if mode.reverse() {
-                        [e[3], e[0], e[1], e[2]]
+                        [e[3].clone(), e[0].clone(), e[1].clone(), e[2].clone()]
                     } else {
-                        [e[3], e[2], e[1], e[0]]
+                        [e[3].clone(), e[2].clone(), e[1].clone(), e[0].clone()]
                     }
                 }),
+                collapsed_segments: tree.nodes[usize::from(ids[i])]
+                    .collapsed_segments
+                    .iter()
+                    .map(|segment| {
+                        let mode = node.style.format.writing;
+                        let edges = if !mode.vertical() {
+                            segment.edges.clone()
+                        } else if mode.reverse() {
+                            [
+                                segment.edges[3].clone(),
+                                segment.edges[0].clone(),
+                                segment.edges[1].clone(),
+                                segment.edges[2].clone(),
+                            ]
+                        } else {
+                            [
+                                segment.edges[3].clone(),
+                                segment.edges[2].clone(),
+                                segment.edges[1].clone(),
+                                segment.edges[0].clone(),
+                            ]
+                        };
+                        let rect = mode
+                            .rect(segment.rect, layout.size.width)
+                            .translate(origin.to_vec2());
+                        crate::formatting::CollapsedBorderSegment { rect, edges }
+                    })
+                    .collect(),
             },
         );
     }
@@ -3173,7 +4966,7 @@ fn measure_text(
     measured: Vec2,
     format: &crate::formatting::Formatting,
 ) -> Option<TextMeasurement> {
-    fn collect(shape: &egui::Shape, text: &mut Vec<std::sync::Arc<egui::Galley>>) {
+    fn collect(shape: &egui::Shape, text: &mut Vec<Arc<egui::Galley>>) {
         match shape {
             egui::Shape::Text(shape) if shape.angle == 0.0 => text.push(shape.galley.clone()),
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, text)),
@@ -3192,6 +4985,16 @@ fn measure_text(
         Some(galley.clone())
     })?;
     let source = prepare_text_job(context, &galley.job, format);
+    let minimum = minimum_text_width(context, &source);
+    let extra = (measured - galley.size()).max(Vec2::ZERO);
+    Some(TextMeasurement {
+        job: source,
+        extra,
+        minimum,
+    })
+}
+
+fn minimum_text_width(context: &Context, source: &egui::text::LayoutJob) -> f32 {
     let mut minimum = 0.0_f32;
     let mut start = 0;
     for (end, _) in unicode_linebreak::linebreaks(&source.text) {
@@ -3219,11 +5022,176 @@ fn measure_text(
         minimum = minimum.max(context.fonts_mut(|fonts| fonts.layout_job(job).size().x));
         start = end;
     }
-    Some(TextMeasurement {
-        job: source,
-        extra: (measured - galley.size()).max(Vec2::ZERO),
-        minimum,
-    })
+    minimum
+}
+
+fn first_letter_range(text: &str) -> Option<std::ops::Range<usize>> {
+    let first_line = text.split_once('\n').map_or(text, |(line, _)| line);
+    let indices = first_line.char_indices().collect::<Vec<_>>();
+    let characters = indices
+        .iter()
+        .map(|(_, character)| *character)
+        .collect::<Vec<_>>();
+    let range = first_letter_character_range(&characters)?;
+    let start = indices[range.start].0;
+    let (last, character) = indices[range.end - 1];
+    Some(start..last + character.len_utf8())
+}
+
+fn first_text_descendant(frame: &Frame, index: usize) -> Option<usize> {
+    for child in &frame.nodes[index].children {
+        let node = &frame.nodes[*child];
+        if node
+            .text
+            .as_ref()
+            .is_some_and(|text| first_letter_range(&text.job.text).is_some())
+        {
+            return Some(*child);
+        }
+        if let Some(descendant) = first_text_descendant(frame, *child) {
+            return Some(descendant);
+        }
+    }
+    None
+}
+
+fn apply_first_letter_inline_spacing(
+    context: &Context,
+    job: &mut egui::text::LayoutJob,
+    style: &BoxStyle,
+    basis: f32,
+    writing: crate::formatting::Writing,
+    direction: taffy::Direction,
+) -> Option<(f32, f32)> {
+    let range = first_letter_range(&job.text)?;
+    let edge = |value: taffy::LengthPercentageAuto, basis: f32| {
+        crate::format_layout::raw(value.into_raw(), basis)
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0)
+    };
+    let margin = [
+        edge(style.layout.margin.top, basis),
+        edge(style.layout.margin.right, basis),
+        edge(style.layout.margin.bottom, basis),
+        edge(style.layout.margin.left, basis),
+    ];
+    let padding = [
+        edge(style.layout.padding.top.into(), basis).max(0.0),
+        edge(style.layout.padding.right.into(), basis).max(0.0),
+        edge(style.layout.padding.bottom.into(), basis).max(0.0),
+        edge(style.layout.padding.left.into(), basis).max(0.0),
+    ];
+    let border = style.layout.border.map(|value| {
+        resolve(value.into_raw(), 0.0)
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0)
+    });
+    let border_widths = [border.top, border.right, border.bottom, border.left];
+    let border: [f32; 4] = std::array::from_fn(|side| {
+        if matches!(
+            style.border_styles[side],
+            crate::layout_style::BorderStyle::None | crate::layout_style::BorderStyle::Hidden
+        ) {
+            0.0
+        } else {
+            border_widths[side]
+        }
+    });
+    let edges = std::array::from_fn::<_, 4, _>(|side| margin[side] + padding[side] + border[side]);
+    let direction = if writing.vertical()
+        && style
+            .format
+            .text_orientation
+            .eq_ignore_ascii_case("upright")
+    {
+        taffy::Direction::Ltr
+    } else {
+        direction
+    };
+    let (start_side, end_side, block_edges) = if writing.vertical() {
+        if direction == taffy::Direction::Rtl {
+            (2, 0, [1, 3])
+        } else {
+            (0, 2, [1, 3])
+        }
+    } else if direction == taffy::Direction::Rtl {
+        (1, 3, [0, 2])
+    } else {
+        (3, 1, [0, 2])
+    };
+    let start_spacing = edges[start_side];
+    let end_spacing = edges[end_side];
+    if !start_spacing.is_finite() || !end_spacing.is_finite() {
+        return None;
+    }
+    let block_extent = if writing.vertical() {
+        block_edges
+            .iter()
+            .map(|side| padding[*side] + border[*side])
+            .sum::<f32>()
+    } else {
+        0.0
+    };
+    if start_spacing == 0.0 && end_spacing == 0.0 && block_extent == 0.0 {
+        return Some((0.0, 0.0));
+    }
+
+    let mut sections = Vec::with_capacity(job.sections.len() + 2);
+    for section in job.sections.drain(..) {
+        let start = section.byte_range.start.0;
+        let end = section.byte_range.end.0;
+        let mut boundaries = vec![start];
+        for boundary in [range.start, range.end] {
+            if start < boundary && boundary < end {
+                boundaries.push(boundary);
+            }
+        }
+        boundaries.push(end);
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        if start == end {
+            sections.push(section);
+            continue;
+        }
+        for (index, bounds) in boundaries.windows(2).enumerate() {
+            let mut part = section.clone();
+            part.byte_range = egui::text::ByteIndex(bounds[0])..egui::text::ByteIndex(bounds[1]);
+            if index > 0 {
+                part.leading_space = 0.0;
+            }
+            sections.push(part);
+        }
+    }
+    if let Some(section) = sections
+        .iter_mut()
+        .find(|section| section.byte_range.start.0 == range.start)
+    {
+        section.leading_space += start_spacing;
+        if writing.vertical() {
+            if block_extent > 0.0 {
+                let line_height = section.format.line_height.unwrap_or_else(|| {
+                    context.fonts_mut(|fonts| fonts.row_height(&section.format.font_id))
+                });
+                section.format.line_height = Some(line_height + block_extent);
+            }
+        }
+    }
+    let mut trailing = 0.0;
+    if range.end < job.text.len() {
+        if let Some(section) = sections
+            .iter_mut()
+            .find(|section| section.byte_range.start.0 == range.end)
+        {
+            section.leading_space += end_spacing;
+        } else {
+            trailing = end_spacing;
+        }
+    } else {
+        trailing = end_spacing;
+    }
+    job.sections = sections;
+    Some((trailing, start_spacing + end_spacing))
 }
 
 fn prepare_text_job(
@@ -3392,6 +5360,27 @@ fn clip_shape_to_paths(
         .collect()
 }
 
+fn inline_slice_offsets(surfaces: &[Rect], vertical: bool, forward: bool) -> Vec<Vec2> {
+    let axis = usize::from(vertical);
+    let cross_axis = 1 - axis;
+    let mut advance = 0.0;
+    let cross_center = surfaces
+        .first()
+        .map_or(0.0, |surface| surface.center()[cross_axis]);
+    surfaces
+        .iter()
+        .map(|surface| {
+            let extent = surface.size()[axis];
+            let target_start = if forward { advance } else { -advance - extent };
+            let mut offset = Vec2::ZERO;
+            offset[axis] = target_start - surface.min[axis];
+            offset[cross_axis] = cross_center - surface.center()[cross_axis];
+            advance += extent;
+            offset
+        })
+        .collect()
+}
+
 fn fragment_shadow_clip(
     surface: Rect,
     mut clip: Rect,
@@ -3468,18 +5457,6 @@ fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
         .border
         .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
     let widths = [widths.top, widths.right, widths.bottom, widths.left];
-    if let Some(border_shape) = &node.style.decorations.border_shape {
-        let (paths, fill_rule) = border_shape.background_paths(
-            paint.geometry.border,
-            crate::css::BackgroundClip::Padding,
-            paint.geometry.stroke,
-            paint.geometry.padding,
-            paint.geometry.margin,
-            widths,
-        );
-        return Some(crate::box_decoration::path_clip(paths, fill_rule));
-    }
-
     let mut overflow_x = node.style.layout.overflow.x;
     let mut overflow_y = node.style.layout.overflow.y;
     if overflow_x == Overflow::Visible && !matches!(overflow_y, Overflow::Visible | Overflow::Clip)
@@ -3498,6 +5475,34 @@ fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
     }
     if overflow_x == Overflow::Visible || overflow_y == Overflow::Visible {
         return None;
+    }
+    if let Some(border_shape) = &node.style.decorations.border_shape {
+        let (clip, outset) = if node.style.layout.overflow.x == Overflow::Clip
+            && node.style.layout.overflow.y == Overflow::Clip
+        {
+            let clip = match node.style.overflow_clip_box {
+                crate::layout_style::OverflowClipBox::Content => {
+                    crate::css::BackgroundClip::Content
+                }
+                crate::layout_style::OverflowClipBox::Padding => {
+                    crate::css::BackgroundClip::Padding
+                }
+                crate::layout_style::OverflowClipBox::Border => crate::css::BackgroundClip::Border,
+            };
+            (clip, node.style.overflow_clip_margin[0])
+        } else {
+            (crate::css::BackgroundClip::Padding, 0.0)
+        };
+        let (paths, fill_rule) = border_shape.overflow_paths(
+            paint.geometry.border,
+            clip,
+            paint.geometry.stroke,
+            paint.geometry.padding,
+            paint.geometry.margin,
+            widths,
+            outset,
+        );
+        return Some(crate::box_decoration::path_clip(paths, fill_rule));
     }
     let border = paint.geometry.border;
     let (clip_rect, edge_rect, inset, outset) = if node.style.layout.overflow.x == Overflow::Clip
@@ -3534,54 +5539,35 @@ fn border_content_clip(node: &Node) -> Option<crate::box_decoration::PathClip> {
         let rect = border - paint.geometry.stroke;
         (rect, rect, paint.geometry.stroke, [0.0; 4])
     };
-    let mut radii = crate::box_decoration::resolved_radii(&node.style, border);
+    let collapsed = paint.geometry.collapsed.is_some();
+    let mut radii = if collapsed {
+        [Vec2::ZERO; 4]
+    } else {
+        crate::box_decoration::resolved_radii(&node.style, border)
+    };
     radii[0] -= vec2(inset.left, inset.top);
     radii[1] -= vec2(inset.right, inset.top);
     radii[2] -= vec2(inset.right, inset.bottom);
     radii[3] -= vec2(inset.left, inset.bottom);
     radii = radii.map(|radius| radius.max(Vec2::ZERO));
     if outset.iter().any(|margin| *margin > 0.0) {
-        radii = outset_radii(edge_rect, radii, outset);
+        radii = crate::box_decoration::outset_radii(edge_rect, radii, outset);
     }
     if radii.iter().all(|radius| radius.max_elem() <= 0.0)
         && outset.iter().all(|margin| *margin <= 0.0)
     {
         return None;
     }
-    let path =
-        crate::box_decoration::rounded_path(clip_rect, radii, node.style.decorations.corner_shapes);
+    let shapes = if collapsed {
+        [crate::box_decoration::CornerShape::Round; 4]
+    } else {
+        node.style.decorations.corner_shapes
+    };
+    let path = crate::box_decoration::rounded_path(clip_rect, radii, shapes);
     Some(crate::box_decoration::path_clip(
         vec![path],
         crate::box_decoration::FillRule::Nonzero,
     ))
-}
-
-fn outset_radii(rect: Rect, radii: [Vec2; 4], outset: [f32; 4]) -> [Vec2; 4] {
-    let coverage = radii.map(|radius| {
-        (2.0 * (radius.x / rect.width().max(f32::EPSILON))
-            .min(radius.y / rect.height().max(f32::EPSILON)))
-        .max(0.0)
-    });
-    std::array::from_fn(|corner| {
-        let (horizontal, vertical) = match corner {
-            0 => (outset[3], outset[0]),
-            1 => (outset[1], outset[0]),
-            2 => (outset[1], outset[2]),
-            _ => (outset[3], outset[2]),
-        };
-        let adjusted = |radius: f32, amount: f32| {
-            if amount <= 0.0 || radius > amount || coverage[corner] > 1.0 {
-                radius + amount
-            } else {
-                let ratio = radius / amount;
-                radius + amount * (1.0 - (1.0 - ratio).powi(3) * (1.0 - coverage[corner].powi(3)))
-            }
-        };
-        vec2(
-            adjusted(radii[corner].x, horizontal),
-            adjusted(radii[corner].y, vertical),
-        )
-    })
 }
 
 fn clip_painted_entry(
@@ -3705,13 +5691,28 @@ fn border_image_shapes(
     style: &BoxStyle,
     images: &crate::background::ImageAssets,
     context: &Context,
+    invalid_elements: &HashSet<String>,
 ) -> Option<Vec<egui::Shape>> {
+    if style.format.collapse
+        && matches!(
+            style.format.display,
+            crate::formatting::DisplayKind::Row
+                | crate::formatting::DisplayKind::Cell
+                | crate::formatting::DisplayKind::RowGroup
+                | crate::formatting::DisplayKind::Header
+                | crate::formatting::DisplayKind::Footer
+                | crate::formatting::DisplayKind::Column
+                | crate::formatting::DisplayKind::ColumnGroup
+        )
+    {
+        return None;
+    }
     let image = &style.decorations.border_image;
     let source = image.source.for_scale(context.pixels_per_point());
-    if let crate::css::BackgroundImage::SolidColor(color) = source {
-        return Some(solid_color_border_image_shapes(
-            border, style, image, *color,
-        ));
+    if let crate::css::BackgroundImage::Element(id) = source
+        && invalid_elements.contains(id)
+    {
+        return None;
     }
     let auto_slice_density = match source {
         crate::css::BackgroundImage::Url(_) => Some(
@@ -3719,95 +5720,106 @@ fn border_image_shapes(
                 .source
                 .resolution_for_scale(context.pixels_per_point()),
         ),
+        crate::css::BackgroundImage::Element(_) => Some(1.0),
         crate::css::BackgroundImage::CrossFade(_)
-            if intrinsic_image_size(source, images, context.pixels_per_point()).is_some() =>
+            if intrinsic_image_size(source, images, context, context.pixels_per_point())
+                .is_some() =>
         {
             Some(context.pixels_per_point())
         }
         _ => None,
     };
-    let border_widths = style
-        .layout
-        .border
-        .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-    let widths = [
-        border_widths.top,
-        border_widths.right,
-        border_widths.bottom,
-        border_widths.left,
-    ];
-    let outset = std::array::from_fn::<_, 4, _>(|side| match image.outset[side] {
-        crate::box_decoration::ImageOutset::LengthZero => 0.0,
-        crate::box_decoration::ImageOutset::Length(value) => value,
-        crate::box_decoration::ImageOutset::Number(value) => value * widths[side],
-    });
-    let area = border
-        + egui::epaint::MarginF32 {
-            top: outset[0],
-            right: outset[1],
-            bottom: outset[2],
-            left: outset[3],
-        };
-    let (texture, image_width, image_height, gradient, radial_gradient, conic_gradient) =
-        match source {
-            crate::css::BackgroundImage::Url(url) => {
-                let texture = images.texture(context, url)?;
-                let size = images.size(url)?;
-                (
-                    Some(texture),
-                    size[0] as f32,
-                    size[1] as f32,
-                    None,
-                    None,
-                    None,
-                )
-            }
-            crate::css::BackgroundImage::LinearGradient(gradient) => (
-                None,
-                area.width(),
-                area.height(),
-                Some(gradient),
+    let source_element = match source {
+        crate::css::BackgroundImage::Element(id) => element_image(context, id),
+        _ => None,
+    };
+    let widths = style.border_widths;
+    let outset = border_image_outset(style);
+    let area = border + outset;
+    let (
+        texture,
+        image_width,
+        image_height,
+        gradient,
+        radial_gradient,
+        conic_gradient,
+        solid_color,
+    ) = match source {
+        crate::css::BackgroundImage::SolidColor(color) => (
+            None,
+            area.width(),
+            area.height(),
+            None,
+            None,
+            None,
+            Some(*color),
+        ),
+        crate::css::BackgroundImage::Url(url) => {
+            let (texture, size) = images.border_image_texture(context, url, area.size())?;
+            (
+                Some(texture),
+                size[0] as f32,
+                size[1] as f32,
                 None,
                 None,
-            ),
-            crate::css::BackgroundImage::RadialGradient(gradient) => (
-                None,
-                area.width(),
-                area.height(),
-                None,
-                Some(gradient),
-                None,
-            ),
-            crate::css::BackgroundImage::ConicGradient(gradient) => (
-                None,
-                area.width(),
-                area.height(),
                 None,
                 None,
-                Some(gradient),
-            ),
-            crate::css::BackgroundImage::CrossFade(_) => {
-                let (texture, _) = cross_fade_texture(
-                    context,
-                    images,
-                    source,
-                    area.size(),
-                    context.pixels_per_point(),
-                )?;
-                let size = texture.size();
-                (
-                    Some(texture),
-                    size[0] as f32,
-                    size[1] as f32,
-                    None,
-                    None,
-                    None,
-                )
-            }
-            crate::css::BackgroundImage::SolidColor(_) => unreachable!(),
-            crate::css::BackgroundImage::None => return None,
-            crate::css::BackgroundImage::ImageSet(_) => return None,
-        };
+            )
+        }
+        crate::css::BackgroundImage::Element(_) => {
+            let element = source_element.as_ref()?;
+            (None, element.size.x, element.size.y, None, None, None, None)
+        }
+        crate::css::BackgroundImage::LinearGradient(gradient) => (
+            None,
+            area.width(),
+            area.height(),
+            Some(gradient),
+            None,
+            None,
+            None,
+        ),
+        crate::css::BackgroundImage::RadialGradient(gradient) => (
+            None,
+            area.width(),
+            area.height(),
+            None,
+            Some(gradient),
+            None,
+            None,
+        ),
+        crate::css::BackgroundImage::ConicGradient(gradient) => (
+            None,
+            area.width(),
+            area.height(),
+            None,
+            None,
+            Some(gradient),
+            None,
+        ),
+        crate::css::BackgroundImage::CrossFade(_) => {
+            let (texture, _) = cross_fade_texture(
+                context,
+                images,
+                source,
+                area.size(),
+                context.pixels_per_point(),
+                invalid_elements,
+            )?;
+            let size = texture.size();
+            (
+                Some(texture),
+                size[0] as f32,
+                size[1] as f32,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        crate::css::BackgroundImage::None => return None,
+        crate::css::BackgroundImage::ImageSet(_) => return None,
+    };
     if image_width <= 0.0 || image_height <= 0.0 {
         return None;
     }
@@ -3820,6 +5832,9 @@ fn border_image_shapes(
         match image.slice[side] {
             crate::box_decoration::ImageSlice::Number(value) => value,
             crate::box_decoration::ImageSlice::Percentage(value) => value * extent,
+            crate::box_decoration::ImageSlice::PercentageCalc(handle) => {
+                crate::math::resolve(handle, extent)
+            }
         }
         .min(extent)
     });
@@ -3975,7 +5990,13 @@ fn border_image_shapes(
                                     * source.height(),
                         )
                     };
-                    if let Some(texture) = &texture {
+                    if let Some(color) = solid_color {
+                        shapes.push(egui::Shape::rect_filled(
+                            visible,
+                            egui::CornerRadius::ZERO,
+                            color,
+                        ));
+                    } else if let Some(texture) = &texture {
                         let uv = Rect::from_min_max(
                             pos2(u0 / image_width, v0 / image_height),
                             pos2(u1 / image_width, v1 / image_height),
@@ -3985,6 +6006,12 @@ fn border_image_shapes(
                             visible,
                             uv,
                             Color32::WHITE,
+                        ));
+                    } else if let Some(element) = &source_element {
+                        shapes.extend(element_slice_shapes(
+                            element,
+                            Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)),
+                            visible,
                         ));
                     } else if let Some(gradient) = gradient {
                         let source = Rect::from_min_max(pos2(u0, v0), pos2(u1, v1));
@@ -4027,75 +6054,56 @@ fn border_image_shapes(
     Some(shapes)
 }
 
-fn solid_color_border_image_shapes(
+fn border_image_outset(style: &BoxStyle) -> egui::epaint::MarginF32 {
+    let widths = style.border_widths;
+    let outset =
+        std::array::from_fn::<_, 4, _>(|side| match style.decorations.border_image.outset[side] {
+            crate::box_decoration::ImageOutset::LengthZero => 0.0,
+            crate::box_decoration::ImageOutset::Length(value) => value,
+            crate::box_decoration::ImageOutset::Number(value) => value * widths[side],
+        });
+    egui::epaint::MarginF32 {
+        top: outset[0],
+        right: outset[1],
+        bottom: outset[2],
+        left: outset[3],
+    }
+}
+
+fn clip_border_image_shapes(
+    context: &Context,
     border: Rect,
     style: &BoxStyle,
-    image: &crate::box_decoration::BorderImage,
-    color: Color32,
+    stroke: egui::epaint::MarginF32,
+    padding: egui::epaint::MarginF32,
+    margin: egui::epaint::MarginF32,
+    shapes: Vec<egui::Shape>,
 ) -> Vec<egui::Shape> {
-    let widths = style
+    let Some(border_shape) = &style.decorations.border_shape else {
+        return shapes;
+    };
+    let border_widths = style
         .layout
         .border
         .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
-    let widths = [widths.top, widths.right, widths.bottom, widths.left];
-    let outset = std::array::from_fn::<_, 4, _>(|side| match image.outset[side] {
-        crate::box_decoration::ImageOutset::LengthZero => 0.0,
-        crate::box_decoration::ImageOutset::Length(value) => value,
-        crate::box_decoration::ImageOutset::Number(value) => value * widths[side],
-    });
-    let area = border
-        + egui::epaint::MarginF32 {
-            top: outset[0],
-            right: outset[1],
-            bottom: outset[2],
-            left: outset[3],
-        };
-    let width_for = |side: usize| match image.width[side] {
-        crate::box_decoration::ImageWidth::NumberOne => widths[side],
-        crate::box_decoration::ImageWidth::Number(value) => value * widths[side],
-        crate::box_decoration::ImageWidth::Auto => widths[side],
-        crate::box_decoration::ImageWidth::Length(value) => value.resolve(if side % 2 == 0 {
-            area.height()
-        } else {
-            area.width()
-        }),
-    };
-    let mut draw_widths = [width_for(0), width_for(1), width_for(2), width_for(3)];
-    let factor = (area.width() / (draw_widths[1] + draw_widths[3]).max(0.001))
-        .min(area.height() / (draw_widths[0] + draw_widths[2]).max(0.001))
-        .min(1.0);
-    if factor < 1.0 {
-        draw_widths.iter_mut().for_each(|value| *value *= factor);
-    }
-    let x = [
-        area.left(),
-        area.left() + draw_widths[3],
-        area.right() - draw_widths[1],
-        area.right(),
-    ];
-    let y = [
-        area.top(),
-        area.top() + draw_widths[0],
-        area.bottom() - draw_widths[2],
-        area.bottom(),
-    ];
-    let mut shapes = Vec::new();
-    for row in 0..3 {
-        for column in 0..3 {
-            if row == 1 && column == 1 && !image.fill {
-                continue;
-            }
-            let rect = Rect::from_min_max(pos2(x[column], y[row]), pos2(x[column + 1], y[row + 1]));
-            if rect.is_positive() {
-                shapes.push(egui::Shape::rect_filled(
-                    rect,
-                    egui::CornerRadius::ZERO,
-                    color,
-                ));
-            }
-        }
-    }
+    let (paths, fill_rule) = border_shape.background_paths(
+        border,
+        crate::css::BackgroundClip::Border,
+        stroke,
+        padding,
+        margin,
+        [
+            border_widths.top,
+            border_widths.right,
+            border_widths.bottom,
+            border_widths.left,
+        ],
+    );
+    let clip = crate::box_decoration::path_clip(paths, fill_rule);
     shapes
+        .into_iter()
+        .flat_map(|shape| clip_shape_to_paths(context, shape, &clip))
+        .collect()
 }
 
 fn image_tiles(
@@ -4140,6 +6148,62 @@ fn image_tiles(
         .collect()
 }
 
+fn collapsed_border_shapes(
+    rect: Rect,
+    style: &BoxStyle,
+    edges: &[crate::formatting::CollapsedBorder; 4],
+    current: Color32,
+) -> Vec<egui::Shape> {
+    let mut paint_style = style.clone();
+    let widths: [f32; 4] = std::array::from_fn(|side| edges[side].width);
+    let surface = rect
+        + egui::epaint::MarginF32 {
+            top: widths[0] * 0.5,
+            right: widths[1] * 0.5,
+            bottom: widths[2] * 0.5,
+            left: widths[3] * 0.5,
+        };
+    paint_style.layout.border = taffy::Rect {
+        top: length(widths[0]),
+        right: length(widths[1]),
+        bottom: length(widths[2]),
+        left: length(widths[3]),
+    };
+    paint_style.border_colors = std::array::from_fn(|side| Some(edges[side].color));
+    paint_style.border_stripes = std::array::from_fn(|side| {
+        edges[side].stripes.as_ref().map(|stripes| {
+            let mut stripes = stripes.iter().collect::<Vec<_>>();
+            if edges[side].source_side != side {
+                stripes.reverse();
+            }
+            stripes
+                .into_iter()
+                .map(|stripe| crate::box_decoration::BorderStripe {
+                    color: Some(stripe.color),
+                    thickness: match stripe.thickness {
+                        crate::formatting::CollapsedStripeThickness::Length(value) => {
+                            crate::box_decoration::ClipPart::Length(
+                                crate::box_decoration::LengthPercentage::Length(value),
+                            )
+                        }
+                        crate::formatting::CollapsedStripeThickness::Flex(value) => {
+                            crate::box_decoration::ClipPart::Flex(value)
+                        }
+                    },
+                })
+                .collect()
+        })
+    });
+    paint_style.border_styles = std::array::from_fn(|side| {
+        if edges[side].draw {
+            edges[side].style
+        } else {
+            BorderStyle::None
+        }
+    });
+    border_shapes(surface, &paint_style, current)
+}
+
 fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Shape> {
     let widths = style
         .layout
@@ -4161,23 +6225,48 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
     let mut shapes = Vec::new();
     let mut side_distance = [0.0_f32; 4];
     let mut side_lengths = [0.0_f32; 4];
+    let border_widths = [widths.top, widths.right, widths.bottom, widths.left];
+    let mut segments = Vec::new();
     for index in 0..corners.len() {
-        let within = index % 9;
-        let side = [[3, 0], [0, 1], [1, 2], [2, 3]][index / 9][usize::from(within >= 4)];
-        side_lengths[side] += corners[index].distance(corners[(index + 1) % corners.len()]);
-    }
-    for index in 0..corners.len() {
-        let next = (index + 1) % corners.len();
         let corner = index / 9;
         let within = index % 9;
-        let side = [[3, 0], [0, 1], [1, 2], [2, 3]][corner][usize::from(within >= 4)];
+        let [first_side, second_side] = [[3, 0], [0, 1], [1, 2], [2, 3]][corner];
+        if within == 8 {
+            segments.push((index, second_side, 0.0, 1.0));
+            continue;
+        }
+        let total_width = border_widths[first_side] + border_widths[second_side];
+        let split = if total_width > 0.0 {
+            border_widths[first_side] / total_width
+        } else {
+            0.5
+        };
+        let parameter_start = within as f32 / 8.0;
+        let parameter_end = (within + 1) as f32 / 8.0;
+        if split > parameter_start {
+            let end = split.min(parameter_end);
+            segments.push((index, first_side, 0.0, (end - parameter_start) * 8.0));
+        }
+        if split < parameter_end {
+            let start = split.max(parameter_start);
+            segments.push((index, second_side, (start - parameter_start) * 8.0, 1.0));
+        }
+    }
+    for (index, side, from, to) in &segments {
+        let distance = corners[*index].distance(corners[(*index + 1) % corners.len()]);
+        side_lengths[*side] += distance * (*to - *from);
+    }
+    for (index, side, part_start, part_end) in segments {
+        let next = (index + 1) % corners.len();
+        let within = index % 9;
         let width = [widths.top, widths.right, widths.bottom, widths.left][side];
         let distance = corners[index].distance(corners[next]);
+        let segment_distance = distance * (part_end - part_start);
         let segment_start = side_distance[side];
-        let segment_end = segment_start + distance;
+        let segment_end = segment_start + segment_distance;
         side_distance[side] = segment_end;
         if width <= 0.0
-            || distance <= 0.001
+            || segment_distance <= 0.001
             || matches!(
                 style.border_styles[side],
                 BorderStyle::None | BorderStyle::Hidden
@@ -4186,10 +6275,16 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
             continue;
         }
         let in_corner = within != 8;
+        let percentage_basis = if side % 2 == 0 {
+            rect.width()
+        } else {
+            rect.height()
+        };
         let mut visible = crate::box_decoration::limit_intervals(
             style.decorations.border_limit,
             side,
             side_lengths[side],
+            percentage_basis,
             in_corner,
         );
         if let Some(clips) = &style.decorations.border_clips[side] {
@@ -4216,8 +6311,10 @@ fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Sh
                 let start = start.max(segment_start);
                 let end = end.min(segment_end);
                 (end > start).then_some((
-                    (start - segment_start) / distance,
-                    (end - segment_start) / distance,
+                    part_start
+                        + (part_end - part_start) * ((start - segment_start) / segment_distance),
+                    part_start
+                        + (part_end - part_start) * ((end - segment_start) / segment_distance),
                 ))
             })
             .collect();
@@ -4409,7 +6506,12 @@ fn relevant_border_side(style: &BoxStyle) -> usize {
     ["block-start", "inline-start", "block-end", "inline-end"]
         .into_iter()
         .filter_map(|name| {
-            crate::layout_style::logical_side(name, style.layout.direction, style.format.writing)
+            crate::layout_style::logical_side(
+                name,
+                style.layout.direction,
+                style.format.writing,
+                &style.format.text_orientation,
+            )
         })
         .find(|side| !matches!(style.border_styles[*side], BorderStyle::None))
         .or_else(|| {
@@ -4417,6 +6519,7 @@ fn relevant_border_side(style: &BoxStyle) -> usize {
                 "block-start",
                 style.layout.direction,
                 style.format.writing,
+                &style.format.text_orientation,
             )
         })
         .unwrap_or(0)
@@ -4506,7 +6609,7 @@ fn border_stripe_bands(
         let thickness = match stripe.thickness {
             crate::box_decoration::ClipPart::Length(value) => value.resolve(width).max(0.0),
             crate::box_decoration::ClipPart::Flex(weight) if flex > 0.0 => {
-                distributable * weight / flex
+                distributable * weight / flex.max(1.0)
             }
             crate::box_decoration::ClipPart::Flex(_) => 0.0,
         };
@@ -4517,6 +6620,10 @@ fn border_stripe_bands(
         inset = end;
     }
     bands
+        .into_iter()
+        .rev()
+        .map(|(start, end, color)| (1.0 - end, 1.0 - start, color))
+        .collect()
 }
 
 fn slice_job(job: &egui::text::LayoutJob, range: egui::text::ByteRange) -> egui::text::LayoutJob {

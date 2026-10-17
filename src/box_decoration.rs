@@ -85,6 +85,7 @@ pub(crate) enum BorderLimit {
 pub(crate) enum ImageSlice {
     Number(f32),
     Percentage(f32),
+    PercentageCalc(*const ()),
 }
 
 impl Default for ImageSlice {
@@ -350,6 +351,25 @@ impl BorderShape {
         };
         let shape = &self.shapes[0].0;
         (shape.paths(rect), shape.fill_rule())
+    }
+
+    pub(crate) fn overflow_paths(
+        &self,
+        border: Rect,
+        clip: crate::css::BackgroundClip,
+        stroke: egui::epaint::MarginF32,
+        padding: egui::epaint::MarginF32,
+        margin: egui::epaint::MarginF32,
+        widths: [f32; 4],
+        outset: f32,
+    ) -> (Vec<Vec<Pos2>>, FillRule) {
+        let (paths, fill_rule) =
+            self.background_paths(border, clip, stroke, padding, margin, widths);
+        if outset > 0.0 {
+            (offset_filled_paths(&paths, fill_rule, outset), fill_rule)
+        } else {
+            (paths, fill_rule)
+        }
     }
 
     pub(crate) fn background_is_convex(&self, clip: crate::css::BackgroundClip) -> bool {
@@ -912,7 +932,7 @@ pub(crate) fn apply(
     if name == "corner-shape" {
         let values = quad(&values)?;
         for (index, value) in values.iter().enumerate() {
-            style.decorations.corner_shapes[index] = corner_shape(value)?;
+            style.decorations.corner_shapes[index] = corner_shape(value, units)?;
         }
         return Ok(true);
     }
@@ -927,10 +947,10 @@ pub(crate) fn apply(
         let values = if is_corner_side(name) {
             pair(&values)?
                 .into_iter()
-                .map(|value| corner_shape(&value))
+                .map(|value| corner_shape(&value, units))
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            vec![corner_shape(value)?]
+            vec![corner_shape(value, units)?]
         };
         let indices = shape_corners(name, style);
         for (position, index) in indices.into_iter().enumerate() {
@@ -978,12 +998,17 @@ fn parse_border_shape(
         return Ok(None);
     }
     let mut shapes = Vec::new();
+    let mut geometry_seen = false;
     for value in values {
         if let Some(geometry) = geometry_box(value) {
+            if geometry_seen {
+                return Err("duplicate border-shape geometry box");
+            }
             let Some((_, existing)) = shapes.last_mut() else {
                 return Err("border-shape geometry box needs a preceding shape");
             };
             *existing = geometry;
+            geometry_seen = true;
             continue;
         }
         if shapes.len() == 2 {
@@ -998,6 +1023,7 @@ fn parse_border_shape(
             _ => GeometryBox::Padding,
         };
         shapes.push((shape, default_box));
+        geometry_seen = false;
     }
     if shapes.is_empty() {
         return Err("border-shape requires a shape or none");
@@ -1972,7 +1998,7 @@ fn apply_corner_shorthand(
     let mut shapes = Vec::new();
     let mut radii = Vec::new();
     for value in values {
-        if let Ok(shape) = corner_shape(value) {
+        if let Ok(shape) = corner_shape(value, units) {
             shapes.push(shape);
         } else {
             radii.push(value.clone());
@@ -2166,7 +2192,7 @@ pub(crate) fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) -
 }
 
 pub(crate) fn resolved_radii(style: &BoxStyle, rect: Rect) -> [Vec2; 4] {
-    let mut radii = std::array::from_fn(|index| {
+    let radii = std::array::from_fn(|index| {
         let radius = style.decorations.radii[index];
         vec2(
             radius.x.resolve(rect.width()).max(0.0),
@@ -2187,12 +2213,166 @@ pub(crate) fn resolved_radii(style: &BoxStyle, rect: Rect) -> [Vec2; 4] {
         .map(|(sum, length)| length / *sum)
         .fold(1.0_f32, f32::min)
         .min(1.0);
-    if scale < 1.0 {
-        for radius in &mut radii {
-            *radius *= scale;
+    let radii = radii.map(|radius| radius * scale);
+    let opposite_scale = if style
+        .decorations
+        .corner_shapes
+        .iter()
+        .any(|shape| shape.parameter_is_concave())
+    {
+        opposite_corner_scale(rect, radii, style.decorations.corner_shapes, [0, 2]).min(
+            opposite_corner_scale(rect, radii, style.decorations.corner_shapes, [1, 3]),
+        )
+    } else {
+        1.0
+    };
+    radii.map(|radius| radius * opposite_scale)
+}
+
+pub(crate) fn outset_radii(rect: Rect, radii: [Vec2; 4], outset: [f32; 4]) -> [Vec2; 4] {
+    let coverage = radii.map(|radius| {
+        (2.0 * (radius.x / rect.width().max(f32::EPSILON))
+            .min(radius.y / rect.height().max(f32::EPSILON)))
+        .max(0.0)
+    });
+    std::array::from_fn(|corner| {
+        let (horizontal, vertical) = match corner {
+            0 => (outset[3], outset[0]),
+            1 => (outset[1], outset[0]),
+            2 => (outset[1], outset[2]),
+            _ => (outset[3], outset[2]),
+        };
+        let adjusted = |radius: f32, amount: f32| {
+            if amount <= 0.0 || radius > amount || coverage[corner] > 1.0 {
+                radius + amount
+            } else {
+                let ratio = radius / amount;
+                radius + amount * (1.0 - (1.0 - ratio).powi(3) * (1.0 - coverage[corner].powi(3)))
+            }
+        };
+        vec2(
+            adjusted(radii[corner].x, horizontal),
+            adjusted(radii[corner].y, vertical),
+        )
+    })
+}
+
+fn opposite_corner_scale(
+    rect: Rect,
+    radii: [Vec2; 4],
+    shapes: [CornerShape; 4],
+    corners: [usize; 2],
+) -> f32 {
+    let first = corner_hull(rect, radii[corners[0]], shapes[corners[0]], corners[0]);
+    let second = corner_hull(rect, radii[corners[1]], shapes[corners[1]], corners[1]);
+    if !convex_polygons_overlap(&first, &second) {
+        return 1.0;
+    }
+
+    let mut lower = 0.0;
+    let mut upper = 1.0;
+    for _ in 0..24 {
+        let scale = (lower + upper) * 0.5;
+        let first = corner_hull(
+            rect,
+            radii[corners[0]] * scale,
+            shapes[corners[0]],
+            corners[0],
+        );
+        let second = corner_hull(
+            rect,
+            radii[corners[1]] * scale,
+            shapes[corners[1]],
+            corners[1],
+        );
+        if convex_polygons_overlap(&first, &second) {
+            upper = scale;
+        } else {
+            lower = scale;
         }
     }
-    radii
+    lower
+}
+
+fn corner_hull(rect: Rect, radius: Vec2, shape: CornerShape, corner: usize) -> Vec<Pos2> {
+    if radius.x <= 0.0 || radius.y <= 0.0 {
+        return Vec::new();
+    }
+    let k = shape.parameter();
+    let mut hull = if k >= 0.0 {
+        vec![pos2(1.0, 1.0), pos2(1.0, 0.0), pos2(0.0, 1.0)]
+    } else {
+        let half = if k == f32::NEG_INFINITY {
+            0.0
+        } else {
+            1.0 - 0.51 / (2.0 * k.abs())
+        };
+        vec![
+            pos2(1.0, 1.0),
+            pos2(1.0, 0.0),
+            pos2(2.0 * half, 0.0),
+            pos2(0.0, 2.0 * half),
+            pos2(0.0, 1.0),
+        ]
+    };
+    let (start, end, center) = match corner {
+        0 => (
+            pos2(rect.left(), rect.top() + radius.y),
+            pos2(rect.left() + radius.x, rect.top()),
+            pos2(rect.left() + radius.x, rect.top() + radius.y),
+        ),
+        1 => (
+            pos2(rect.right() - radius.x, rect.top()),
+            pos2(rect.right(), rect.top() + radius.y),
+            pos2(rect.right() - radius.x, rect.top() + radius.y),
+        ),
+        2 => (
+            pos2(rect.right(), rect.bottom() - radius.y),
+            pos2(rect.right() - radius.x, rect.bottom()),
+            pos2(rect.right() - radius.x, rect.bottom() - radius.y),
+        ),
+        _ => (
+            pos2(rect.left() + radius.x, rect.bottom()),
+            pos2(rect.left(), rect.bottom() - radius.y),
+            pos2(rect.left() + radius.x, rect.bottom() - radius.y),
+        ),
+    };
+    let along_end = end - center;
+    let along_start = start - center;
+    for point in &mut hull {
+        *point = center + along_end * point.x + along_start * point.y;
+    }
+    hull
+}
+
+fn convex_polygons_overlap(first: &[Pos2], second: &[Pos2]) -> bool {
+    if first.len() < 3 || second.len() < 3 {
+        return false;
+    }
+    for polygon in [first, second] {
+        for index in 0..polygon.len() {
+            let edge = polygon[(index + 1) % polygon.len()] - polygon[index];
+            let axis = vec2(-edge.y, edge.x);
+            if axis.length_sq() <= f32::EPSILON {
+                continue;
+            }
+            let project = |points: &[Pos2]| {
+                points
+                    .iter()
+                    .map(|point| point.to_vec2().dot(axis))
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), value| {
+                        (min.min(value), max.max(value))
+                    })
+            };
+            let (first_min, first_max) = project(first);
+            let (second_min, second_max) = project(second);
+            let epsilon = axis.length() * 0.0001;
+            if first_max <= second_min + epsilon || second_max <= first_min + epsilon {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn simple_visual_radius(value: &str) -> Option<u8> {
@@ -2212,6 +2392,7 @@ pub(crate) fn limit_intervals(
     limit: BorderLimit,
     side: usize,
     length: f32,
+    percentage_basis: f32,
     in_corner: bool,
 ) -> Vec<(f32, f32)> {
     match limit {
@@ -2221,7 +2402,7 @@ pub(crate) fn limit_intervals(
                 return Vec::new();
             }
             let width = extent
-                .map_or(length, |value| value.resolve(length))
+                .map_or(length, |value| value.resolve(percentage_basis))
                 .clamp(0.0, length);
             vec![((length - width) * 0.5, (length + width) * 0.5)]
         }
@@ -2232,7 +2413,7 @@ pub(crate) fn limit_intervals(
             let Some(extent) = extent else {
                 return Vec::new();
             };
-            let extent = extent.resolve(length).clamp(0.0, length);
+            let extent = extent.resolve(percentage_basis).clamp(0.0, length);
             vec![(0.0, extent), (length - extent, length)]
         }
         BorderLimit::Side(selected, extent) => {
@@ -2245,7 +2426,7 @@ pub(crate) fn limit_intervals(
             let Some(extent) = extent else {
                 return Vec::new();
             };
-            let extent = extent.resolve(length).clamp(0.0, length);
+            let extent = extent.resolve(percentage_basis).clamp(0.0, length);
             let intervals = match (selected, side) {
                 (3, 0) | (1, 2) | (0, 1) | (2, 3) => vec![(0.0, extent)],
                 (3, 2) | (1, 0) | (0, 3) | (2, 1) => vec![(length - extent, length)],
@@ -2259,13 +2440,17 @@ pub(crate) fn limit_intervals(
 pub(crate) fn clip_intervals(clips: &[ClipPart], length: f32) -> Vec<(f32, f32)> {
     let mut fixed = 0.0;
     let mut flex = 0.0;
+    let mut has_flex = false;
     for part in clips {
         match part {
             ClipPart::Length(value) => fixed += value.resolve(length).max(0.0),
-            ClipPart::Flex(weight) => flex += weight.max(0.0),
+            ClipPart::Flex(weight) => {
+                flex += weight.max(0.0);
+                has_flex = true;
+            }
         }
     }
-    let use_default_flex = flex == 0.0 && fixed < length;
+    let use_default_flex = !has_flex && fixed < length;
     let flex_total = if use_default_flex { 1.0 } else { flex };
     let flex_unit = if fixed >= length || flex_total == 0.0 {
         0.0
@@ -2345,7 +2530,10 @@ pub(crate) fn rounded_path(rect: Rect, radii: [Vec2; 4], shapes: [CornerShape; 4
                 let angle = t * std::f32::consts::FRAC_PI_2;
                 let exponent = 1.0 / k;
                 let (sin, cos) = angle.sin_cos();
-                (1.0 - cos.powf(exponent), 1.0 - sin.powf(exponent))
+                (
+                    1.0 - cos.clamp(0.0, 1.0).powf(exponent),
+                    1.0 - sin.clamp(0.0, 1.0).powf(exponent),
+                )
             } else {
                 let exponent = 1.0 / (2.0 * k.abs());
                 (t.powf(exponent), (1.0 - t).powf(exponent))
@@ -2372,6 +2560,21 @@ pub(crate) fn filled_path(points: Vec<Pos2>, color: Color32) -> Shape {
 pub(crate) fn filled_paths(paths: Vec<Vec<Pos2>>, fill_rule: FillRule, color: Color32) -> Shape {
     Shape::Vec(
         path_fill_quads(paths, fill_rule)
+            .into_iter()
+            .map(|quad| Shape::convex_polygon(quad.to_vec(), color, Stroke::NONE))
+            .collect(),
+    )
+}
+
+fn filled_paths_difference(
+    paths: Vec<Vec<Pos2>>,
+    fill_rule: FillRule,
+    excluded: Vec<Vec<Pos2>>,
+    excluded_fill_rule: FillRule,
+    color: Color32,
+) -> Shape {
+    Shape::Vec(
+        path_difference_quads(paths, fill_rule, excluded, excluded_fill_rule)
             .into_iter()
             .map(|quad| Shape::convex_polygon(quad.to_vec(), color, Stroke::NONE))
             .collect(),
@@ -2578,6 +2781,132 @@ fn path_fill_quads(paths: Vec<Vec<Pos2>>, fill_rule: FillRule) -> Vec<[Pos2; 4]>
     quads
 }
 
+fn path_difference_quads(
+    target_paths: Vec<Vec<Pos2>>,
+    target_rule: FillRule,
+    excluded_paths: Vec<Vec<Pos2>>,
+    excluded_rule: FillRule,
+) -> Vec<[Pos2; 4]> {
+    let mut edges = Vec::new();
+    let mut levels = Vec::new();
+    for (shape, paths) in [(0, target_paths), (1, excluded_paths)] {
+        for mut points in paths {
+            points.dedup_by(|a, b| a.distance(*b) <= 0.001);
+            if points.len() > 2 && points[0].distance(*points.last().unwrap()) <= 0.001 {
+                points.pop();
+            }
+            if points.len() < 3 {
+                continue;
+            }
+            levels.extend(points.iter().map(|point| point.y));
+            edges.extend(
+                (0..points.len())
+                    .map(|index| (points[index], points[(index + 1) % points.len()], shape)),
+            );
+        }
+    }
+    if edges.is_empty() {
+        return Vec::new();
+    }
+    for first in 0..edges.len() {
+        for second in first + 1..edges.len() {
+            let (a, b, _) = edges[first];
+            let (c, d, _) = edges[second];
+            let r = b - a;
+            let s = d - c;
+            let denominator = cross_vec(r, s);
+            if denominator.abs() <= 0.001 {
+                continue;
+            }
+            let t = cross_vec(c - a, s) / denominator;
+            let u = cross_vec(c - a, r) / denominator;
+            if (0.001..0.999).contains(&t) && (0.001..0.999).contains(&u) {
+                levels.push(a.y + t * r.y);
+            }
+        }
+    }
+    levels.sort_by(f32::total_cmp);
+    levels.dedup_by(|a, b| (*a - *b).abs() <= 0.001);
+
+    let rules = [target_rule, excluded_rule];
+    let shape_is_inside = |shape: usize, winding: &[i32; 2], parity: &[bool; 2]| match rules[shape]
+    {
+        FillRule::Nonzero => winding[shape] != 0,
+        FillRule::Evenodd => parity[shape],
+    };
+    let mut quads = Vec::new();
+    for band in levels.windows(2) {
+        let top = band[0];
+        let bottom = band[1];
+        if bottom - top <= 0.001 {
+            continue;
+        }
+        let middle = (top + bottom) * 0.5;
+        let mut crossings: Vec<_> = edges
+            .iter()
+            .copied()
+            .filter_map(|(a, b, shape)| {
+                ((a.y < middle && b.y > middle) || (b.y < middle && a.y > middle)).then(|| {
+                    let direction = if b.y > a.y { 1_i32 } else { -1_i32 };
+                    (x_at_y(a, b, middle), direction, (a, b), shape)
+                })
+            })
+            .collect();
+        crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut winding = [0_i32; 2];
+        let mut parity = [false; 2];
+        let mut left = None;
+        let mut index = 0;
+        while index < crossings.len() {
+            let group_start = index;
+            let x = crossings[index].0;
+            index += 1;
+            while index < crossings.len() && (crossings[index].0 - x).abs() <= 0.001 {
+                index += 1;
+            }
+            let was_inside =
+                shape_is_inside(0, &winding, &parity) && !shape_is_inside(1, &winding, &parity);
+            let group = &crossings[group_start..index];
+            for shape in 0..2 {
+                let shape_crossings = group
+                    .iter()
+                    .filter(|crossing| crossing.3 == shape)
+                    .collect::<Vec<_>>();
+                if rules[shape] == FillRule::Evenodd {
+                    if shape_crossings.len() % 2 == 1 {
+                        parity[shape] = !parity[shape];
+                    }
+                } else {
+                    winding[shape] += shape_crossings
+                        .iter()
+                        .map(|crossing| crossing.1)
+                        .sum::<i32>();
+                }
+            }
+            let is_inside =
+                shape_is_inside(0, &winding, &parity) && !shape_is_inside(1, &winding, &parity);
+            if !was_inside && is_inside {
+                left = group.first().map(|crossing| crossing.2);
+            } else if was_inside
+                && !is_inside
+                && let (Some((left_a, left_b)), Some((right_a, right_b))) =
+                    (left.take(), group.first().map(|crossing| crossing.2))
+            {
+                let quad = [
+                    pos2(x_at_y(left_a, left_b, top), top),
+                    pos2(x_at_y(right_a, right_b, top), top),
+                    pos2(x_at_y(right_a, right_b, bottom), bottom),
+                    pos2(x_at_y(left_a, left_b, bottom), bottom),
+                ];
+                if (quad[1] - quad[0]).length_sq() + (quad[2] - quad[3]).length_sq() > 0.0001 {
+                    quads.push(quad);
+                }
+            }
+        }
+    }
+    quads
+}
+
 fn x_at_y(a: Pos2, b: Pos2, y: f32) -> f32 {
     if (b.y - a.y).abs() <= f32::EPSILON {
         a.x.min(b.x)
@@ -2600,7 +2929,7 @@ impl CornerShape {
     }
 
     pub(crate) fn parameter_is_concave(self) -> bool {
-        self.parameter().is_sign_negative()
+        self.parameter() < 0.0
     }
 }
 
@@ -2774,12 +3103,20 @@ fn side_corner_indices(name: &str, style: &BoxStyle) -> Vec<usize> {
 }
 
 fn corner_index(block: &str, inline: &str, style: &BoxStyle) -> usize {
-    let vertical =
-        crate::layout_style::logical_side(block, style.layout.direction, style.format.writing)
-            .unwrap_or(0);
-    let horizontal =
-        crate::layout_style::logical_side(inline, style.layout.direction, style.format.writing)
-            .unwrap_or(3);
+    let vertical = crate::layout_style::logical_side(
+        block,
+        style.layout.direction,
+        style.format.writing,
+        &style.format.text_orientation,
+    )
+    .unwrap_or(0);
+    let horizontal = crate::layout_style::logical_side(
+        inline,
+        style.layout.direction,
+        style.format.writing,
+        &style.format.text_orientation,
+    )
+    .unwrap_or(3);
     match (vertical, horizontal) {
         (0, 3) | (3, 0) => 0,
         (0, 1) | (1, 0) => 1,
@@ -2836,7 +3173,7 @@ fn is_corner_side(name: &str) -> bool {
         || name == "corner-inline-end-shape"
 }
 
-fn corner_shape(value: &str) -> Result<CornerShape, &'static str> {
+fn corner_shape(value: &str, units: Units) -> Result<CornerShape, &'static str> {
     Ok(match value.to_ascii_lowercase().as_str() {
         "round" => CornerShape::Round,
         "squircle" => CornerShape::Squircle,
@@ -2845,13 +3182,30 @@ fn corner_shape(value: &str) -> Result<CornerShape, &'static str> {
         "scoop" => CornerShape::Scoop,
         "notch" => CornerShape::Notch,
         value if value.starts_with("superellipse(") && value.ends_with(')') => {
-            let number = &value[13..value.len() - 1];
-            let number = match number {
+            let parameter = &value[13..value.len() - 1];
+            let number = match parameter {
                 "infinity" => f32::INFINITY,
                 "-infinity" => f32::NEG_INFINITY,
-                _ => number
-                    .parse()
-                    .map_err(|_| "invalid superellipse parameter")?,
+                _ => {
+                    if let Some(number) = crate::math::number(parameter, units)
+                        .map_err(|_| "invalid superellipse parameter")?
+                    {
+                        number
+                    } else {
+                        let mut parser = Parser::new(parameter);
+                        let number = match parser
+                            .next()
+                            .map_err(|_| "invalid superellipse parameter")?
+                        {
+                            cssparser::Token::Number { value, .. } => *value,
+                            _ => return Err("invalid superellipse parameter"),
+                        };
+                        parser
+                            .expect_exhausted()
+                            .map_err(|_| "invalid superellipse parameter")?;
+                        number
+                    }
+                }
             };
             if number.is_nan() {
                 return Err("invalid superellipse parameter");
@@ -2894,6 +3248,7 @@ fn parse_border_limit(
                 side,
                 style.layout.direction,
                 style.format.writing,
+                &style.format.text_orientation,
             )
             .ok_or("invalid border-limit side")?;
             Ok(BorderLimit::Side(side, None))
@@ -2908,6 +3263,7 @@ fn parse_border_limit(
                 side,
                 style.layout.direction,
                 style.format.writing,
+                &style.format.text_orientation,
             )
             .ok_or("invalid border-limit side")?;
             Ok(BorderLimit::Side(
@@ -2932,7 +3288,7 @@ fn parse_border_clip(
     let parts = values
         .iter()
         .map(|value| {
-            if let Some(weight) = value.strip_suffix("fr") {
+            if let Some(weight) = value.to_ascii_lowercase().strip_suffix("fr") {
                 let weight = weight
                     .parse::<f32>()
                     .map_err(|_| "invalid border-clip flex")?;
@@ -2980,7 +3336,7 @@ pub(crate) fn parse_border_stripes(
             if thickness.is_some() {
                 return Err("duplicate stripes() thickness");
             }
-            if let Some(weight) = component.strip_suffix("fr") {
+            if let Some(weight) = component.to_ascii_lowercase().strip_suffix("fr") {
                 let weight = weight
                     .parse::<f32>()
                     .map_err(|_| "invalid stripes() flex")?;
@@ -3022,6 +3378,7 @@ fn clip_sides(name: &str, style: &BoxStyle) -> Vec<usize> {
                     side,
                     style.layout.direction,
                     style.format.writing,
+                    &style.format.text_orientation,
                 )
             })
             .collect(),
@@ -3032,6 +3389,7 @@ fn clip_sides(name: &str, style: &BoxStyle) -> Vec<usize> {
                     side,
                     style.layout.direction,
                     style.format.writing,
+                    &style.format.text_orientation,
                 )
             })
             .collect(),
@@ -3044,6 +3402,7 @@ fn clip_sides(name: &str, style: &BoxStyle) -> Vec<usize> {
                             side,
                             style.layout.direction,
                             style.format.writing,
+                            &style.format.text_orientation,
                         )
                     })
                     .unwrap_or(0),
@@ -3072,6 +3431,46 @@ pub(crate) fn border_image_urls(value: &str) -> Vec<String> {
     urls
 }
 
+pub(crate) fn border_image_source(name: &str, value: &str) -> Option<crate::css::BackgroundImage> {
+    match name {
+        "border-image-source" => crate::css::parse_background_image(value).ok(),
+        "border" => Some(crate::css::BackgroundImage::None),
+        "border-image" => {
+            let values = crate::layout_style::components(value).ok()?;
+            let source = values
+                .iter()
+                .find(|value| is_border_image_source_token(value));
+            Some(source.map_or(crate::css::BackgroundImage::None, |value| {
+                crate::css::parse_background_image(value).expect("validated border image source")
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn is_border_image_source_token(token: &str) -> bool {
+    token.eq_ignore_ascii_case("none")
+        || token
+            .get(..token.find('(').unwrap_or(0))
+            .is_some_and(|function| {
+                [
+                    "url",
+                    "element",
+                    "image",
+                    "linear-gradient",
+                    "repeating-linear-gradient",
+                    "radial-gradient",
+                    "repeating-radial-gradient",
+                    "conic-gradient",
+                    "repeating-conic-gradient",
+                    "cross-fade",
+                    "image-set",
+                ]
+                .iter()
+                .any(|name| function.eq_ignore_ascii_case(name))
+            })
+}
+
 fn apply_border_image(
     name: &str,
     value: &str,
@@ -3086,7 +3485,7 @@ fn apply_border_image(
                 .map_err(|_| "invalid border image source")?;
         }
         "border-image-slice" => {
-            (image.slice, image.fill) = parse_image_slice(values)?;
+            (image.slice, image.fill) = parse_image_slice(values, units)?;
         }
         "border-image-width" => image.width = parse_image_width(values, units)?,
         "border-image-outset" => image.outset = parse_image_outset(values, units)?,
@@ -3119,22 +3518,7 @@ fn parse_border_image(values: &[String], units: Units) -> Result<BorderImage, &'
                 image.repeat[0] = repeat;
                 image.repeat[1] = repeat;
             }
-        } else if token
-            .get(..token.find('(').unwrap_or(0))
-            .is_some_and(|function| {
-                function.eq_ignore_ascii_case("url")
-                    || function.eq_ignore_ascii_case("image")
-                    || function.eq_ignore_ascii_case("linear-gradient")
-                    || function.eq_ignore_ascii_case("repeating-linear-gradient")
-                    || function.eq_ignore_ascii_case("radial-gradient")
-                    || function.eq_ignore_ascii_case("repeating-radial-gradient")
-                    || function.eq_ignore_ascii_case("conic-gradient")
-                    || function.eq_ignore_ascii_case("repeating-conic-gradient")
-                    || function.eq_ignore_ascii_case("cross-fade")
-                    || function.eq_ignore_ascii_case("image-set")
-            })
-            || token.eq_ignore_ascii_case("none")
-        {
+        } else if is_border_image_source_token(token) {
             if source_seen {
                 return Err("duplicate border image source");
             }
@@ -3145,8 +3529,17 @@ fn parse_border_image(values: &[String], units: Units) -> Result<BorderImage, &'
             initial.push(token.clone());
         }
     }
+    if initial.is_empty() && sections.len() > 1 {
+        return Err("border-image slash values require a slice");
+    }
     if !initial.is_empty() {
-        (image.slice, image.fill) = parse_image_slice(&initial)?;
+        (image.slice, image.fill) = parse_image_slice(&initial, units)?;
+    }
+    if sections.len() == 2 && sections[1].is_empty() {
+        return Err("border-image width requires a value");
+    }
+    if sections.len() == 3 && sections[2].is_empty() {
+        return Err("border-image outset requires a value");
     }
     if sections.len() > 1 {
         let width_values = sections[1].clone();
@@ -3173,7 +3566,10 @@ fn parse_border_image(values: &[String], units: Units) -> Result<BorderImage, &'
     Ok(image)
 }
 
-fn parse_image_slice(values: &[String]) -> Result<([ImageSlice; 4], bool), &'static str> {
+fn parse_image_slice(
+    values: &[String],
+    units: Units,
+) -> Result<([ImageSlice; 4], bool), &'static str> {
     let mut fill = false;
     let mut slices = Vec::with_capacity(values.len());
     for value in values {
@@ -3185,7 +3581,14 @@ fn parse_image_slice(values: &[String]) -> Result<([ImageSlice; 4], bool), &'sta
             continue;
         }
         let value = value.trim();
-        let slice = if let Some(percent) = value.strip_suffix('%') {
+        let slice = if let Ok(Some(number)) = crate::math::number(value, units) {
+            if number < 0.0 || !number.is_finite() {
+                return Err("invalid border-image-slice");
+            }
+            ImageSlice::Number(number)
+        } else if let Ok(Some(percentage)) = crate::math::percentage(value, units, false) {
+            ImageSlice::PercentageCalc(percentage)
+        } else if let Some(percent) = value.strip_suffix('%') {
             let percent = percent
                 .parse::<f32>()
                 .map_err(|_| "invalid border-image-slice")?;
@@ -3218,6 +3621,12 @@ fn parse_image_width(values: &[String], units: Units) -> Result<[ImageWidth; 4],
             if value.eq_ignore_ascii_case("auto") {
                 return Ok(ImageWidth::Auto);
             }
+            if let Ok(Some(number)) = crate::math::number(value, units) {
+                if number >= 0.0 && number.is_finite() {
+                    return Ok(ImageWidth::Number(number));
+                }
+                return Err("invalid border-image-width");
+            }
             if let Ok(number) = value.parse::<f32>() {
                 if number >= 0.0 && number.is_finite() {
                     return Ok(ImageWidth::Number(number));
@@ -3234,16 +3643,27 @@ fn parse_image_outset(values: &[String], units: Units) -> Result<[ImageOutset; 4
     let values = values
         .iter()
         .map(|value| {
+            if let Ok(Some(number)) = crate::math::number(value, units) {
+                if number >= 0.0 && number.is_finite() {
+                    return Ok(ImageOutset::Number(number));
+                }
+                return Err("invalid border-image-outset");
+            }
             if let Ok(number) = value.parse::<f32>() {
                 if number >= 0.0 && number.is_finite() {
                     return Ok(ImageOutset::Number(number));
                 }
                 return Err("invalid border-image-outset");
             }
-            let (length, percentage) = crate::layout_style::length_value(value, units, false)?;
-            if percentage {
-                return Err("border-image-outset cannot be a percentage");
-            }
+            let length = if let Some(handle) = crate::math::length(value, units, false, false)? {
+                crate::math::resolve(handle, 0.0)
+            } else {
+                let (length, percentage) = crate::layout_style::length_value(value, units, false)?;
+                if percentage {
+                    return Err("border-image-outset cannot be a percentage");
+                }
+                length
+            };
             Ok(ImageOutset::Length(length))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -3335,15 +3755,12 @@ fn apply_shadow_longhand(
                     if parts.is_empty() || parts.len() > 2 {
                         return Err("invalid shadow offset");
                     }
-                    let (x, x_percent) = crate::layout_style::length_value(&parts[0], units, true)?;
-                    let (y, y_percent) = if let Some(second) = parts.get(1) {
-                        crate::layout_style::length_value(second, units, true)?
+                    let x = shadow_length(&parts[0], units, true)?;
+                    let y = if let Some(second) = parts.get(1) {
+                        shadow_length(second, units, true)?
                     } else {
-                        (x, x_percent)
+                        x
                     };
-                    if x_percent || y_percent {
-                        return Err("shadow offsets cannot be percentages");
-                    }
                     Ok(Some(vec2(x, y)))
                 })
                 .collect::<Result<_, _>>()?;
@@ -3351,27 +3768,13 @@ fn apply_shadow_longhand(
         "box-shadow-blur" => {
             style.shadow_blurs = values
                 .iter()
-                .map(|value| {
-                    let (value, percentage) =
-                        crate::layout_style::length_value(value, units, false)?;
-                    if percentage {
-                        return Err("shadow blur cannot be a percentage");
-                    }
-                    Ok(value)
-                })
+                .map(|value| shadow_length(value, units, false))
                 .collect::<Result<_, _>>()?;
         }
         "box-shadow-spread" => {
             style.shadow_spreads = values
                 .iter()
-                .map(|value| {
-                    let (value, percentage) =
-                        crate::layout_style::length_value(value, units, true)?;
-                    if percentage {
-                        return Err("shadow spread cannot be a percentage");
-                    }
-                    Ok(value)
-                })
+                .map(|value| shadow_length(value, units, true))
                 .collect::<Result<_, _>>()?;
         }
         _ => {
@@ -3386,6 +3789,17 @@ fn apply_shadow_longhand(
         }
     }
     Ok(())
+}
+
+fn shadow_length(value: &str, units: Units, negative: bool) -> Result<f32, &'static str> {
+    if let Some(handle) = crate::math::length(value, units, negative, false)? {
+        return Ok(crate::math::resolve(handle, 0.0));
+    }
+    let (value, percentage) = crate::layout_style::length_value(value, units, negative)?;
+    if percentage {
+        return Err("box-shadow lengths cannot be percentages");
+    }
+    Ok(value)
 }
 
 fn shadows(style: &DecorationStyle) -> Vec<Shadow> {
@@ -3410,15 +3824,21 @@ fn parse_shadow(value: &str, units: Units) -> Result<Shadow, &'static str> {
     let mut color = None;
     let mut color_seen = false;
     let mut position = ShadowPosition::Outset;
+    let mut position_seen = false;
     let mut offset: Option<Option<Vec2>> = None;
     let mut lengths = Vec::new();
     for value in &values {
         match value.to_ascii_lowercase().as_str() {
-            "inset" => {
-                if position == ShadowPosition::Inset {
+            "inset" | "outset" => {
+                if position_seen {
                     return Err("duplicate shadow position");
                 }
-                position = ShadowPosition::Inset;
+                position = if value.eq_ignore_ascii_case("inset") {
+                    ShadowPosition::Inset
+                } else {
+                    ShadowPosition::Outset
+                };
+                position_seen = true;
             }
             "none" => {
                 if offset.is_some() || !lengths.is_empty() {
@@ -3434,11 +3854,7 @@ fn parse_shadow(value: &str, units: Units) -> Result<Shadow, &'static str> {
                     color = parsed;
                     color_seen = true;
                 } else {
-                    let (length, percentage) =
-                        crate::layout_style::length_value(value, units, true)?;
-                    if percentage {
-                        return Err("box-shadow lengths cannot be percentages");
-                    }
+                    let length = shadow_length(value, units, true)?;
                     lengths.push(length);
                 }
             }
@@ -3583,36 +3999,33 @@ pub(crate) fn shadow_shapes(
             if !target.is_positive() || alpha <= 0.0 {
                 continue;
             }
-            let target_radii = radii.map(|radius| {
-                vec2(
-                    (radius.x + distance).max(0.0),
-                    (radius.y + distance).max(0.0),
-                )
-            });
+            let target_radii =
+                outset_radii(rect, radii, [distance; 4]).map(|radius| radius.max(Vec2::ZERO));
             let paint = shadow_color(color, alpha);
             if let Some(border_shape) = &style.decorations.border_shape {
                 let fill_rule = border_shape.outer_fill_rule();
-                let paths = offset_filled_paths(
-                    &border_shape.outer_paths(rect, stroke, padding, margin, widths),
+                let source_paths = border_shape.outer_paths(rect, stroke, padding, margin, widths);
+                let paths = offset_filled_paths(&source_paths, fill_rule, distance)
+                    .into_iter()
+                    .map(|path| path.into_iter().map(|point| point + offset).collect())
+                    .collect();
+                shapes.push(filled_paths_difference(
+                    paths,
                     fill_rule,
-                    distance,
-                )
-                .into_iter()
-                .map(|path| path.into_iter().map(|point| point + offset).collect())
-                .collect();
-                shapes.push(filled_paths(paths, fill_rule, paint));
+                    source_paths,
+                    fill_rule,
+                    paint,
+                ));
             } else {
                 let points = rounded_path(target, target_radii, style.decorations.corner_shapes);
-                if style
-                    .decorations
-                    .corner_shapes
-                    .iter()
-                    .any(|shape| shape.parameter_is_concave())
-                {
-                    shapes.push(filled_path(points, paint));
-                } else {
-                    shapes.push(Shape::convex_polygon(points, paint, Stroke::NONE));
-                }
+                let source = rounded_path(rect, radii, style.decorations.corner_shapes);
+                shapes.push(filled_paths_difference(
+                    vec![points],
+                    FillRule::Nonzero,
+                    vec![source],
+                    FillRule::Nonzero,
+                    paint,
+                ));
             }
         }
     }

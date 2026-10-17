@@ -9,6 +9,8 @@ pub(crate) struct Table {
     groups: Vec<(NodeId, std::ops::Range<usize>)>,
     captions: Vec<NodeId>,
     columns: Vec<Dimension>,
+    column_nodes: Vec<NodeId>,
+    column_groups: Vec<(NodeId, std::ops::Range<usize>)>,
     collapsed_columns: Vec<bool>,
 }
 use egui::{Rect, Vec2, pos2, vec2};
@@ -828,6 +830,8 @@ impl Tree<'_> {
             groups: Vec::new(),
             captions: Vec::new(),
             columns: Vec::new(),
+            column_nodes: Vec::new(),
+            column_groups: Vec::new(),
             collapsed_columns: Vec::new(),
         };
         let mut children = self.nodes[usize::from(id)].children.clone();
@@ -864,15 +868,23 @@ impl Tree<'_> {
                 DisplayKind::Caption => table.captions.push(child),
                 DisplayKind::Column => {
                     table.columns.push(node.style.size.width);
+                    table.column_nodes.push(child);
                     table.collapsed_columns.push(node.visibility_collapsed);
                 }
                 DisplayKind::ColumnGroup => {
-                    for column in &node.children {
-                        let column = &self.nodes[usize::from(*column)];
+                    let start = table.column_nodes.len();
+                    for column_id in &node.children {
+                        let column = &self.nodes[usize::from(*column_id)];
                         table.columns.push(column.style.size.width);
+                        table.column_nodes.push(*column_id);
                         table
                             .collapsed_columns
                             .push(node.visibility_collapsed || column.visibility_collapsed);
+                    }
+                    if start < table.column_nodes.len() {
+                        table
+                            .column_groups
+                            .push((child, start..table.column_nodes.len()));
                     }
                 }
                 _ => pending.push(child),
@@ -894,9 +906,12 @@ impl Tree<'_> {
             self.nodes[index].table = Some(model.clone());
             model
         };
-        if self.nodes[index].format.collapse {
-            self.collapse_table(id, &model);
-        }
+        self.nodes[index].collapsed_segments.clear();
+        let missing_borders = if self.nodes[index].format.collapse {
+            self.collapse_table(id, &model)
+        } else {
+            Vec::new()
+        };
         let original = self.nodes[index].style.clone();
         let format = self.nodes[index].format.clone();
         let columns = model
@@ -1100,10 +1115,45 @@ impl Tree<'_> {
         self.set_children(id, &all).unwrap();
         self.refresh_children(id);
         let output = compute_grid_layout(self, id, input);
-        self.nodes[index].style = original;
+        self.nodes[index].style = original.clone();
         if input.run_mode == RunMode::PerformLayout {
+            let grid_bounds = model
+                .rows
+                .iter()
+                .flat_map(|(_, cells)| cells)
+                .map(|cell| {
+                    let layout = self.nodes[usize::from(*cell)].layout;
+                    Rect::from_min_size(
+                        pos2(layout.location.x, layout.location.y),
+                        vec2(layout.size.width, layout.size.height),
+                    )
+                })
+                .fold(Rect::NOTHING, Rect::union);
+            let border = original
+                .border
+                .map(|value| raw(value.into_raw(), output.size.width).unwrap_or(0.0));
+            let padding = original
+                .padding
+                .map(|value| raw(value.into_raw(), output.size.width).unwrap_or(0.0));
+            let grid_bounds = if grid_bounds.is_finite() && !format.writing.vertical() {
+                Rect::from_min_max(
+                    pos2(
+                        grid_bounds.left().min(border.left + padding.left),
+                        grid_bounds.top(),
+                    ),
+                    pos2(
+                        grid_bounds
+                            .right()
+                            .max(output.size.width - border.right - padding.right),
+                        grid_bounds.bottom(),
+                    ),
+                )
+            } else {
+                grid_bounds
+            };
             let mut bounds = Vec::new();
-            for (row_id, cells) in &model.rows {
+            let mut collapsed_segments = Vec::new();
+            for (row_index, (row_id, cells)) in model.rows.iter().enumerate() {
                 let rect = cells.iter().fold(Rect::NOTHING, |rect, cell| {
                     let l = self.nodes[usize::from(*cell)].layout;
                     rect.union(Rect::from_min_size(
@@ -1111,6 +1161,24 @@ impl Tree<'_> {
                         vec2(l.size.width, l.size.height),
                     ))
                 });
+                let rect = if rect.is_finite() && grid_bounds.is_finite() {
+                    Rect::from_min_max(
+                        pos2(grid_bounds.left(), rect.top()),
+                        pos2(grid_bounds.right(), rect.bottom()),
+                    )
+                } else {
+                    rect
+                };
+                if let Some((_, edges)) = missing_borders
+                    .iter()
+                    .find(|(missing_row, _)| *missing_row == row_index)
+                    && rect.is_finite()
+                {
+                    collapsed_segments.push(crate::formatting::CollapsedBorderSegment {
+                        rect,
+                        edges: edges.clone(),
+                    });
+                }
                 bounds.push(rect);
                 if let Some(row) = row_id
                     && rect.is_finite()
@@ -1129,14 +1197,19 @@ impl Tree<'_> {
                     self.nodes[usize::from(*group)].layout_parent = Some(id);
                 }
             }
+            self.nodes[index].collapsed_segments = collapsed_segments;
         }
         output
     }
 
-    fn collapse_table(&mut self, id: NodeId, table: &Table) {
+    fn collapse_table(
+        &mut self,
+        id: NodeId,
+        table: &Table,
+    ) -> Vec<(usize, [crate::formatting::CollapsedBorder; 4])> {
         use crate::{formatting::CollapsedBorder as Edge, layout_style::BorderStyle};
         fn winner(a: Edge, b: Edge) -> Edge {
-            let rank = |edge: Edge| match edge.style {
+            let rank = |edge: &Edge| match edge.style {
                 BorderStyle::Hidden => 10,
                 BorderStyle::Double => 9,
                 BorderStyle::Solid => 8,
@@ -1148,7 +1221,7 @@ impl Tree<'_> {
                 BorderStyle::Inset => 2,
                 BorderStyle::None => 0,
             };
-            let score = |edge: Edge| {
+            let score = |edge: &Edge| {
                 (
                     edge.style == BorderStyle::Hidden,
                     edge.style != BorderStyle::None,
@@ -1157,7 +1230,7 @@ impl Tree<'_> {
                     edge.priority,
                 )
             };
-            if score(a) >= score(b) { a } else { b }
+            if score(&a) >= score(&b) { a } else { b }
         }
         let mut edges: Vec<Vec<[Edge; 4]>> = table
             .rows
@@ -1165,37 +1238,79 @@ impl Tree<'_> {
             .map(|(_, cells)| {
                 cells
                     .iter()
-                    .map(|cell| self.nodes[usize::from(*cell)].edges)
+                    .map(|cell| self.nodes[usize::from(*cell)].edges.clone())
                     .collect()
             })
             .collect();
-        for (row, (row_id, cells)) in table.rows.iter().enumerate() {
+        let rtl = self.nodes[usize::from(id)].style.direction == taffy::Direction::Rtl;
+        let columns = table
+            .rows
+            .iter()
+            .map(|(_, cells)| cells.len())
+            .max()
+            .unwrap_or_default()
+            .max(table.column_nodes.len());
+        for (row, (row_id, _)) in table.rows.iter().enumerate() {
             for (column, cell_edges) in edges[row].iter_mut().enumerate() {
                 for (side, current) in cell_edges.iter_mut().enumerate() {
-                    let mut edge = *current;
+                    let mut edge = current.clone();
                     let outer = match side {
                         0 => row == 0,
-                        1 => column + 1 == cells.len(),
+                        1 => {
+                            if rtl {
+                                column == 0
+                            } else {
+                                column + 1 == columns
+                            }
+                        }
                         2 => row + 1 == table.rows.len(),
-                        _ => column == 0,
+                        _ => {
+                            if rtl {
+                                column + 1 == columns
+                            } else {
+                                column == 0
+                            }
+                        }
                     };
                     if (side == 0 || side == 2 || outer)
                         && let Some(row) = row_id
                     {
-                        edge = winner(edge, self.nodes[usize::from(*row)].edges[side]);
+                        edge = winner(edge, self.nodes[usize::from(*row)].edges[side].clone());
                     }
                     for (group, range) in &table.groups {
                         if range.contains(&row)
                             && (side == 0 && row == range.start
                                 || side == 2 && row + 1 == range.end
-                                || side == 1 && column + 1 == cells.len()
-                                || side == 3 && column == 0)
+                                || (side == 1 || side == 3) && outer)
                         {
-                            edge = winner(edge, self.nodes[usize::from(*group)].edges[side]);
+                            edge =
+                                winner(edge, self.nodes[usize::from(*group)].edges[side].clone());
                         }
                     }
                     if outer {
-                        edge = winner(edge, self.nodes[usize::from(id)].edges[side]);
+                        edge = winner(edge, self.nodes[usize::from(id)].edges[side].clone());
+                    }
+                    if side == 1 || side == 3 {
+                        if let Some(column) = table.column_nodes.get(column) {
+                            edge =
+                                winner(edge, self.nodes[usize::from(*column)].edges[side].clone());
+                        }
+                        for (group, range) in &table.column_groups {
+                            if range.contains(&column)
+                                && if rtl {
+                                    side == 3 && column + 1 == range.end
+                                        || side == 1 && column == range.start
+                                } else {
+                                    side == 3 && column == range.start
+                                        || side == 1 && column + 1 == range.end
+                                }
+                            {
+                                edge = winner(
+                                    edge,
+                                    self.nodes[usize::from(*group)].edges[side].clone(),
+                                );
+                            }
+                        }
                     }
                     *current = edge;
                 }
@@ -1204,25 +1319,74 @@ impl Tree<'_> {
         for row in 0..edges.len() {
             for column in 0..edges[row].len() {
                 if column + 1 < edges[row].len() {
-                    let mut edge = winner(edges[row][column][1], edges[row][column + 1][3]);
+                    let (first_side, second_side) = if rtl { (3, 1) } else { (1, 3) };
+                    let mut edge = winner(
+                        edges[row][column][first_side].clone(),
+                        edges[row][column + 1][second_side].clone(),
+                    );
                     edge.draw = true;
-                    edges[row][column][1] = edge;
+                    edges[row][column][first_side] = edge.clone();
                     edge.draw = false;
-                    edges[row][column + 1][3] = edge;
+                    edges[row][column + 1][second_side] = edge;
                 }
                 if row + 1 < edges.len() && column < edges[row + 1].len() {
-                    let mut edge = winner(edges[row][column][2], edges[row + 1][column][0]);
+                    let mut edge = winner(
+                        edges[row][column][2].clone(),
+                        edges[row + 1][column][0].clone(),
+                    );
                     edge.draw = true;
-                    edges[row][column][2] = edge;
+                    edges[row][column][2] = edge.clone();
                     edge.draw = false;
                     edges[row + 1][column][0] = edge;
                 }
             }
         }
+        let mut row_edges = vec![std::array::from_fn(|_| Edge::default()); table.rows.len()];
+        for (row_index, (row_id, cells)) in table.rows.iter().enumerate() {
+            if cells.len() >= columns {
+                continue;
+            }
+            let side = if rtl { 3 } else { 1 };
+            let column = columns - 1;
+            let mut edge = Edge::default();
+            if let Some(row) = row_id {
+                edge = winner(edge, self.nodes[usize::from(*row)].edges[side].clone());
+            }
+            for (group, range) in &table.groups {
+                if range.contains(&row_index) {
+                    edge = winner(edge, self.nodes[usize::from(*group)].edges[side].clone());
+                }
+            }
+            if let Some(column_node) = table.column_nodes.get(column) {
+                edge = winner(
+                    edge,
+                    self.nodes[usize::from(*column_node)].edges[side].clone(),
+                );
+            }
+            for (group, range) in &table.column_groups {
+                if range.contains(&column)
+                    && if rtl {
+                        side == 3 && column + 1 == range.end
+                    } else {
+                        side == 1 && column + 1 == range.end
+                    }
+                {
+                    edge = winner(edge, self.nodes[usize::from(*group)].edges[side].clone());
+                }
+            }
+            edge = winner(edge, self.nodes[usize::from(id)].edges[side].clone());
+            if matches!(edge.style, BorderStyle::None | BorderStyle::Hidden) {
+                edge.width = 0.0;
+                edge.draw = false;
+            } else {
+                edge.draw = true;
+            }
+            row_edges[row_index][side] = edge;
+        }
         let mut outside = [0.0_f32; 4];
         for (row, (_, cells)) in table.rows.iter().enumerate() {
             for (column, cell) in cells.iter().enumerate() {
-                let mut border = edges[row][column];
+                let mut border = edges[row][column].clone();
                 for side in 0..4 {
                     if matches!(border[side].style, BorderStyle::None | BorderStyle::Hidden) {
                         border[side].width = 0.0;
@@ -1230,9 +1394,21 @@ impl Tree<'_> {
                     }
                     let outer = match side {
                         0 => row == 0,
-                        1 => column + 1 == cells.len(),
+                        1 => {
+                            if rtl {
+                                column == 0
+                            } else {
+                                column + 1 == columns
+                            }
+                        }
                         2 => row + 1 == table.rows.len(),
-                        _ => column == 0,
+                        _ => {
+                            if rtl {
+                                column + 1 == columns
+                            } else {
+                                column == 0
+                            }
+                        }
                     };
                     if outer {
                         border[side].draw = true;
@@ -1249,21 +1425,35 @@ impl Tree<'_> {
                 node.collapsed = Some(border);
             }
         }
+        for edges in &row_edges {
+            for side in 0..4 {
+                outside[side] = outside[side].max(edges[side].width);
+            }
+        }
         self.nodes[usize::from(id)].style.border = taffy::Rect {
             top: length(outside[0] * 0.5),
             right: length(outside[1] * 0.5),
             bottom: length(outside[2] * 0.5),
             left: length(outside[3] * 0.5),
         };
-        self.nodes[usize::from(id)].collapsed = Some([Edge::default(); 4]);
-        for row in table
+        self.nodes[usize::from(id)].collapsed = Some(std::array::from_fn(|_| Edge::default()));
+        for ((row, _), edges) in table.rows.iter().zip(&row_edges) {
+            if let Some(row) = row {
+                self.nodes[usize::from(*row)].collapsed = Some(edges.clone());
+            }
+        }
+        for (group, _) in &table.groups {
+            self.nodes[usize::from(*group)].collapsed =
+                Some(std::array::from_fn(|_| Edge::default()));
+        }
+        table
             .rows
             .iter()
-            .filter_map(|(row, _)| *row)
-            .chain(table.groups.iter().map(|(group, _)| *group))
-        {
-            self.nodes[usize::from(row)].collapsed = Some([Edge::default(); 4]);
-        }
+            .enumerate()
+            .filter_map(|(row, (row_id, cells))| {
+                (row_id.is_none() && cells.len() < columns).then(|| (row, row_edges[row].clone()))
+            })
+            .collect()
     }
 
     fn compute_inline(

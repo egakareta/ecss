@@ -37,6 +37,314 @@ async fn inline_text_continues_across_selectors_and_paints_line_fragments_test()
     );
 }
 
+async fn pseudo_element_borders_paint_first_letter_and_first_line_test() {
+    let stylesheet = Stylesheet::parse(
+        ".letter, .line { width:200px; }\
+         ::first-letter { border:3px solid green; }\
+         .letter::first-letter { border:2px solid red; }\
+         .line::first-line { border:2px solid magenta; border-radius:8px; box-shadow:0 0 0 3px blue; }\
+         .legacy:first-letter { border:2px solid purple; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let letter = ui.add(egui::Label::new("A long line of text").selector(".letter"));
+        let line = ui.add(egui::Label::new("First line").selector(".line"));
+        ui.add(egui::Label::new("Legacy spelling").selector(".legacy"));
+        *capture.lock().unwrap() = Some((letter.rect, line.rect));
+    })
+    .await;
+
+    assert!(pixels.iter().any(|pixel| *pixel == [255, 0, 0, 255]));
+    assert!(pixels.iter().any(|pixel| *pixel == [0, 0, 255, 255]));
+    assert!(pixels.iter().any(|pixel| *pixel == [0, 128, 0, 255]));
+    assert!(pixels.iter().any(|pixel| *pixel == [128, 0, 128, 255]));
+    assert!(!pixels.iter().any(|pixel| *pixel == [255, 0, 255, 255]));
+    let (letter, line) = bounds.lock().unwrap().unwrap();
+    let horizontal_bounds = |color| {
+        pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel == color)
+            .fold((usize::MAX, 0), |(min, max), (index, _)| {
+                (min.min(index % 256), max.max(index % 256))
+            })
+    };
+    let red_bounds = horizontal_bounds([255, 0, 0, 255]);
+    let blue_bounds = horizontal_bounds([0, 0, 255, 255]);
+    assert!(
+        ((red_bounds.1 - red_bounds.0) as f32) < letter.width() * 0.5,
+        "first-letter border spans the full text box: {red_bounds:?} {letter:?}"
+    );
+    assert!(
+        ((blue_bounds.1 - blue_bounds.0) as f32) < line.width() * 0.8,
+        "first-line border spans the full text box: {blue_bounds:?} {line:?}"
+    );
+}
+
+async fn first_letter_decoration_selects_numbers_and_associated_punctuation_test() {
+    let stylesheet = Stylesheet::parse(
+        ".number, .punctuation, .symbol { font-size:32px; }\
+         .number::first-letter { border:3px solid red; }\
+         .punctuation::first-letter { border:3px solid blue; }\
+         .symbol::first-letter { border:3px solid lime; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 3]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(40.0);
+        *capture.lock().unwrap() = [
+            Some(ui.add(egui::Label::new("1A").selector(".number")).rect),
+            Some(
+                ui.add(egui::Label::new("« A").selector(".punctuation"))
+                    .rect,
+            ),
+            Some(ui.add(egui::Label::new("$A").selector(".symbol")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for (index, color) in [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+        [0, 255, 0, 255],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rect = bounds[index].unwrap();
+        let left = pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel == color)
+            .map(|(index, _)| index % 256)
+            .min()
+            .expect("first-letter border should paint");
+        assert!(
+            (left as f32) < rect.left() + 8.0,
+            "first-letter decoration omitted its leading text: x={left}, rect={rect:?}"
+        );
+    }
+}
+
+async fn first_letter_decoration_excludes_following_dashes_test() {
+    let stylesheet = Stylesheet::parse(
+        ".plain, .dashed { font-size:32px; }\
+         .plain::first-letter { border:3px solid red; }\
+         .dashed::first-letter { border:3px solid blue; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(40.0);
+        *capture.lock().unwrap() = [
+            Some(ui.add(egui::Label::new("A").selector(".plain")).rect),
+            Some(ui.add(egui::Label::new("A—B").selector(".dashed")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let horizontal_bounds = |color, rect: egui::Rect| {
+        pixels
+            .iter()
+            .enumerate()
+            .filter(|(index, pixel)| {
+                **pixel == color && (index / 256) as f32 >= rect.top() - 3.0
+                    && (index / 256) as f32 <= rect.bottom() + 3.0
+            })
+            .fold(None, |bounds, (index, _)| {
+                let x = index % 256;
+                Some(bounds.map_or((x, x), |(min, max): (usize, usize)| {
+                    (min.min(x), max.max(x))
+                }))
+            })
+            .expect("first-letter border should paint")
+    };
+    let plain = horizontal_bounds([255, 0, 0, 255], bounds[0].unwrap());
+    let dashed = horizontal_bounds([0, 0, 255, 255], bounds[1].unwrap());
+    assert_eq!(dashed, plain);
+}
+
+async fn vertical_first_letter_border_tracks_rotated_glyph_geometry_test() {
+    let stylesheet = Stylesheet::parse(
+        ".vertical { writing-mode:vertical-rl; width:60px; height:60px; }\
+         .vertical::first-letter { border:2px solid red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(40.0);
+        let text = ui.add(egui::Label::new("A").selector(".vertical"));
+        *capture.lock().unwrap() = Some(text.rect);
+    })
+    .await;
+    let text = bounds.lock().unwrap().unwrap();
+    let left = (text.left() - 4.0).floor().max(0.0) as usize;
+    let right = (text.right() + 4.0).ceil().min(256.0) as usize;
+    let top = (text.top() - 4.0).floor().max(0.0) as usize;
+    let bottom = (text.bottom() + 4.0).ceil().min(128.0) as usize;
+    assert!(
+        (top..bottom).any(|y| (left..right).any(|x| pixel(&pixels, x as f32, y as f32) == [255, 0, 0, 255])),
+        "vertical first-letter border was not painted around its glyph: {text:?}"
+    );
+}
+
+async fn vertical_upright_first_letter_maps_inline_start_through_direction_test() {
+    async fn decoration_bounds(direction: &str) -> ((usize, usize), (usize, usize)) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".vertical {{ writing-mode:vertical-rl; text-orientation:upright; direction:{direction}; color:blue; width:60px; height:80px; }}\
+             .vertical::first-letter {{ border-inline-start:4px solid red; background:blue; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add_space(20.0);
+            let text = ui.add(egui::Label::new("A").selector(".vertical"));
+            *capture.lock().unwrap() = Some(text.rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        let y_bounds = |color| {
+            let left = rect.left().floor().max(0.0) as usize;
+            let right = rect.right().ceil().min(256.0) as usize;
+            let top = (rect.top() - 4.0).floor().max(0.0) as usize;
+            let bottom = (rect.bottom() + 4.0).ceil().min(128.0) as usize;
+            (top..bottom)
+                .filter(|y| {
+                    (left..right).any(|x| pixel(&pixels, x as f32, *y as f32) == color)
+                })
+                .fold(None, |bounds, y| {
+                    Some(bounds.map_or((y, y), |(min, max): (usize, usize)| {
+                        (min.min(y), max.max(y))
+                    }))
+                })
+                .expect("first-letter decoration should paint")
+        };
+        (y_bounds([255, 0, 0, 255]), y_bounds([0, 0, 255, 255]))
+    }
+
+    let (ltr_red, ltr_glyph) = decoration_bounds("ltr").await;
+    let (rtl_red, rtl_glyph) = decoration_bounds("rtl").await;
+    let midpoint = |bounds: (usize, usize)| (bounds.0 + bounds.1) as f32 / 2.0;
+    assert!(
+        midpoint(ltr_red) < midpoint(ltr_glyph),
+        "LTR vertical inline-start border should precede the glyph: {ltr_red:?} {ltr_glyph:?}"
+    );
+    assert!(
+        midpoint(rtl_red) < midpoint(rtl_glyph),
+        "upright orientation should use LTR inline direction: {rtl_red:?} {rtl_glyph:?}"
+    );
+}
+
+async fn first_letter_percentage_padding_uses_the_containing_block_basis_test() {
+    let stylesheet = Stylesheet::parse(
+        ".pixels, .percentage { width:100px; }\
+         .pixels::first-letter { padding-left:10px; background:red; }\
+         .percentage::first-letter { padding-left:10%; background:red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let pixels = ui.add(egui::Label::new("AB").selector(".pixels"));
+        let percentage = ui.add(egui::Label::new("AB").selector(".percentage"));
+        *capture.lock().unwrap() = Some((pixels.rect, percentage.rect));
+    })
+    .await;
+    let (pixels_rect, percentage_rect) = bounds.lock().unwrap().unwrap();
+    let red_pixels = |rect: egui::Rect| {
+        let left = rect.left().floor().max(0.0) as usize;
+        let right = rect.right().ceil().min(256.0) as usize;
+        let top = rect.top().floor().max(0.0) as usize;
+        let bottom = rect.bottom().ceil().min(128.0) as usize;
+        (top..bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .filter(|(x, y)| pixel(&pixels, *x as f32, *y as f32) == [255, 0, 0, 255])
+            .count()
+    };
+    assert_eq!(
+        red_pixels(pixels_rect),
+        red_pixels(percentage_rect),
+        "10% first-letter padding should match 10px in a 100px containing block"
+    );
+}
+
+async fn first_letter_inline_decoration_extents_contribute_to_text_width_test() {
+    let stylesheet = Stylesheet::parse(
+        ".decorated::first-letter { margin-left:4px; padding-left:2px; border-left:3px solid red; margin-right:5px; padding-right:6px; border-right:1px solid red; }\n         .wrapped-plain, .wrapped-decorated { width:32px; }\n         .wrapped-decorated::first-letter { padding-right:12px; }\n         .flow-plain, .flow-decorated { width:max-content; }\n         .flow-word { display:inline; }\n         .flow-decorated::first-letter { margin-left:4px; padding-left:2px; border-left:3px solid red; margin-right:5px; padding-right:6px; border-right:1px solid red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let plain = ui.add(egui::Label::new("AB").selector(".plain"));
+        let decorated = ui.add(egui::Label::new("AB").selector(".decorated"));
+        let wrapped_plain = ui.add(egui::Label::new("A B").selector(".wrapped-plain"));
+        let wrapped_decorated = ui.add(egui::Label::new("A B").selector(".wrapped-decorated"));
+        let flow_plain = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("AB").selector(".flow-word"));
+                ui.response()
+            })
+            .selector(".flow-plain"),
+        );
+        let flow_decorated = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("AB").selector(".flow-word"));
+                ui.response()
+            })
+            .selector(".flow-decorated"),
+        );
+        *capture.lock().unwrap() = Some((
+            plain.rect,
+            decorated.rect,
+            wrapped_plain.rect,
+            wrapped_decorated.rect,
+            flow_plain.rect,
+            flow_decorated.rect,
+        ));
+    })
+    .await;
+    let (plain, decorated, wrapped_plain, wrapped_decorated, flow_plain, flow_decorated) =
+        bounds.lock().unwrap().unwrap();
+    assert!(
+        (decorated.width() - plain.width() - 21.0).abs() < 0.5,
+        "plain {plain:?}, decorated {decorated:?}"
+    );
+    assert!((flow_decorated.width() - flow_plain.width() - 21.0).abs() < 0.5);
+    assert!(wrapped_decorated.height() > wrapped_plain.height());
+    assert!(pixels.iter().any(|pixel| *pixel == [255, 0, 0, 255]));
+}
+
+async fn pseudo_element_decorations_apply_to_descendant_text_shapes_test() {
+    let stylesheet = Stylesheet::parse(
+        ".flow { width:200px; }\
+         .word { display:inline; }\
+         .flow::first-line { box-shadow:0 0 0 2px orange; }\
+         .flow::first-letter { border:2px solid purple; }",
+    )
+    .unwrap();
+    let pixels = render_ui_pixels(stylesheet, |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("first ").selector(".word"));
+                ui.add(egui::Label::new("line").selector(".word"));
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    })
+    .await;
+
+    assert!(pixels.iter().any(|pixel| *pixel == [255, 165, 0, 255]));
+    assert!(pixels.iter().any(|pixel| *pixel == [128, 0, 128, 255]));
+}
+
 async fn inline_box_shadows_follow_box_decoration_break_test() {
     async fn shadow_pixels(decoration_break: &str, shadow: &str) -> usize {
         let stylesheet = Stylesheet::parse(&format!(
@@ -66,6 +374,98 @@ async fn inline_box_shadows_follow_box_decoration_break_test() {
         assert!(
             cloned_shadow > sliced_shadow,
             "clone should paint a shadow around each fragment for {shadow}: clone={cloned_shadow}, slice={sliced_shadow}"
+        );
+    }
+}
+
+async fn inline_slice_background_gradients_continue_across_fragments_test() {
+    async fn background_pixels(
+        decoration_break: &str,
+        image: &str,
+        direction: &str,
+    ) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::load(&format!(
+            ".flow {{ width:80px; direction:{direction}; }} .fragment {{ display:inline; background:{image}; box-decoration-break:{decoration_break}; }}"
+        ))
+        .await
+        .unwrap();
+        render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new("one two three four five six seven").selector(".fragment"));
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+        })
+        .await
+    }
+
+    let source = image::RgbaImage::from_fn(3, 1, |x, _| {
+        image::Rgba(match x {
+            0 => [255, 0, 0, 255],
+            1 => [0, 255, 0, 255],
+            _ => [0, 0, 255, 255],
+        })
+    });
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(source)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        encoded.into_inner(),
+    );
+    let mut images = vec![
+        "linear-gradient(to right, red, blue)".to_owned(),
+        "radial-gradient(circle, red, blue)".to_owned(),
+        "conic-gradient(red, blue)".to_owned(),
+    ];
+    images.push(format!("url(\"data:image/png;base64,{data}\")"));
+    for image in images {
+        for direction in ["ltr", "rtl"] {
+            let sliced = background_pixels("slice", &image, direction).await;
+            let cloned = background_pixels("clone", &image, direction).await;
+            assert_ne!(
+                sliced, cloned,
+                "slice should continue {image} across {direction} line fragments"
+            );
+        }
+    }
+}
+
+async fn inline_slice_border_images_continue_across_fragments_test() {
+    async fn border_image_pixels(decoration_break: &str, direction: &str) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".flow {{ width:80px; direction:{direction}; }} .fragment {{ display:inline; border:4px solid black; border-image-source:linear-gradient(to right, red, blue); border-image-slice:4; border-image-width:4; box-decoration-break:{decoration_break}; }}"
+        ))
+        .unwrap();
+        render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(
+                        egui::Label::new("one two three four five six seven")
+                            .selector(".fragment"),
+                    );
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+        })
+        .await
+    }
+
+    for direction in ["ltr", "rtl"] {
+        let sliced = border_image_pixels("slice", direction).await;
+        let cloned = border_image_pixels("clone", direction).await;
+        assert!(
+            cloned.iter().any(|pixel| pixel[0] > 200 && pixel[2] < 100)
+                && cloned.iter().any(|pixel| pixel[2] > 200 && pixel[0] < 100),
+            "clone should paint the border image on every {direction} fragment"
+        );
+        assert_ne!(
+            sliced, cloned,
+            "slice should draw border images across the composite {direction} inline box"
         );
     }
 }

@@ -27,6 +27,541 @@ async fn content_and_border_box_sizes_include_the_correct_edges_test() {
     }
 }
 
+async fn svg_url_paints_as_a_border_image_test() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"><rect width="9" height="9" fill="#ff0000"/></svg>"##;
+    let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg);
+    let stylesheet = Stylesheet::load(&format!(
+        ".image {{ box-sizing:border-box; width:24px; height:24px; border:4px solid black; background:white; border-image-source:url(\"data:image/svg+xml;base64,{data}\"); border-image-slice:3; border-image-width:1; }}"
+    ))
+    .await
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 2.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255, 255, 255, 255]);
+}
+
+async fn svg_image_set_type_hint_paints_as_a_border_image_test() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"><rect width="9" height="9" fill="#ff0000"/></svg>"##;
+    let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg);
+    let stylesheet = Stylesheet::load(&format!(
+        ".image {{ box-sizing:border-box; width:24px; height:24px; border:4px solid black; background:white; border-image-source:image-set(url(\"data:image/svg+xml;base64,{data}\") 1x type(\"image/svg+xml\")); border-image-slice:3; border-image-width:1; }}"
+    ))
+    .await
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 2.0), [255, 0, 0, 255]);
+}
+
+async fn svg_border_image_without_intrinsic_dimensions_uses_the_border_area_test() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9 9"><rect width="9" height="9" fill="#ff0000"/></svg>"##;
+    let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg);
+    let stylesheet = Stylesheet::load(&format!(
+        ".image {{ box-sizing:border-box; width:24px; height:24px; border:4px solid black; background:white; border-image-source:url(\"data:image/svg+xml;base64,{data}\"); border-image-slice:25%; border-image-width:auto; }}"
+    ))
+    .await
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 1.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 8.0), [255, 255, 255, 255]);
+}
+
+async fn element_image_source_paints_as_a_background_test() {
+    let stylesheet = Stylesheet::parse(
+        "#source { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; }\n         .target { box-sizing:border-box; width:32px; height:32px; background-image:element(#source); }\n         .fade { box-sizing:border-box; width:32px; height:32px; background-image:cross-fade(element(#source) 50%, blue 50%); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#source"));
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".target")).rect,
+            ui.add(empty_box.selector(".fade")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let target = bounds[0];
+    assert_eq!(pixel(&pixels, target.center().x, target.center().y), [255, 0, 0, 255]);
+    let fade = bounds[1];
+    let color = pixel(&pixels, fade.center().x, fade.center().y);
+    assert!(color[0].abs_diff(127) < 3 && color[2].abs_diff(128) < 3, "unexpected cross-fade pixel {color:?}");
+}
+
+async fn element_image_source_requires_a_stacking_context_test() {
+    let stylesheet = Stylesheet::parse(
+        "#source { box-sizing:border-box; width:16px; height:16px; background:green; }\n         #hidden-source { display:none; width:16px; height:16px; background:green; }\n         .target { box-sizing:border-box; width:24px; height:24px; background:red; background-image:element(#source); }\n         .hidden-target { box-sizing:border-box; width:24px; height:24px; background:blue; background-image:element(#hidden-source); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#source"));
+        ui.add(empty_box.selector("#hidden-source"));
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".target")).rect,
+            ui.add(empty_box.selector(".hidden-target")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    assert_eq!(pixel(&pixels, bounds[0].center().x, bounds[0].center().y), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[1].center().x, bounds[1].center().y), [0, 0, 255, 255]);
+}
+
+async fn element_image_source_flex_item_with_z_index_is_eligible_test() {
+    let stylesheet = Stylesheet::parse(
+        "#container { display:flex; box-sizing:border-box; width:24px; height:16px; }\n         #source { z-index:0; box-sizing:border-box; width:16px; height:16px; background:green; }\n         .target { box-sizing:border-box; width:24px; height:16px; background:red; background-image:element(#source); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_box.selector("#source"));
+                ui.response()
+            })
+            .selector("#container"),
+        );
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, target.center().x, target.center().y), [0, 128, 0, 255]);
+}
+
+async fn element_image_source_fixed_positioned_with_auto_z_index_is_eligible_test() {
+    let stylesheet = Stylesheet::parse(
+        "#source { position:fixed; top:0; left:100px; z-index:auto; box-sizing:border-box; width:16px; height:16px; background:green; }\n         .target { box-sizing:border-box; width:24px; height:24px; background:red; background-image:element(#source); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#source"));
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, target.center().x, target.center().y),
+        [0, 128, 0, 255]
+    );
+}
+
+async fn element_image_hidden_context_keeps_visible_descendants_test() {
+    let stylesheet = Stylesheet::parse(
+        "#parent { position:relative; z-index:0; box-sizing:border-box; width:32px; height:32px; visibility:hidden; }\n         .child { box-sizing:border-box; width:32px; height:32px; visibility:visible; background:green; }\n         .target { box-sizing:border-box; width:32px; height:32px; background:red; background-image:element(#parent); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_box.selector(".child"));
+                ui.response()
+            })
+            .selector("#parent"),
+        );
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, target.center().x, target.center().y), [0, 128, 0, 255]);
+}
+
+async fn element_image_ignores_references_in_display_none_descendants_test() {
+    let stylesheet = Stylesheet::parse(
+        "#holder { position:relative; z-index:0; box-sizing:border-box; width:32px; height:32px; background:green; }\n         #inert { display:none; background-image:element(#target); }\n         #target { position:relative; z-index:0; box-sizing:border-box; width:24px; height:24px; background:red; background-image:element(#holder); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_box.selector("#inert"));
+                ui.response()
+            })
+            .selector("#holder"),
+        );
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, target.center().x, target.center().y), [0, 128, 0, 255]);
+}
+
+async fn element_image_uses_the_first_matching_id_test() {
+    let stylesheet = Stylesheet::parse(
+        "#duplicate { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; }\n         .target { box-sizing:border-box; width:16px; height:16px; background-image:element(#duplicate); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        for color in [egui::Color32::RED, egui::Color32::BLUE] {
+            ui.add(
+                (move |ui: &mut egui::Ui| {
+                    let rect = ui.max_rect();
+                    ui.painter()
+                        .rect_filled(rect, egui::CornerRadius::ZERO, color);
+                    ui.allocate_response(rect.size(), egui::Sense::hover())
+                })
+                .selector("#duplicate"),
+            );
+        }
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, target.center().x, target.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
+async fn opposite_concave_corner_hulls_constrain_border_radii_test() {
+    let stylesheet = Stylesheet::parse(
+        ".scoops { box-sizing:border-box; width:64px; height:64px; background:red; corner-top-left-shape:notch; corner-bottom-right-shape:notch; border-top-left-radius:100%; border-bottom-right-radius:100%; }\n         .reference { box-sizing:border-box; width:64px; height:64px; background:red; corner-top-left-shape:notch; corner-bottom-right-shape:notch; border-top-left-radius:50%; border-bottom-right-radius:50%; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".scoops")).rect,
+            ui.add(empty_box.selector(".reference")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for y in 0..64 {
+        for x in 0..64 {
+            assert_eq!(
+                pixel(&pixels, bounds[0].left() + x as f32, bounds[0].top() + y as f32),
+                pixel(&pixels, bounds[1].left() + x as f32, bounds[1].top() + y as f32),
+                "used radius differs from the non-overlapping reference at ({x}, {y})"
+            );
+        }
+    }
+}
+
+async fn corner_shorthands_match_their_longhand_expansions_test() {
+    let stylesheet = Stylesheet::parse(
+        ".all-short, .all-long, .side-short, .side-long, .single-short, .single-long { box-sizing:border-box; width:36px; height:28px; border:2px solid blue; background:red; }\
+         .all-short { corner:scoop 16px 4px / 12px 2px; }\
+         .all-long { corner-shape:scoop; border-radius:16px 4px / 12px 2px; }\
+         .side-short { corner-inline-start:notch 12px 3px; }\
+         .side-long { corner-inline-start-shape:notch; border-inline-start-radius:12px 3px; }\
+         .single-short { corner-end-start:bevel 9px / 6px; }\
+         .single-long { corner-end-start-shape:bevel; border-end-start-radius:9px / 6px; }",
+    )
+    .unwrap();
+    let short_pixels = render_ui_pixels(stylesheet.clone(), move |ui| {
+        for short in [".all-short", ".side-short", ".single-short"] {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.add(empty_box.selector(short));
+            });
+        }
+    })
+    .await;
+    let long_pixels = render_ui_pixels(stylesheet, move |ui| {
+        for long in [".all-long", ".side-long", ".single-long"] {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.add(empty_box.selector(long));
+            });
+        }
+    })
+    .await;
+    for y in 0..128 {
+        for x in 0..256 {
+                assert_eq!(
+                    pixel(&short_pixels, x as f32, y as f32),
+                    pixel(&long_pixels, x as f32, y as f32),
+                    "corner shorthands differ from longhand expansions at ({x}, {y})"
+                );
+        }
+    }
+}
+
+async fn calculated_superellipse_parameter_matches_its_keyword_test() {
+    let stylesheet = Stylesheet::parse(
+        ".keyword { box-sizing:border-box; width:48px; height:48px; background:red; border-radius:24px; corner-shape:squircle; }\
+         .calculated { box-sizing:border-box; width:48px; height:48px; background:red; border-radius:24px; corner-shape:superellipse(calc(1 + 1)); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".keyword")).rect,
+            ui.add(empty_box.selector(".calculated")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for y in 0..48 {
+        for x in 0..48 {
+            assert_eq!(
+                pixel(&pixels, bounds[0].left() + x as f32, bounds[0].top() + y as f32),
+                pixel(&pixels, bounds[1].left() + x as f32, bounds[1].top() + y as f32),
+                "calculated superellipse differs from squircle at ({x}, {y})"
+            );
+        }
+    }
+}
+
+async fn outer_shadow_does_not_paint_inside_a_transparent_box_test() {
+    let stylesheet = Stylesheet::parse(
+        ".shadow { box-sizing:border-box; width:32px; height:32px; box-shadow:0 0 0 8px red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shadow")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.center().x, rect.center().y),
+        [255; 4]
+    );
+}
+
+async fn box_shadow_spread_preserves_square_corners_test() {
+    let stylesheet = Stylesheet::parse(
+        ".shadow { box-sizing:border-box; width:32px; height:32px; margin:30px; box-shadow:0 0 0 8px red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shadow")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() - 6.5, rect.top() - 6.5),
+        [255, 0, 0, 255]
+    );
+}
+
+async fn element_image_source_paints_as_a_border_image_test() {
+    let stylesheet = Stylesheet::parse(
+        "#source { position:relative; z-index:0; box-sizing:border-box; width:12px; height:12px; background:red; }\n         .target { box-sizing:border-box; width:24px; height:24px; border:4px solid black; background:white; border-image:element(#source) 4 / 1; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#source"));
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+    })
+    .await;
+    let target = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, target.center().x, target.top() + 1.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, target.center().x, target.center().y), [255; 4]);
+}
+
+async fn cyclic_element_image_references_are_invalid_test() {
+    let stylesheet = Stylesheet::parse(
+        "#first { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; background-image:element(#second); }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector("#first")).rect,
+            ui.add(empty_box.selector("#second")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    assert_eq!(
+        pixel(&pixels, bounds[0].center().x, bounds[0].center().y),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, bounds[1].center().x, bounds[1].center().y),
+        [0, 0, 255, 255]
+    );
+}
+
+async fn element_image_cycle_through_a_descendant_is_invalid_test() {
+    let stylesheet = Stylesheet::parse(
+        "#parent { position:relative; z-index:0; box-sizing:border-box; width:64px; height:64px; background:green; }\n         #child { box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#parent); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let capture = capture.clone();
+        ui.add(
+            (move |ui: &mut egui::Ui| {
+                *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#child")).rect);
+                ui.response()
+            })
+            .selector("#parent"),
+        );
+    })
+    .await;
+    let child = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, child.center().x, child.center().y), [0, 0, 255, 255]);
+}
+
+async fn element_image_cycle_through_an_unidentified_descendant_is_invalid_test() {
+    let stylesheet = Stylesheet::parse(
+        "#parent { position:relative; z-index:0; box-sizing:border-box; width:64px; height:64px; background:green; }\n         .child { box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#parent); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let capture = capture.clone();
+        ui.add(
+            (move |ui: &mut egui::Ui| {
+                *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".child")).rect);
+                ui.response()
+            })
+            .selector("#parent"),
+        );
+    })
+    .await;
+    let child = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, child.center().x, child.center().y), [0, 0, 255, 255]);
+}
+
+async fn element_image_cycles_across_root_selectors_include_cached_descendants_test() {
+    let stylesheet = Stylesheet::parse(
+        "#parent { position:relative; z-index:0; box-sizing:border-box; width:64px; height:64px; background:green; }\n         .child { box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#other); }\n         #other { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:yellow; background-image:element(#parent); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_box.selector(".child"));
+                ui.response()
+            })
+            .selector("#parent"),
+        );
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#other")).rect);
+    })
+    .await;
+    let other = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, other.center().x, other.center().y), [255, 255, 0, 255]);
+}
+
+async fn overridden_element_image_reference_does_not_create_a_cycle_test() {
+    let stylesheet = Stylesheet::parse(
+        "#first { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; background-image:element(#second); background-image:none; }\n         #second { box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+    })
+    .await;
+    let second = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, second.center().x, second.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
+async fn border_shorthand_reset_does_not_create_an_element_image_cycle_test() {
+    let stylesheet = Stylesheet::parse(
+        "#first { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; border-image-source:element(#second); border:2px solid transparent; }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_box.selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+    })
+    .await;
+    let second = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, second.center().x, second.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
+async fn first_letter_border_image_participates_in_element_cycle_detection_test() {
+    let stylesheet = Stylesheet::parse(
+        "#first { position:relative; z-index:0; color:white; background:red; font-size:24px; }\n         #first::first-letter { border:3px solid lime; border-image-source:element(#second); border-image-slice:1; }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:24px; height:24px; background:blue; background-image:element(#first); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(egui::Label::new("A").selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+    })
+    .await;
+    let second = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, second.center().x, second.center().y),
+        [0, 0, 255, 255]
+    );
+}
+
+async fn border_hairline_resolves_to_one_device_pixel_test() {
+    let stylesheet = Stylesheet::parse(
+        ".hairline { box-sizing:border-box; width:20px; height:20px; border:hairline solid red; background:white; }",
+    )
+    .unwrap();
+    for scale in [1.0, 2.0] {
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_at_scale(stylesheet.clone(), scale, move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".hairline")).rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        let y = rect.center().y * scale;
+        assert_eq!(
+            pixel(&pixels, (rect.left() + 0.25 / scale) * scale, y),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            pixel(&pixels, (rect.left() + 1.25 / scale) * scale, y),
+            [255, 255, 255, 255]
+        );
+    }
+}
+
 async fn background_layers_use_their_matching_clip_values_test() {
     let stylesheet = Stylesheet::parse(
         ".layered { box-sizing:border-box; width:40px; height:40px; padding:6px; border:4px solid black; background-image:linear-gradient(red, red), linear-gradient(blue, blue); background-clip:content-box, border-box; } .shorthand { box-sizing:border-box; width:40px; height:40px; padding:6px; border:4px solid black; background:linear-gradient(red, red) content-box, linear-gradient(blue, blue) border-box yellow; }",
@@ -199,7 +734,7 @@ async fn border_shape_clips_tiled_url_background_images_test() {
 
 async fn border_shape_clips_descendant_content_test() {
     let stylesheet = Stylesheet::parse(
-        ".parent { box-sizing:border-box; width:40px; height:40px; overflow:visible; border-shape:circle(50%); }\
+        ".parent { box-sizing:border-box; width:40px; height:40px; overflow:hidden; border-shape:circle(50%); }\
          .child { box-sizing:border-box; width:60px; height:60px; background-color:red; }",
     )
     .unwrap();
@@ -222,6 +757,54 @@ async fn border_shape_clips_descendant_content_test() {
     assert_eq!(pixel(&pixels, parent.center().x, parent.center().y), [255, 0, 0, 255]);
     assert_eq!(pixel(&pixels, parent.left() + 1.0, parent.top() + 1.0), [255; 4]);
     assert_eq!(pixel(&pixels, parent.right() + 5.0, parent.center().y), [255; 4]);
+}
+
+async fn border_shape_preserves_visible_descendant_overflow_test() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { box-sizing:border-box; width:40px; height:40px; overflow:visible; border-shape:circle(50%); }\
+         .child { box-sizing:border-box; width:60px; height:60px; background-color:red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let mut child = None;
+        let parent = ui.add(
+            (|ui: &mut egui::Ui| {
+                child = Some(ui.add(empty_box.selector(".child")).rect);
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = Some((parent.rect, child.unwrap()));
+    })
+    .await;
+    let (parent, child) = bounds.lock().unwrap().unwrap();
+    assert!(child.right() > parent.right());
+    assert_eq!(pixel(&pixels, parent.left() + 1.0, parent.top() + 1.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, parent.right() + 5.0, parent.center().y), [255, 0, 0, 255]);
+}
+
+async fn border_limit_percentages_use_border_box_dimensions_test() {
+    let stylesheet = Stylesheet::parse(
+        ".box { box-sizing:border-box; width:100px; height:60px; border:4px solid black; border-radius:20px; border-limit:sides 50%; background:white; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 26.0, rect.top() + 1.0),
+        [0, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 24.0, rect.top() + 1.0),
+        [255; 4]
+    );
 }
 
 async fn border_radius_clips_overflow_content_to_the_curved_padding_edge_test() {
@@ -301,6 +884,30 @@ async fn overflow_clip_margin_expands_rounded_descendant_clipping_test() {
     assert_eq!(pixel(&pixels, parent.left() - 4.0, parent.center().y), [255, 0, 0, 255]);
 }
 
+async fn overflow_clip_margin_expands_border_shape_descendant_clipping_test() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { box-sizing:border-box; width:40px; height:40px; overflow:clip; overflow-clip-margin:5px; border-shape:circle(50%); }\
+         .child { box-sizing:border-box; width:60px; height:60px; background-color:red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let parent = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_box.selector(".child"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = Some(parent.rect);
+    })
+    .await;
+    let parent = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, parent.left() + 4.0, parent.top() + 4.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, parent.left() - 4.0, parent.center().y), [255, 0, 0, 255]);
+}
+
 async fn image_set_selects_the_nearest_supported_resolution_test() {
     let data_url = |color| {
         let source = image::RgbaImage::from_pixel(1, 1, image::Rgba(color));
@@ -317,7 +924,7 @@ async fn image_set_selects_the_nearest_supported_resolution_test() {
     let high_density = data_url([255, 0, 0, 255]);
     let standard_density = data_url([0, 0, 255, 255]);
     let css = format!(
-        ".image {{ box-sizing:border-box; width:20px; height:20px; background-image:image-set(url(\"data:image/svg+xml;base64,AA==\") 4x type(\"image/svg+xml\"), url(\"{high_density}\") 2x type(\"image/png\"), url(\"{standard_density}\") 1x); }}"
+        ".image {{ box-sizing:border-box; width:20px; height:20px; background-image:image-set(url(\"data:image/svg+xml;base64,AA==\") 4x type(\"image/unsupported\"), url(\"{high_density}\") 2x type(\"image/png\"), url(\"{standard_density}\") 1x); }}"
     );
     let stylesheet = Stylesheet::load(&css).await.unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
@@ -699,6 +1306,27 @@ async fn image_color_paints_as_a_border_image_test() {
     assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
 }
 
+async fn solid_color_border_image_honors_space_repeat_test() {
+    let stylesheet = Stylesheet::parse(
+        ".space { box-sizing:border-box; width:30px; height:20px; border:4px solid black; background:white; border-image-source:image(rgb(255, 0, 0)); border-image-slice:1; border-image-width:4; border-image-repeat:space; }\
+         .stretch { box-sizing:border-box; width:30px; height:20px; border:4px solid black; background:white; border-image-source:image(rgb(255, 0, 0)); border-image-slice:1; border-image-width:4; border-image-repeat:stretch; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = vec![
+            ui.add(empty_box.selector(".space")).rect,
+            ui.add(empty_box.selector(".stretch")).rect,
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    assert_eq!(pixel(&pixels, bounds[0].center().x, bounds[0].top() + 2.0), [255; 4]);
+    assert_eq!(pixel(&pixels, bounds[0].left() + 1.0, bounds[0].top() + 1.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[1].center().x, bounds[1].top() + 2.0), [255, 0, 0, 255]);
+}
+
 async fn border_image_repeat_tiles_the_center_region_test() {
     let mut source = image::RgbaImage::from_pixel(6, 6, image::Rgba([0, 255, 0, 255]));
     for y in 1..5 {
@@ -857,7 +1485,9 @@ async fn radial_gradient_paints_as_a_border_image_test() {
 async fn partial_borders_draw_only_the_limited_or_clipped_segments_test() {
     let stylesheet = Stylesheet::parse(
         ".limited { box-sizing: border-box; width: 60px; height: 30px; border: 2px solid blue; border-limit: sides 50%; }\
-         .clipped { box-sizing: border-box; width: 60px; height: 30px; border: 2px solid red; border-top-clip: 0 1fr; }",
+         .clipped { box-sizing: border-box; width: 60px; height: 30px; border: 2px solid red; border-top-clip: 0 1fr; }\
+         .fractional { box-sizing: border-box; width: 60px; height: 30px; border: 2px solid black; border-top-clip: 0.25fr; }\
+         .fractional-fixed { box-sizing: border-box; width: 60px; height: 30px; border: 2px solid black; border-top-clip: 0.25fr 10px; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -866,6 +1496,8 @@ async fn partial_borders_draw_only_the_limited_or_clipped_segments_test() {
         *capture.lock().unwrap() = vec![
             ui.add(empty_box.selector(".limited")).rect,
             ui.add(empty_box.selector(".clipped")).rect,
+            ui.add(empty_box.selector(".fractional")).rect,
+            ui.add(empty_box.selector(".fractional-fixed")).rect,
         ];
     })
     .await;
@@ -874,27 +1506,139 @@ async fn partial_borders_draw_only_the_limited_or_clipped_segments_test() {
     assert_eq!(pixel(&pixels, bounds[0].center().x, bounds[0].top() + 0.5), [0, 0, 255, 255]);
     assert_eq!(pixel(&pixels, bounds[1].center().x, bounds[1].top() + 0.5), [255; 4]);
     assert_eq!(pixel(&pixels, bounds[1].left() + 0.5, bounds[1].center().y), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[2].left() + 10.0, bounds[2].top() + 0.5), [0, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[2].center().x, bounds[2].top() + 0.5), [0, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[3].left() + 8.0, bounds[3].top() + 0.5), [0, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[3].left() + 17.0, bounds[3].top() + 0.5), [0, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, bounds[3].left() + 55.0, bounds[3].top() + 0.5), [255; 4]);
 }
 
-async fn striped_border_color_paints_across_the_border_thickness_test() {
+async fn zero_width_adjacent_border_takes_the_entire_corner_transition_test() {
     let stylesheet = Stylesheet::parse(
-        ".striped { box-sizing: border-box; width: 60px; height: 30px; border: 8px solid stripes(red 1fr, blue 1fr); }",
+        ".corner { box-sizing:border-box; width:50px; height:50px; border:0 solid blue; border-left:10px solid red; border-radius:20px; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".striped")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".corner")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
-    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 1.0), [255, 0, 0, 255]);
-    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 5.0), [0, 0, 255, 255]);
+    let transition = pixel(&pixels, rect.left() + 10.0, rect.top() + 5.0);
+    assert!(
+        transition[0] > 200 && transition[1] < 64 && transition[2] < 64,
+        "zero-width adjacent border left an unpainted corner transition: {transition:?}"
+    );
+}
+
+async fn border_corner_color_transition_tracks_border_width_ratio_test() {
+    let stylesheet = Stylesheet::parse(
+        ".corner { box-sizing:border-box; width:50px; height:50px; border:0 solid; border-top:2px solid blue; border-left:10px solid red; border-radius:20px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".corner")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    let transition = pixel(&pixels, rect.left() + 11.0, rect.top() + 3.0);
+    assert!(
+        transition[0] > 200 && transition[1] < 64 && transition[2] < 64,
+        "wider adjacent border did not retain the larger corner share: {transition:?}"
+    );
+}
+
+async fn zero_flex_border_clip_does_not_create_an_implicit_flex_test() {
+    let stylesheet = Stylesheet::parse(
+        ".zero { box-sizing:border-box; width:60px; height:30px; border:2px solid black; border-top-clip:0fr; }\
+         .fixed { box-sizing:border-box; width:60px; height:30px; border:2px solid black; border-top-clip:0fr 10px; }\
+         .implicit { box-sizing:border-box; width:60px; height:30px; border:2px solid black; border-top-clip:0 10px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 3]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".zero")).rect),
+            Some(ui.add(empty_box.selector(".fixed")).rect),
+            Some(ui.add(empty_box.selector(".implicit")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for rect in bounds[..2].iter().flatten() {
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.top() + 0.5),
+            [255; 4]
+        );
+        assert_eq!(
+            pixel(&pixels, rect.left() + 0.5, rect.center().y),
+            [0, 0, 0, 255]
+        );
+    }
+    let implicit = bounds[2].unwrap();
+    assert_eq!(
+        pixel(&pixels, implicit.center().x, implicit.top() + 0.5),
+        [0, 0, 0, 255]
+    );
+}
+
+async fn striped_border_color_paints_from_the_padding_edge_outward_test() {
+    let stylesheet = Stylesheet::parse(
+        ".striped { box-sizing:border-box; width:60px; height:30px; border:8px solid stripes(red 1fr, blue 1fr); }\
+         .partial { box-sizing:border-box; width:60px; height:30px; border:8px solid stripes(red 0.25fr, blue 0.25fr); background:white; }\
+         .partial-fixed { box-sizing:border-box; width:80px; height:80px; border:40px solid stripes(red 0.1fr, blue 0.2fr, green 10px); background:white; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 3]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".striped")).rect),
+            Some(ui.add(empty_box.selector(".partial")).rect),
+            Some(ui.add(empty_box.selector(".partial-fixed")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let rect = bounds[0].unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 1.0), [0, 0, 255, 255]);
+    assert_eq!(pixel(&pixels, rect.center().x, rect.top() + 5.0), [255, 0, 0, 255]);
+    let partial = bounds[1].unwrap();
+    assert_eq!(pixel(&pixels, partial.center().x, partial.top() + 0.25), [255; 4]);
+    assert_eq!(pixel(&pixels, partial.center().x, partial.top() + 4.25), [0, 0, 255, 255]);
+    assert_eq!(pixel(&pixels, partial.center().x, partial.top() + 7.25), [255, 0, 0, 255]);
+    let partial_fixed = bounds[2].unwrap();
+    assert_eq!(pixel(&pixels, partial_fixed.center().x, partial_fixed.top() + 0.25), [255; 4]);
+    assert_eq!(pixel(&pixels, partial_fixed.center().x, partial_fixed.top() + 22.25), [0, 128, 0, 255]);
+    assert_eq!(pixel(&pixels, partial_fixed.center().x, partial_fixed.top() + 32.25), [0, 0, 255, 255]);
+    assert_eq!(pixel(&pixels, partial_fixed.center().x, partial_fixed.top() + 38.25), [255, 0, 0, 255]);
+}
+
+async fn striped_border_shape_color_starts_at_the_padding_edge_test() {
+    let stylesheet = Stylesheet::parse(
+        ".shaped { box-sizing:border-box; width:60px; height:60px; border:8px solid stripes(red 1fr, blue 1fr); border-shape:circle(50%); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shaped")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    let outer = pixel(&pixels, rect.center().x, rect.top() + 1.0);
+    let inner = pixel(&pixels, rect.center().x, rect.top() + 7.0);
+    assert!(outer[2] > outer[0] * 4, "unexpected outer stripe color: {outer:?}");
+    assert!(inner[0] > inner[2] * 4, "unexpected inner stripe color: {inner:?}");
 }
 
 async fn linear_gradient_border_image_is_sliced_and_painted_test() {
     let stylesheet = Stylesheet::parse(
-        ".image { box-sizing: border-box; width: 60px; height: 30px; border: 8px solid black; border-image-source: linear-gradient(red, blue); border-image-slice: 10; border-image-width: 8; }",
+        ".image { box-sizing: border-box; width: 60px; height: 30px; border: 8px solid black; border-image-source: linear-gradient(red, blue); border-image-slice: calc(20% + 20%); border-image-width: 8; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(None));
@@ -926,6 +1670,35 @@ async fn border_image_width_auto_uses_border_width_for_gradients_test() {
     let outside_border = pixel(&pixels, rect.center().x, rect.top() + 10.0);
     assert!(inside_border[0] > inside_border[2], "{inside_border:?}");
     assert_eq!(outside_border, [255, 255, 255, 255]);
+}
+
+async fn border_image_width_and_outset_use_computed_border_widths_when_style_is_none_test() {
+    let stylesheet = Stylesheet::parse(
+        ".width { box-sizing:border-box; width:60px; height:40px; background:white; border-style:none; border-width:4px; border-image:image(red) calc(0.5 + 0.5) / calc(1 + 1); }\
+         .outset { box-sizing:border-box; width:60px; height:40px; background:white; border-style:none; border-width:4px; border-image:image(red) 1 / calc(2px + 2px) / calc(1 + 1); }\
+         .length-width { box-sizing:border-box; width:60px; height:40px; background:white; border-style:none; border-width:4px; border-image:image(red) 1 / calc(4px + 10%); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 3]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".width")).rect),
+            Some(ui.add(empty_box.selector(".outset")).rect),
+            Some(ui.add(empty_box.selector(".length-width")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let width = bounds[0].unwrap();
+    assert_eq!(pixel(&pixels, width.center().x, width.top() + 2.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, width.center().x, width.top() + 10.0), [255; 4]);
+    let outset = bounds[1].unwrap();
+    assert_eq!(pixel(&pixels, outset.right() + 6.0, outset.center().y), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, outset.right() + 2.0, outset.center().y), [255; 4]);
+    let length_width = bounds[2].unwrap();
+    assert_eq!(pixel(&pixels, length_width.center().x, length_width.top() + 2.0), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, length_width.center().x, length_width.top() + 10.0), [255; 4]);
 }
 
 async fn border_image_width_auto_resolves_density_corrected_slices_test() {
@@ -1068,7 +1841,7 @@ async fn polygon_border_shape_respects_fill_rules_on_retraced_contours_test() {
 
 async fn outer_and_inset_box_shadows_paint_on_their_respective_sides_test() {
     let stylesheet = Stylesheet::parse(
-        ".outer { box-sizing: border-box; width: 60px; height: 30px; background-color: red; box-shadow: 4px 4px 0 blue; }\
+        ".outer { box-sizing: border-box; width: 60px; height: 30px; background-color: red; box-shadow: calc(2px + 2px) calc(1px + 3px) calc(0px + 0px) blue; }\
          .inner { box-sizing: border-box; width: 60px; height: 30px; background-color: red; box-shadow: 4px 4px 0 blue inset; }",
     )
     .unwrap();
@@ -1159,6 +1932,24 @@ async fn box_shadow_offset_none_is_case_insensitive_test() {
         pixel(&pixels, rect.right() + 1.0, rect.center().y),
         [255; 4]
     );
+}
+
+async fn box_shadow_longhand_lists_repeat_and_truncate_to_offsets_test() {
+    let stylesheet = Stylesheet::parse(
+        ".box { box-sizing:border-box; width:20px; height:20px; background:white; box-shadow-offset:calc(2px + 3px) 0, 25px 0, 45px 0; box-shadow-blur:calc(0px + 0px), 0px, 0px, 100px; box-shadow-spread:calc(0px + 0px); box-shadow-color:red, blue; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.right() + 2.0, rect.center().y), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, rect.right() + 22.0, rect.center().y), [0, 0, 255, 255]);
+    assert_eq!(pixel(&pixels, rect.right() + 42.0, rect.center().y), [255, 0, 0, 255]);
+    assert_eq!(pixel(&pixels, rect.right() + 110.0, rect.center().y), [255; 4]);
 }
 
 async fn box_shadow_blur_scales_beyond_128_pixels_test() {
@@ -1305,5 +2096,132 @@ async fn logical_border_pairs_resolve_against_direction_and_affect_box_size_test
     assert_eq!(
         pixel(&pixels, rect.center().x, rect.top() + 1.5),
         [0, 128, 0, 255]
+    );
+}
+
+async fn upright_text_orientation_maps_logical_border_corners_with_ltr_direction_test() {
+    let stylesheet = Stylesheet::parse(
+        ".upright, .mixed { box-sizing:border-box; width:48px; height:48px; writing-mode:vertical-rl; direction:rtl; border:4px solid blue; border-block-start-color:green; border-inline-start-color:red; background:white; border-start-start-radius:16px; }\
+         .upright { text-orientation:upright; }\
+         .mixed { text-orientation:mixed; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".upright")).rect),
+            Some(ui.add(empty_box.selector(".mixed")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let upright = bounds[0].unwrap();
+    let mixed = bounds[1].unwrap();
+    assert_eq!(
+        pixel(&pixels, upright.center().x, upright.top() + 2.5),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, upright.right() - 2.5, upright.center().y),
+        [0, 128, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.center().x, mixed.bottom() - 2.5),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.right() - 2.5, mixed.center().y),
+        [0, 128, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, upright.right() - 2.5, upright.top() + 2.5),
+        [255; 4]
+    );
+    assert_ne!(
+        pixel(&pixels, upright.right() - 2.5, upright.bottom() - 2.5),
+        [255; 4]
+    );
+    assert_ne!(
+        pixel(&pixels, mixed.right() - 2.5, mixed.top() + 2.5),
+        [255; 4]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.right() - 2.5, mixed.bottom() - 2.5),
+        [255; 4]
+    );
+}
+
+async fn corner_block_start_shorthand_maps_radii_in_inline_start_end_order_test() {
+    let stylesheet = Stylesheet::parse(
+        ".upright, .mixed { box-sizing:border-box; width:48px; height:48px; writing-mode:vertical-rl; direction:rtl; border:4px solid blue; corner-block-start:round 16px 0; }\
+         .upright { text-orientation:upright; }\
+         .mixed { text-orientation:mixed; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".upright")).rect),
+            Some(ui.add(empty_box.selector(".mixed")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let upright = bounds[0].unwrap();
+    let mixed = bounds[1].unwrap();
+    assert_eq!(
+        pixel(&pixels, upright.right() - 2.5, upright.top() + 2.5),
+        [255; 4]
+    );
+    assert_ne!(
+        pixel(&pixels, upright.right() - 2.5, upright.bottom() - 2.5),
+        [255; 4]
+    );
+    assert_ne!(
+        pixel(&pixels, mixed.right() - 2.5, mixed.top() + 2.5),
+        [255; 4]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.right() - 2.5, mixed.bottom() - 2.5),
+        [255; 4]
+    );
+}
+
+async fn upright_text_orientation_maps_logical_border_clips_with_ltr_direction_test() {
+    let stylesheet = Stylesheet::parse(
+        ".upright, .mixed { box-sizing:border-box; width:48px; height:48px; writing-mode:vertical-rl; direction:rtl; border:2px solid black; border-inline-start-clip:0 1fr; }\
+         .upright { text-orientation:upright; }\
+         .mixed { text-orientation:mixed; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([None; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            Some(ui.add(empty_box.selector(".upright")).rect),
+            Some(ui.add(empty_box.selector(".mixed")).rect),
+        ];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let upright = bounds[0].unwrap();
+    let mixed = bounds[1].unwrap();
+    assert_eq!(
+        pixel(&pixels, upright.center().x, upright.top() + 0.5),
+        [255; 4]
+    );
+    assert_eq!(
+        pixel(&pixels, upright.center().x, upright.bottom() - 0.5),
+        [0, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.center().x, mixed.top() + 0.5),
+        [0, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, mixed.center().x, mixed.bottom() - 0.5),
+        [255; 4]
     );
 }

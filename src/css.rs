@@ -19,6 +19,7 @@ use crate::CssError;
 pub(crate) struct Rule {
     pub(crate) class: Option<String>,
     pub(crate) state: RuleState,
+    pub(crate) pseudo: Option<PseudoElementKind>,
     pub(crate) declarations: Vec<Declaration>,
 }
 
@@ -27,6 +28,12 @@ pub(crate) enum RuleState {
     Base,
     Hovered,
     Active,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PseudoElementKind {
+    FirstLetter,
+    FirstLine,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +63,7 @@ pub(crate) struct BackgroundShorthand {
 pub(crate) enum BackgroundImage {
     None,
     Url(String),
+    Element(String),
     SolidColor(Color32),
     LinearGradient(LinearGradient),
     RadialGradient(RadialGradient),
@@ -92,6 +100,7 @@ impl BackgroundImage {
                 .any(|item| item.image.contains_image_set()),
             Self::None
             | Self::Url(_)
+            | Self::Element(_)
             | Self::SolidColor(_)
             | Self::LinearGradient(_)
             | Self::RadialGradient(_)
@@ -165,7 +174,36 @@ impl BackgroundImage {
                     }
                 }
             }
+            Self::Element(_) => {}
             Self::None
+            | Self::SolidColor(_)
+            | Self::LinearGradient(_)
+            | Self::RadialGradient(_)
+            | Self::ConicGradient(_) => {}
+        }
+    }
+
+    pub(crate) fn collect_element_ids(&self, ids: &mut Vec<String>) {
+        match self {
+            Self::Element(id) => ids.push(id.clone()),
+            Self::CrossFade(cross_fade) => {
+                for item in &cross_fade.items {
+                    item.image.collect_element_ids(ids);
+                }
+            }
+            Self::ImageSet(candidates) => {
+                for candidate in candidates {
+                    if candidate
+                        .type_hint
+                        .as_deref()
+                        .is_none_or(supported_image_type)
+                    {
+                        candidate.image.collect_element_ids(ids);
+                    }
+                }
+            }
+            Self::None
+            | Self::Url(_)
             | Self::SolidColor(_)
             | Self::LinearGradient(_)
             | Self::RadialGradient(_)
@@ -175,7 +213,9 @@ impl BackgroundImage {
 }
 
 fn supported_image_type(mime_type: &str) -> bool {
-    image::ImageFormat::from_mime_type(mime_type).is_some_and(|format| format.reading_enabled())
+    mime_type.eq_ignore_ascii_case("image/svg+xml")
+        || image::ImageFormat::from_mime_type(mime_type)
+            .is_some_and(|format| format.reading_enabled())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -335,15 +375,17 @@ pub(crate) fn selector_class(selector: &str) -> Option<String> {
         .ok()
         .filter(|selectors| selectors.len() == 1)
         .and_then(|mut selectors| {
-            let (class, state) = selectors.pop()?;
-            (state == RuleState::Base).then_some(class).flatten()
+            let (class, state, pseudo) = selectors.pop()?;
+            (state == RuleState::Base && pseudo.is_none())
+                .then_some(class)
+                .flatten()
         })
 }
 
 struct StylesheetRuleParser;
 
 impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
-    type Prelude = Vec<(Option<String>, RuleState)>;
+    type Prelude = Vec<(Option<String>, RuleState, Option<PseudoElementKind>)>;
     type QualifiedRule = ParsedRule;
     type Error = ParseIssue;
 
@@ -364,9 +406,10 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
         Ok(ParsedRule::Style(
             selectors
                 .into_iter()
-                .map(|(class, state)| Rule {
+                .map(|(class, state, pseudo)| Rule {
                     class,
                     state,
+                    pseudo,
                     declarations: declarations.clone(),
                 })
                 .collect(),
@@ -431,7 +474,7 @@ fn parse_import<'i>(input: &mut CssParser<'i>) -> Result<String, ParseError<Pars
 
 fn parse_selectors<'i>(
     input: &mut CssParser<'i>,
-) -> Result<Vec<(Option<String>, RuleState)>, ParseError<ParseIssue>> {
+) -> Result<Vec<(Option<String>, RuleState, Option<PseudoElementKind>)>, ParseError<ParseIssue>> {
     let selector_parser = SimpleSelectorParser;
     let selectors = SelectorList::parse(&selector_parser, input, ParseRelative::No)
         .map_err(|_| ParseError::custom(ParseIssue::new("unsupported class selector")))?;
@@ -441,10 +484,14 @@ fn parse_selectors<'i>(
         let mut class = None;
         let mut universal = false;
         let mut state = RuleState::Base;
+        let mut pseudo = None;
         for component in selector.iter_raw_parse_order_from(0) {
             match component {
                 Component::Class(identifier) if class.is_none() && !universal => {
                     class = Some(identifier.0.clone());
+                }
+                Component::ID(identifier) if class.is_none() && !universal => {
+                    class = Some(format!("@id:{}", identifier.0));
                 }
                 Component::ExplicitUniversalType if class.is_none() && !universal => {
                     universal = true;
@@ -455,6 +502,14 @@ fn parse_selectors<'i>(
                 Component::NonTSPseudoClass(StatePseudo::Active) if state == RuleState::Base => {
                     state = RuleState::Active;
                 }
+                Component::NonTSPseudoClass(StatePseudo::FirstLetter) if pseudo.is_none() => {
+                    pseudo = Some(PseudoElementKind::FirstLetter);
+                }
+                Component::NonTSPseudoClass(StatePseudo::FirstLine) if pseudo.is_none() => {
+                    pseudo = Some(PseudoElementKind::FirstLine);
+                }
+                Component::PseudoElement(value) if pseudo.is_none() => pseudo = Some(*value),
+                Component::Combinator(combinator) if combinator.is_pseudo_element() => {}
                 _ => {
                     return Err(ParseError::custom(ParseIssue::new(
                         "unsupported class selector",
@@ -471,12 +526,14 @@ fn parse_selectors<'i>(
             None
         } else if let Some(class) = class {
             Some(class)
+        } else if pseudo.is_some() {
+            None
         } else {
             return Err(ParseError::custom(ParseIssue::new(
                 "unsupported class selector",
             )));
         };
-        result.push((selector, state));
+        result.push((selector, state, pseudo));
     }
     if result.is_empty() {
         return Err(ParseError::custom(ParseIssue::new(
@@ -652,6 +709,17 @@ pub(crate) fn parse_background_image(
                 Ok(value)
             })?;
             BackgroundImage::Url(url)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("element") => {
+            let id = input.parse_nested_block(|args| {
+                let id = match args.next()? {
+                    Token::IDHash(id) => id.to_string(),
+                    _ => return Err(ParseError::custom("element() requires an ID selector")),
+                };
+                args.expect_exhausted()?;
+                Ok(id)
+            })?;
+            BackgroundImage::Element(id)
         }
         Token::Function(name)
             if name.eq_ignore_ascii_case("linear-gradient")
@@ -1903,15 +1971,17 @@ impl PrecomputedHash for Atom {
 enum StatePseudo {
     Hover,
     Active,
+    FirstLetter,
+    FirstLine,
 }
 
 impl parser::NonTSPseudoClass for StatePseudo {
     fn is_active_or_hover(&self) -> bool {
-        true
+        matches!(self, Self::Hover | Self::Active)
     }
 
     fn is_user_action_state(&self) -> bool {
-        true
+        matches!(self, Self::Hover | Self::Active)
     }
 }
 
@@ -1923,21 +1993,23 @@ impl ToCss for StatePseudo {
         dest.write_str(match self {
             Self::Hover => ":hover",
             Self::Active => ":active",
+            Self::FirstLetter => ":first-letter",
+            Self::FirstLine => ":first-line",
         })
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum NoPseudoElement {}
+impl parser::PseudoElement for PseudoElementKind {}
 
-impl parser::PseudoElement for NoPseudoElement {}
-
-impl ToCss for NoPseudoElement {
+impl ToCss for PseudoElementKind {
     fn to_css<W>(&self, _dest: &mut W) -> fmt::Result
     where
         W: fmt::Write,
     {
-        match *self {}
+        _dest.write_str(match self {
+            Self::FirstLetter => "::first-letter",
+            Self::FirstLine => "::first-line",
+        })
     }
 }
 
@@ -1954,7 +2026,7 @@ impl parser::SelectorImpl for SimpleSelectorImpl {
     type BorrowedLocalName = str;
     type BorrowedNamespaceUrl = str;
     type NonTSPseudoClass = StatePseudo;
-    type PseudoElement = NoPseudoElement;
+    type PseudoElement = PseudoElementKind;
 }
 
 struct SimpleSelectorParser;
@@ -1971,6 +2043,25 @@ impl<'i> parser::Parser<'i> for SimpleSelectorParser {
             Ok(StatePseudo::Hover)
         } else if name.eq_ignore_ascii_case("active") {
             Ok(StatePseudo::Active)
+        } else if name.eq_ignore_ascii_case("first-letter") {
+            Ok(StatePseudo::FirstLetter)
+        } else if name.eq_ignore_ascii_case("first-line") {
+            Ok(StatePseudo::FirstLine)
+        } else {
+            Err(ParseError::custom(
+                parser::SelectorParseErrorKind::UnsupportedPseudoClassOrElement,
+            ))
+        }
+    }
+
+    fn parse_pseudo_element(
+        &self,
+        name: CowRcStr<'i>,
+    ) -> Result<PseudoElementKind, ParseError<Self::Error>> {
+        if name.eq_ignore_ascii_case("first-letter") {
+            Ok(PseudoElementKind::FirstLetter)
+        } else if name.eq_ignore_ascii_case("first-line") {
+            Ok(PseudoElementKind::FirstLine)
         } else {
             Err(ParseError::custom(
                 parser::SelectorParseErrorKind::UnsupportedPseudoClassOrElement,

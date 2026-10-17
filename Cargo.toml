@@ -14,6 +14,12 @@ egui = "0.36"
 ehttp = { version = "0.7", features = ["native-async"] }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+resvg = { version = "0.48.1", default-features = false, features = [
+  "raster-images",
+  "svgz",
+  "system-fonts",
+  "text",
+] }
 precomputed-hash = "0.1"
 selectors = "0.41"
 taffy = { version = "0.15", default-features = false, features = [
@@ -29,6 +35,7 @@ taffy = { version = "0.15", default-features = false, features = [
   "taffy_tree",
 ] }
 unicode-linebreak = "0.1.5"
+unicode-general-category = "1.1.0"
 wuff = "0.2"
 
 [dev-dependencies]
