@@ -75,7 +75,7 @@ enum TimingFunction {
     EaseOut,
     EaseInOut,
     CubicBezier(f64, f64, f64, f64),
-    Steps(u32, StepPosition),
+    Steps(f64, StepPosition),
 }
 
 #[derive(Clone, Debug)]
@@ -419,78 +419,116 @@ fn parse_time(value: &str) -> Option<f64> {
 }
 
 fn parse_timing(value: &str) -> Option<TimingFunction> {
-    let value = value.trim();
-    if value.eq_ignore_ascii_case("linear") {
-        return Some(TimingFunction::Linear);
-    }
-    if value.eq_ignore_ascii_case("ease") {
-        return Some(TimingFunction::Ease);
-    }
-    if value.eq_ignore_ascii_case("ease-in") {
-        return Some(TimingFunction::EaseIn);
-    }
-    if value.eq_ignore_ascii_case("ease-out") {
-        return Some(TimingFunction::EaseOut);
-    }
-    if value.eq_ignore_ascii_case("ease-in-out") {
-        return Some(TimingFunction::EaseInOut);
-    }
-    if value.eq_ignore_ascii_case("step-start") {
-        return Some(TimingFunction::Steps(1, StepPosition::Start));
-    }
-    if value.eq_ignore_ascii_case("step-end") {
-        return Some(TimingFunction::Steps(1, StepPosition::End));
-    }
-    if let Some(arguments) = function_arguments(value, "cubic-bezier") {
-        let numbers: Vec<f64> = arguments
-            .split(',')
-            .map(|value| value.trim().parse::<f64>().ok())
-            .collect::<Option<_>>()?;
-        if numbers.len() == 4
-            && (0.0..=1.0).contains(&numbers[0])
-            && (0.0..=1.0).contains(&numbers[2])
-            && numbers.iter().all(|number| number.is_finite())
-        {
-            return Some(TimingFunction::CubicBezier(
-                numbers[0], numbers[1], numbers[2], numbers[3],
-            ));
-        }
-        return None;
-    }
-    if let Some(arguments) = function_arguments(value, "steps") {
-        let mut arguments = arguments.split(',').map(str::trim);
-        let count = arguments.next()?.parse::<u32>().ok()?;
-        let position = match arguments
-            .next()
-            .unwrap_or("end")
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "start" => StepPosition::Start,
-            "end" => StepPosition::End,
-            "jump-start" => StepPosition::JumpStart,
-            "jump-end" => StepPosition::JumpEnd,
-            "jump-none" => StepPosition::JumpNone,
-            "jump-both" => StepPosition::JumpBoth,
+    let mut input = CssParser::new(value);
+    let timing = match input.next().ok()?.clone() {
+        Token::Ident(name) => match name.to_ascii_lowercase().as_str() {
+            "linear" => TimingFunction::Linear,
+            "ease" => TimingFunction::Ease,
+            "ease-in" => TimingFunction::EaseIn,
+            "ease-out" => TimingFunction::EaseOut,
+            "ease-in-out" => TimingFunction::EaseInOut,
+            "step-start" => TimingFunction::Steps(1.0, StepPosition::Start),
+            "step-end" => TimingFunction::Steps(1.0, StepPosition::End),
             _ => return None,
-        };
-        if arguments.next().is_some() || count == 0 {
-            return None;
-        }
-        if matches!(position, StepPosition::JumpNone) && count < 2 {
-            return None;
-        }
-        return Some(TimingFunction::Steps(count, position));
-    }
-    None
+        },
+        Token::Function(name) => input
+            .parse_nested_block(|arguments| parse_timing_arguments(&name, arguments))
+            .ok()?,
+        _ => return None,
+    };
+    input.expect_exhausted().ok()?;
+    Some(timing)
 }
 
-fn function_arguments<'a>(value: &'a str, name: &str) -> Option<&'a str> {
-    let open = value.find('(')?;
-    if !value[..open].trim().eq_ignore_ascii_case(name) || !value.ends_with(')') {
-        return None;
+fn parse_timing_arguments(
+    name: &str,
+    input: &mut CssParser<'_>,
+) -> Result<TimingFunction, cssparser::ParseError<&'static str>> {
+    match name.to_ascii_lowercase().as_str() {
+        "cubic-bezier" => {
+            let x1 = timing_number(input)?;
+            input.expect_comma()?;
+            let y1 = timing_number(input)?;
+            input.expect_comma()?;
+            let x2 = timing_number(input)?;
+            input.expect_comma()?;
+            let y2 = timing_number(input)?;
+            input.expect_exhausted()?;
+            if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) {
+                return Err(cssparser::ParseError::custom(
+                    "cubic-bezier x coordinates must be between zero and one",
+                ));
+            }
+            Ok(TimingFunction::CubicBezier(x1, y1, x2, y2))
+        }
+        "steps" => {
+            input.skip_whitespace();
+            let start = input.position();
+            if !matches!(input.next()?, Token::Number { .. }) {
+                return Err(cssparser::ParseError::custom(
+                    "steps requires a positive integer",
+                ));
+            }
+            let count_text = input.slice(start..input.position()).trim();
+            let digits = count_text
+                .strip_prefix('+')
+                .or_else(|| count_text.strip_prefix('-'))
+                .unwrap_or(count_text);
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(cssparser::ParseError::custom(
+                    "steps requires a positive integer",
+                ));
+            }
+            let count = count_text
+                .parse::<f64>()
+                .ok()
+                .filter(|count| count.is_finite() && *count > 0.0)
+                .ok_or_else(|| {
+                    cssparser::ParseError::custom("steps requires a positive integer")
+                })?;
+            let position = if input.try_parse(|input| input.expect_comma()).is_ok() {
+                let position = input.expect_ident_cloned()?.to_ascii_lowercase();
+                match position.as_str() {
+                    "start" => StepPosition::Start,
+                    "end" => StepPosition::End,
+                    "jump-start" => StepPosition::JumpStart,
+                    "jump-end" => StepPosition::JumpEnd,
+                    "jump-none" => StepPosition::JumpNone,
+                    "jump-both" => StepPosition::JumpBoth,
+                    _ => {
+                        return Err(cssparser::ParseError::custom("invalid steps position"));
+                    }
+                }
+            } else {
+                StepPosition::End
+            };
+            input.expect_exhausted()?;
+            if matches!(position, StepPosition::JumpNone) && count <= 1.0 {
+                return Err(cssparser::ParseError::custom(
+                    "jump-none requires at least two steps",
+                ));
+            }
+            Ok(TimingFunction::Steps(count, position))
+        }
+        _ => Err(cssparser::ParseError::custom("unsupported easing function")),
     }
-    Some(&value[open + 1..value.len() - 1])
+}
+
+fn timing_number(input: &mut CssParser<'_>) -> Result<f64, cssparser::ParseError<&'static str>> {
+    input.skip_whitespace();
+    let start = input.position();
+    if !matches!(input.next()?, Token::Number { .. }) {
+        return Err(cssparser::ParseError::custom(
+            "cubic-bezier requires four numbers",
+        ));
+    }
+    input
+        .slice(start..input.position())
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| cssparser::ParseError::custom("invalid cubic-bezier number"))
 }
 
 fn configs(properties: &[Property]) -> Vec<Config> {
@@ -725,7 +763,7 @@ pub(crate) fn sample(
             continue;
         }
         let elapsed = effective_now - clock.started_at - config.delay;
-        let (progress, active) = animation_progress(config, elapsed);
+        let (progress, active, before) = animation_progress(config, elapsed);
         if matches!(config.play_state, PlayState::Running) {
             if active {
                 context.request_repaint_after(Duration::from_millis(16));
@@ -738,7 +776,7 @@ pub(crate) fn sample(
         let Some(progress) = progress else {
             continue;
         };
-        let sampled = sample_keyframes(frames, progress, underlying);
+        let sampled = sample_keyframes(frames, progress, before, underlying);
         if active {
             can_defer_layout &= sampled.iter().all(|declaration| {
                 matches!(
@@ -762,17 +800,17 @@ pub(crate) fn sample(
     }
 }
 
-fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool) {
+fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool, bool) {
     let (count, infinite) = match config.iterations {
         Iterations::Count(count) => (count, false),
         Iterations::Infinite => (f64::INFINITY, true),
     };
     let before = elapsed < 0.0;
     if before && !matches!(config.fill, FillMode::Backwards | FillMode::Both) {
-        return (None, false);
+        return (None, false, before);
     }
     if count == 0.0 {
-        return (None, false);
+        return (None, false, before);
     }
 
     let duration = config.duration;
@@ -784,7 +822,7 @@ fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool) {
         let total = duration * count;
         let finished = !infinite && elapsed >= total;
         if finished && !matches!(config.fill, FillMode::Forwards | FillMode::Both) {
-            return (None, false);
+            return (None, false, before);
         }
         if finished {
             let final_iteration = (count.ceil() - 1.0).max(0.0);
@@ -808,11 +846,14 @@ fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool) {
         Direction::AlternateReverse => (iteration as u64).is_multiple_of(2),
     };
     let directed = if reversed { 1.0 - fraction } else { fraction };
-    (Some(ease(config.timing, directed) as f32), active)
+    (
+        Some(ease(config.timing, directed, before) as f32),
+        active,
+        before,
+    )
 }
 
-fn ease(timing: TimingFunction, progress: f64) -> f64 {
-    let progress = progress.clamp(0.0, 1.0);
+fn ease(timing: TimingFunction, progress: f64, before: bool) -> f64 {
     match timing {
         TimingFunction::Linear => progress,
         TimingFunction::Ease => cubic_bezier(0.25, 0.1, 0.25, 1.0, progress),
@@ -821,14 +862,32 @@ fn ease(timing: TimingFunction, progress: f64) -> f64 {
         TimingFunction::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, progress),
         TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(x1, y1, x2, y2, progress),
         TimingFunction::Steps(count, position) => {
-            let (jumps, before) = match position {
-                StepPosition::Start | StepPosition::JumpStart => (count, true),
-                StepPosition::End | StepPosition::JumpEnd => (count, false),
-                StepPosition::JumpNone => (count - 1, false),
-                StepPosition::JumpBoth => (count + 1, true),
+            let scaled = progress * count;
+            let mut current_step = scaled.floor();
+            if matches!(
+                position,
+                StepPosition::Start | StepPosition::JumpStart | StepPosition::JumpBoth
+            ) {
+                current_step += 1.0;
+            }
+            if before && scaled.fract() == 0.0 {
+                current_step -= 1.0;
+            }
+            if progress >= 0.0 && current_step < 0.0 {
+                current_step = 0.0;
+            }
+            let jumps = match position {
+                StepPosition::JumpNone => count - 1.0,
+                StepPosition::JumpBoth => count + 1.0,
+                StepPosition::Start
+                | StepPosition::End
+                | StepPosition::JumpStart
+                | StepPosition::JumpEnd => count,
             };
-            let jump = if before { 1.0 } else { 0.0 };
-            ((progress * f64::from(count) + jump).floor() / f64::from(jumps)).clamp(0.0, 1.0)
+            if progress <= 1.0 && current_step > jumps {
+                current_step = jumps;
+            }
+            current_step / jumps
         }
     }
 }
@@ -837,9 +896,45 @@ fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
     let sample = |a: f64, b: f64, t: f64| {
         3.0 * (1.0 - t).powi(2) * t * a + 3.0 * (1.0 - t) * t.powi(2) * b + t.powi(3)
     };
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x == 1.0 {
+        return 1.0;
+    }
+    if x < 0.0 {
+        if x1 > 0.0 {
+            let slope = y1 / x1;
+            return if slope == 0.0 { 0.0 } else { x * slope };
+        }
+        if x2 > 0.0 {
+            let slope = y2 / x2;
+            return if slope == 0.0 { 0.0 } else { x * slope };
+        }
+        return 0.0;
+    }
+    if x > 1.0 {
+        if x2 < 1.0 {
+            let slope = (1.0 - y2) / (1.0 - x2);
+            return if slope == 0.0 {
+                1.0
+            } else {
+                1.0 + (x - 1.0) * slope
+            };
+        }
+        if x1 < 1.0 {
+            let slope = (1.0 - y1) / (1.0 - x1);
+            return if slope == 0.0 {
+                1.0
+            } else {
+                1.0 + (x - 1.0) * slope
+            };
+        }
+        return 1.0;
+    }
     let mut low = 0.0;
     let mut high = 1.0;
-    for _ in 0..18 {
+    for _ in 0..24 {
         let middle = (low + high) * 0.5;
         if sample(x1, x2, middle) < x {
             low = middle;
@@ -853,6 +948,7 @@ fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
 fn sample_keyframes(
     frames: &[Keyframe],
     progress: f32,
+    before: bool,
     underlying: &[Declaration],
 ) -> Vec<Declaration> {
     let mut properties: Vec<(String, Vec<(f32, Declaration)>)> = Vec::new();
@@ -896,35 +992,44 @@ fn sample_keyframes(
                 anchors.push((1.0, base));
             }
         }
-        let Some((first_offset, first_value)) = anchors.first() else {
+        let Some((first_offset, _)) = anchors.first() else {
             continue;
         };
-        if progress < *first_offset {
+        if progress < *first_offset && anchors.len() < 2 {
             continue;
         }
-        let mut previous = (*first_offset, first_value);
-        let mut next = None;
-        for (offset, value) in anchors.iter().skip(1) {
-            if progress < *offset {
-                next = Some((*offset, value));
-                break;
+        let pair = if progress < *first_offset {
+            Some((&anchors[0], &anchors[1]))
+        } else if progress > anchors.last().expect("anchors are non-empty").0 {
+            Some((
+                &anchors[anchors.len() - 2],
+                anchors.last().expect("anchors are non-empty"),
+            ))
+        } else {
+            let mut previous = &anchors[0];
+            let mut next = None;
+            for anchor in anchors.iter().skip(1) {
+                if progress < anchor.0 {
+                    next = Some((previous, anchor));
+                    break;
+                }
+                previous = anchor;
             }
-            previous = (*offset, value);
-        }
-        let sampled = if let Some((next_offset, next_value)) = next {
-            let span = next_offset - previous.0;
+            next
+        };
+        let sampled = if let Some((previous, next)) = pair {
+            let span = next.0 - previous.0;
             let local = if span <= 0.0 {
                 1.0
             } else {
                 (progress - previous.0) / span
             };
-            let local = local.clamp(0.0, 1.0);
             let local = keyframe_timing(frames, previous.0)
-                .map(|timing| ease(timing, f64::from(local)) as f32)
+                .map(|timing| ease(timing, f64::from(local), before) as f32)
                 .unwrap_or(local);
-            interpolate(previous.1, next_value, local)
+            interpolate(&previous.1, &next.1, local)
         } else {
-            previous.1.clone()
+            anchors.last().expect("anchors are non-empty").1.clone()
         };
         result.push(sampled);
     }

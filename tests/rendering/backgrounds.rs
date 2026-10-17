@@ -110,6 +110,112 @@ async fn longhand_animation_properties_keep_a_paused_animation_at_its_start_test
     assert_eq!(pixel, [0, 0, 0, 255]);
 }
 
+#[test]
+fn easing_function_values_follow_css_easing_level_1_grammar_test() {
+    for easing in [
+        "linear",
+        "ease",
+        "ease-in",
+        "ease-out",
+        "ease-in-out",
+        "cubic-bezier(0, 0, 1, 1)",
+        "cubic-bezier(/*comment*/ 0, 0, 1, 1)",
+        "steps(1)",
+        "steps(/*comment*/ 2)",
+        "steps(1, start)",
+        "steps(1, end)",
+        "steps(2, jump-none)",
+        "steps(4, jump-both)",
+        "steps(4, jump-start)",
+        "steps(4, jump-end)",
+        "step-start",
+        "step-end",
+        "StEpS(3, JUMP-START)",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(
+                ".primary {{ animation-timing-function: {easing}; }}"
+            ))
+            .is_ok(),
+            "rejected valid easing function: {easing}"
+        );
+    }
+
+    for easing in [
+        "cubic-bezier(-0.01, 0, 1, 1)",
+        "cubic-bezier(0, 0, 1.01, 1)",
+        "cubic-bezier(0, 0, 1, 1) trailing",
+        "steps(0)",
+        "steps(1, jump-none)",
+        "steps(1.0)",
+        "steps(4, jump-middle)",
+        "steps(4, jump-both, end)",
+        "linear()",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(
+                ".primary {{ animation-timing-function: {easing}; }}"
+            ))
+            .is_err(),
+            "accepted invalid easing function: {easing}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn easing_functions_apply_step_boundaries_before_fill_and_cubic_overshoot_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes color { from { background-color: #000; } to { background-color: #fff; } }\
+         @keyframes stretch { from { width: 40px; animation-timing-function: cubic-bezier(0, 0, 0.5, 0.5); }\
+         to { width: 100px; } }\
+         .jump-start { animation: color 1s steps(4, jump-start) both; }\
+         .jump-end { animation: color 1s steps(4, jump-end) both; }\
+         .jump-none { animation: color 1s steps(4, jump-none) both; }\
+         .jump-both { animation: color 1s steps(4, jump-both) both; }\
+         .before { animation: color 1s 1s steps(1, start) backwards; }\
+         .overshoot { box-sizing: border-box; animation: stretch 1s cubic-bezier(0, 2, 0, 2) both; }",
+    )
+    .unwrap();
+    let widget_rects = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let rects_from_ui = widget_rects.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        rects_from_ui.lock().unwrap().clear();
+        for selector in [
+            ".jump-start",
+            ".jump-end",
+            ".jump-none",
+            ".jump-both",
+            ".before",
+        ] {
+            rects_from_ui
+                .lock()
+                .unwrap()
+                .push(ui.add(egui::Button::new("X").selector(selector)).rect);
+        }
+        rects_from_ui
+            .lock()
+            .unwrap()
+            .push(ui.add(egui::Button::new("X").selector(".overshoot")).rect);
+    })
+    .await;
+
+    let rects = widget_rects.lock().unwrap();
+    for (index, expected) in [(0, 191), (1, 128), (2, 170), (3, 153), (4, 0)] {
+        let rect = rects[index];
+        let pixel = pixel(&pixels, rect.min.x + 5.5, rect.center().y);
+        assert!(
+            (i16::from(pixel[0]) - expected).abs() <= 1,
+            "{index} easing pixel was {pixel:?}, expected grayscale {expected}"
+        );
+    }
+    assert!(
+        (rects[5].width() - 129.0).abs() < 1.0,
+        "overshooting eased width was {}",
+        rects[5].width()
+    );
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_shorthand_gradient_and_content_clip_render_correctly_test() {
