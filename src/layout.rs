@@ -105,6 +105,8 @@ struct Frame {
     nodes: Vec<Node>,
     stack: Vec<usize>,
     cache: Cache,
+    layout_animation_active: bool,
+    layout_animation_can_defer: bool,
     origin: Pos2,
     available: Vec2,
     viewport: Rect,
@@ -169,6 +171,8 @@ pub(crate) fn show(
                 nodes,
                 stack,
                 cache,
+                layout_animation_active: false,
+                layout_animation_can_defer: true,
                 origin: available.min,
                 available: available.size(),
                 viewport: ui.ctx().viewport_rect(),
@@ -226,11 +230,24 @@ pub(crate) fn show(
         viewport: ui.ctx().viewport_rect().size(),
         pixels_per_point: ui.ctx().pixels_per_point(),
     };
-    for rule in matching_rules(stylesheet, class).filter(|r| {
-        r.state == RuleState::Base
-            || r.state == RuleState::Hovered && state & 1 != 0
-            || r.state == RuleState::Active && state & 2 != 0
-    }) {
+    let applicable_rules: Vec<_> = matching_rules(stylesheet, class)
+        .filter(|rule| {
+            rule.state == RuleState::Base
+                || rule.state == RuleState::Hovered && state & 1 != 0
+                || rule.state == RuleState::Active && state & 2 != 0
+        })
+        .collect();
+    let mut animation_properties = Vec::new();
+    let mut underlying_declarations = Vec::new();
+    for rule in &applicable_rules {
+        for declaration in &rule.declarations {
+            match declaration {
+                Declaration::Animation(property) => animation_properties.push(property.clone()),
+                _ => underlying_declarations.push(declaration.clone()),
+            }
+        }
+    }
+    for rule in &applicable_rules {
         for declaration in &rule.declarations {
             if let Declaration::Layout(declaration) = declaration
                 && declaration.name == "font-size"
@@ -243,11 +260,7 @@ pub(crate) fn show(
     }
     units.font = style.format.em;
 
-    for rule in matching_rules(stylesheet, class).filter(|r| {
-        r.state == RuleState::Base
-            || r.state == RuleState::Hovered && state & 1 != 0
-            || r.state == RuleState::Active && state & 2 != 0
-    }) {
+    for rule in &applicable_rules {
         for declaration in &rule.declarations {
             if let Declaration::Layout(declaration) = declaration
                 && matches!(
@@ -261,20 +274,39 @@ pub(crate) fn show(
             }
         }
     }
-    for rule in matching_rules(stylesheet, class) {
-        if rule.state == RuleState::Base
-            || rule.state == RuleState::Hovered && state & 1 != 0
-            || rule.state == RuleState::Active && state & 2 != 0
-        {
-            for declaration in &rule.declarations {
-                if let Declaration::Layout(declaration) = declaration {
-                    if declaration.name == "font-size" {
-                        continue;
-                    }
-                    declaration
-                        .apply_with_parent(&mut style, &parent_style, units)
-                        .expect("validated CSS layout declaration");
+    for rule in &applicable_rules {
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(declaration) = declaration {
+                if declaration.name == "font-size" {
+                    continue;
                 }
+                declaration
+                    .apply_with_parent(&mut style, &parent_style, units)
+                    .expect("validated CSS layout declaration");
+            }
+        }
+    }
+    let animation = crate::animation::sample(
+        ui.ctx(),
+        id,
+        ui.input(|input| input.time),
+        &animation_properties,
+        &stylesheet.keyframes,
+        &underlying_declarations,
+    );
+    {
+        let mut frame = active.0.borrow_mut();
+        frame.layout_animation_can_defer &= animation.can_defer_layout;
+        frame.layout_animation_active |= animation.layout_active;
+    }
+    let animated_declarations = animation.declarations;
+    for declaration in &animated_declarations {
+        if let Declaration::Layout(declaration) = declaration {
+            declaration
+                .apply_with_parent(&mut style, &parent_style, units)
+                .expect("validated animated CSS declaration");
+            if declaration.name == "font-size" {
+                units.font = style.format.em;
             }
         }
     }
@@ -388,6 +420,7 @@ pub(crate) fn show(
             }
         }
     }
+    crate::apply_declarations(&mut content_ui, RuleState::Base, &animated_declarations);
     if style.padding_set {
         content_ui.spacing_mut().button_padding = Vec2::ZERO;
     }
@@ -663,6 +696,10 @@ pub(crate) fn show(
     drop(scope);
     let final_geometry = if root {
         let mut frame = active.0.borrow_mut();
+        let has_complete_layout_cache = frame
+            .nodes
+            .iter()
+            .all(|node| frame.cache.boxes.contains_key(&node.id));
         let cache = solve(&mut frame, ui.ctx());
         let changed = frame.nodes.iter().any(|node| {
             cache.boxes.get(&node.id).is_some_and(|g| {
@@ -692,9 +729,14 @@ pub(crate) fn show(
         });
         ui.ctx().data_mut(|d| d.insert_temp(id, cache));
         if changed {
+            let can_defer_layout_animation = frame.layout_animation_active
+                && frame.layout_animation_can_defer
+                && has_complete_layout_cache
+                && ui.input(|input| input.events.is_empty());
+            // Eligible animations already schedule their next frame; avoid a discarded pass.
             if scroll_changed_last_frame {
                 ui.ctx().request_repaint();
-            } else {
+            } else if !can_defer_layout_animation {
                 ui.ctx().request_discard("CSS selector layout changed");
             }
         }

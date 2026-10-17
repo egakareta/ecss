@@ -12,6 +12,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 struct RenderRequest {
     stylesheet: Stylesheet,
     pixels_per_point: f32,
+    animation_time: Option<f64>,
     build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
     pixels_tx: mpsc::Sender<Vec<[u8; 4]>>,
 }
@@ -57,6 +58,25 @@ pub(super) async fn render_ui_pixels_at_scale(
     pixels_per_point: f32,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale_and_time(stylesheet, pixels_per_point, None, build_ui).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) async fn render_ui_pixels_at_time(
+    stylesheet: Stylesheet,
+    time: f64,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale_and_time(stylesheet, 1.0, Some(time), build_ui).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn render_ui_pixels_at_scale_and_time(
+    stylesheet: Stylesheet,
+    pixels_per_point: f32,
+    animation_time: Option<f64>,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
     let (pixels_tx, pixels_rx) = mpsc::channel();
     let requests = RENDERER_THREAD.get_or_init(|| {
         let (requests_tx, requests_rx) = mpsc::channel::<RenderRequest>();
@@ -69,6 +89,7 @@ pub(super) async fn render_ui_pixels_at_scale(
                         &mut renderer,
                         request.stylesheet,
                         request.pixels_per_point,
+                        request.animation_time,
                         request.build_ui,
                     ));
                     let _ = request.pixels_tx.send(pixels);
@@ -81,6 +102,7 @@ pub(super) async fn render_ui_pixels_at_scale(
         .send(RenderRequest {
             stylesheet,
             pixels_per_point,
+            animation_time,
             build_ui: Box::new(build_ui),
             pixels_tx,
         })
@@ -104,11 +126,31 @@ pub(super) async fn render_ui_pixels_at_scale(
     pixels_per_point: f32,
     build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
 ) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale_and_time(stylesheet, pixels_per_point, None, build_ui).await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn render_ui_pixels_at_time(
+    stylesheet: Stylesheet,
+    time: f64,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
+    render_ui_pixels_at_scale_and_time(stylesheet, 1.0, Some(time), build_ui).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn render_ui_pixels_at_scale_and_time(
+    stylesheet: Stylesheet,
+    pixels_per_point: f32,
+    animation_time: Option<f64>,
+    build_ui: impl FnMut(&mut egui::Ui) + Send + 'static,
+) -> Vec<[u8; 4]> {
     let mut renderer = OffscreenRenderer::new().await;
     render_ui_frame(
         &mut renderer,
         stylesheet,
         pixels_per_point,
+        animation_time,
         Box::new(build_ui),
     )
     .await
@@ -118,6 +160,7 @@ async fn render_ui_frame(
     renderer: &mut OffscreenRenderer,
     stylesheet: Stylesheet,
     pixels_per_point: f32,
+    animation_time: Option<f64>,
     mut build_ui: Box<dyn FnMut(&mut egui::Ui) + Send>,
 ) -> Vec<[u8; 4]> {
     let context = egui::Context::default();
@@ -131,6 +174,42 @@ async fn render_ui_frame(
             ..Default::default()
         },
     );
+    if let Some(time) = animation_time.filter(|time| *time != 0.0) {
+        let mut initial_output = context.run_ui(
+            egui::RawInput {
+                viewport_id,
+                viewports: viewports.clone(),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(
+                        WIDTH as f32 / pixels_per_point,
+                        HEIGHT as f32 / pixels_per_point,
+                    ),
+                )),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            &mut build_ui,
+        );
+        renderer.render(&context, &mut initial_output).await;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                viewport_id,
+                viewports,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(
+                        WIDTH as f32 / pixels_per_point,
+                        HEIGHT as f32 / pixels_per_point,
+                    ),
+                )),
+                time: Some(time),
+                ..Default::default()
+            },
+            &mut build_ui,
+        );
+        return renderer.render(&context, &mut output).await;
+    }
     let mut output = context.run_ui(
         egui::RawInput {
             viewport_id,
@@ -142,6 +221,7 @@ async fn render_ui_frame(
                     HEIGHT as f32 / pixels_per_point,
                 ),
             )),
+            time: animation_time,
             ..Default::default()
         },
         &mut build_ui,

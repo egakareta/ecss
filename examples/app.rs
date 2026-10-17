@@ -150,7 +150,10 @@ fn form_panel(ui: &mut egui::Ui, app: &mut App) {
     ui.add(
         (|ui: &mut egui::Ui| {
             ui.add(egui::Label::new("TRY THE FORM").selector(".section-kicker"));
-            ui.add(egui::Label::new("A styled input and button states").selector(".section-title"));
+            ui.add(
+                egui::Label::new("Save changes to see an animated confirmation.")
+                    .selector(".section-title"),
+            );
             ui.add(
                 egui::TextEdit::singleline(&mut app.name)
                     .hint_text("Your name")
@@ -245,6 +248,8 @@ fn create_app(
 mod tests {
     use super::*;
 
+    static PERFORMANCE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn collect_text_bounds(
         shape: &egui::Shape,
         text_bounds: &mut Vec<(String, egui::Rect, usize)>,
@@ -261,6 +266,19 @@ mod tests {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn find_text_shape<'a>(
+        shape: &'a egui::Shape,
+        target: &str,
+    ) -> Option<&'a egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Text(shape) if shape.galley.job.text == target => Some(shape),
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|shape| find_text_shape(shape, target)),
+            _ => None,
         }
     }
 
@@ -471,6 +489,55 @@ mod tests {
     }
 
     #[test]
+    fn save_confirmation_layout_animation_avoids_repeated_discard_passes() {
+        let context = egui::Context::default();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        Stylesheet::parse(theme).unwrap().install(&context);
+        let mut app = App {
+            saved: true,
+            ..Default::default()
+        };
+        let observation_at = |time, app: &mut App| {
+            let mut output = run_frame(&context, app, time, Vec::new());
+            let passes = output.platform_output.num_completed_passes;
+            let reasons = output.platform_output.request_discard_reasons.clone();
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|clipped| find_text_shape(&clipped.shape, "Saved for your changes."))
+                .expect("save confirmation text should render");
+            let color = text.override_text_color.unwrap_or(text.fallback_color);
+            let bounds = text.visual_bounding_rect();
+            let height = bounds.height();
+            let position = text.pos;
+            output.textures_delta.clear();
+            if (0.0..0.9).contains(&time) && time > 0.0 {
+                assert_eq!(
+                    passes, 1,
+                    "save animation discarded layout passes at {time}s: {reasons:?}"
+                );
+            }
+            (color, height, position, passes)
+        };
+
+        let (start_color, start_height, start_position, _) = observation_at(0.0, &mut app);
+        for frame in 1..=20 {
+            observation_at(frame as f64 / 60.0, &mut app);
+        }
+        let (midpoint_color, midpoint_height, midpoint_position, _) = observation_at(0.6, &mut app);
+        let (end_color, end_height, _, _) = observation_at(1.3, &mut app);
+
+        assert_ne!(start_color, end_color);
+        assert_ne!(midpoint_color, start_color);
+        assert_ne!(midpoint_color, end_color);
+        assert!(
+            start_height > midpoint_height && midpoint_height > end_height,
+            "confirmation did not animate text size: {start_height} -> {midpoint_height} -> {end_height}"
+        );
+        assert_ne!(start_position, midpoint_position, "padding did not animate");
+    }
+
+    #[test]
     fn hero_and_feature_copy_labels_remain_selectable() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -574,6 +641,8 @@ mod tests {
     fn scroll_frame_cpu_p95_stays_within_60_hz_budget() {
         use std::time::{Duration, Instant};
 
+        let _performance_test = PERFORMANCE_TEST_LOCK.lock().unwrap();
+
         fn scroll_events(delta: f32) -> Vec<egui::Event> {
             vec![
                 egui::Event::PointerMoved(egui::pos2(500.0, 400.0)),
@@ -623,9 +692,51 @@ mod tests {
         samples.sort_unstable();
         let p95 = samples[(SAMPLE_COUNT * 95).div_ceil(100) - 1];
         let budget = Duration::from_nanos(16_666_667);
+        println!("p95: {p95:?}");
         assert!(
             p95 <= budget,
             "synthetic opt-level-0 scroll frame p95 {p95:?} exceeded 60 Hz budget {budget:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn save_confirmation_animation_cpu_p95_stays_within_60_hz_budget() {
+        use std::time::{Duration, Instant};
+
+        let _performance_test = PERFORMANCE_TEST_LOCK.lock().unwrap();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        let theme = format!("{theme}\n.status {{ animation-duration: 3s; }}");
+        let context = egui::Context::default();
+        Stylesheet::parse(&theme).unwrap().install(&context);
+        let mut app = App {
+            saved: true,
+            ..Default::default()
+        };
+
+        for frame in 0..20 {
+            let mut output = run_frame(&context, &mut app, frame as f64 / 60.0, Vec::new());
+            output.textures_delta.clear();
+        }
+
+        const SAMPLE_COUNT: usize = 100;
+        let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+        for frame in 0..SAMPLE_COUNT {
+            let start = Instant::now();
+            let mut output = run_frame(&context, &mut app, (frame + 20) as f64 / 60.0, Vec::new());
+            samples.push(start.elapsed());
+            let passes = output.platform_output.num_completed_passes;
+            output.textures_delta.clear();
+            assert_eq!(passes, 1, "active save animation discarded a UI pass");
+        }
+
+        samples.sort_unstable();
+        let p95 = samples[(SAMPLE_COUNT * 95).div_ceil(100) - 1];
+        let budget = Duration::from_nanos(16_666_667);
+        println!("p95: {p95:?}");
+        assert!(
+            p95 <= budget,
+            "synthetic opt-level-0 save-animation frame p95 {p95:?} exceeded 60 Hz budget {budget:?}"
         );
     }
 

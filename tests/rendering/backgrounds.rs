@@ -38,6 +38,80 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn keyframes_animate_background_color_at_the_timeline_midpoint_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes fade { from { background-color: #000; width: 40px; padding: 0; }\
+         to { background-color: #fff; width: 2in; padding: 20px 40px; } }\
+         .animated { width: 40px; height: 24px; animation: fade 1s linear both; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        *rect_from_ui.lock().unwrap() =
+            Some(ui.add(egui::Button::new("X").selector(".animated")).rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    assert!(
+        (rect.width() - 156.0).abs() < 1.0,
+        "animated width was {}",
+        rect.width()
+    );
+    let pixel = pixel(&pixels, rect.min.x + 25.5, rect.min.y + 15.5);
+    assert_eq!(pixel, [128, 128, 128, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn keyframes_interpolate_length_and_percentage_widths_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes grow { from { width: 40px; padding: 0; } to { width: 100%; padding: 0; } }\
+         .animated { animation: grow 1s linear both; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        *rect_from_ui.lock().unwrap() =
+            Some(ui.add(egui::Button::new("X").selector(".animated")).rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    assert!(
+        (rect.width() - 148.0).abs() < 1.0,
+        "animated width was {}",
+        rect.width()
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn longhand_animation_properties_keep_a_paused_animation_at_its_start_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes paused-fade { from { background-color: #000; } to { background-color: #fff; } }\
+         .paused { animation-name: paused-fade; animation-duration: 1s; animation-delay: 0s;\
+         animation-timing-function: linear; animation-iteration-count: 1; animation-direction: normal;\
+         animation-fill-mode: both; animation-play-state: paused; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        *rect_from_ui.lock().unwrap() =
+            Some(ui.add(egui::Button::new("X").selector(".paused")).rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    let pixel = pixel(&pixels, rect.min.x + 5.5, rect.min.y + 5.5);
+    assert_eq!(pixel, [0, 0, 0, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_shorthand_gradient_and_content_clip_render_correctly_test() {
     let stylesheet = Stylesheet::parse(
         ".gradient { width: 60px; height: 24px; padding: 4px; border: 4px solid black; background: linear-gradient(to right, red, blue); background-clip: content-box; background-attachment: scroll; }",

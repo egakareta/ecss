@@ -353,9 +353,10 @@
   - CSS properties: `transition`, `transition-delay`, `transition-duration`, `transition-property`, `transition-timing-function`.
 - **[CSS Transitions Level 2](https://www.w3.org/TR/css-transitions-2/) - Unsupported.**
   - CSS properties: `transition-behavior`.
-- **[CSS Animations Level 1](https://www.w3.org/TR/css-animations-1/) - Unsupported.**
-  - CSS properties: `animation`, `animation-delay`, `animation-direction`, `animation-duration`, `animation-fill-mode`,
-    `animation-iteration-count`, `animation-name`, `animation-play-state`, `animation-timing-function`.
+- **[CSS Animations Level 1](https://www.w3.org/TR/css-animations-1/) - Partial.**
+  - CSS properties: ~~`animation`~~, ~~`animation-delay`~~, ~~`animation-direction`~~, ~~`animation-duration`~~, ~~`animation-fill-mode`~~,
+    ~~`animation-iteration-count`~~, ~~`animation-name`~~, ~~`animation-play-state`~~, ~~`animation-timing-function`~~.
+  - Colors, compatible numeric units, and selected length-percentage and shorthand values interpolate; computed-value interpolation for every property, underlying computed values for undeclared properties, and full Web Animations integration remain incomplete.
 - **[CSS Animations Level 2](https://www.w3.org/TR/css-animations-2/) - Unsupported.**
   - CSS properties: `animation-composition`, `animation-delay`, `animation-delay-end`, `animation-delay-start`, `animation-duration`,
     `animation-timeline`.

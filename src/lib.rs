@@ -29,6 +29,7 @@ use css::{Declaration, Rule, RuleState};
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
 use fonts::{FontAssets, FontRequest};
 
+mod animation;
 mod background;
 mod box_decoration;
 mod css;
@@ -67,6 +68,7 @@ where
 pub struct Stylesheet {
     rules: Vec<Rule>,
     rule_index: RuleIndex,
+    pub(crate) keyframes: HashMap<String, Vec<css::Keyframe>>,
     imports: Vec<String>,
     fonts: Arc<RwLock<FontAssets>>,
     font_revision: Arc<AtomicU64>,
@@ -215,11 +217,16 @@ impl Stylesheet {
     }
 
     fn parse_unloaded(source: &str) -> Result<Self, CssError> {
-        let (rules, imports) = css::parse(source)?;
+        let css::ParsedStylesheet {
+            rules,
+            imports,
+            keyframes,
+        } = css::parse(source)?;
         let rule_index = RuleIndex::new(&rules);
         Ok(Self {
             rules,
             rule_index,
+            keyframes,
             imports,
             fonts: Arc::default(),
             font_revision: Arc::default(),
@@ -788,7 +795,8 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         | Declaration::BackgroundClip(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
-        | Declaration::FontStyle(_) => {}
+        | Declaration::FontStyle(_)
+        | Declaration::Animation(_) => {}
     }
 }
 

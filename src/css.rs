@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
 };
@@ -21,6 +22,26 @@ pub(crate) struct Rule {
     pub(crate) state: RuleState,
     pub(crate) pseudo: Option<PseudoElementKind>,
     pub(crate) declarations: Vec<Declaration>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Keyframe {
+    pub(crate) offset: f32,
+    pub(crate) timing_function: Option<String>,
+    pub(crate) declarations: Vec<Declaration>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Keyframes {
+    pub(crate) name: String,
+    pub(crate) frames: Vec<Keyframe>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedStylesheet {
+    pub(crate) rules: Vec<Rule>,
+    pub(crate) imports: Vec<String>,
+    pub(crate) keyframes: HashMap<String, Vec<Keyframe>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +70,7 @@ pub(crate) enum Declaration {
     FontFamily(Vec<String>),
     FontWeight(u16),
     FontStyle(bool),
+    Animation(crate::animation::Property),
 }
 
 #[derive(Clone, Debug)]
@@ -331,10 +353,12 @@ pub(crate) enum BackgroundClip {
 enum ParsedRule {
     Import(String),
     Style(Vec<Rule>),
+    Keyframes(Keyframes),
 }
 
 enum AtRulePrelude {
     Import(String),
+    Keyframes(String),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -352,21 +376,29 @@ impl ParseIssue {
     }
 }
 
-pub(crate) fn parse(source: &str) -> Result<(Vec<Rule>, Vec<String>), CssError> {
+pub(crate) fn parse(source: &str) -> Result<ParsedStylesheet, CssError> {
     let mut parser = CssParser::new(source);
     let mut rule_parser = StylesheetRuleParser;
     let mut rules = Vec::new();
     let mut imports = Vec::new();
+    let mut keyframes = HashMap::new();
 
     for parsed in StyleSheetParser::new(&mut parser, &mut rule_parser) {
         match parsed {
             Ok(ParsedRule::Import(import)) => imports.push(import),
             Ok(ParsedRule::Style(mut parsed_rules)) => rules.append(&mut parsed_rules),
+            Ok(ParsedRule::Keyframes(parsed)) => {
+                keyframes.insert(parsed.name, parsed.frames);
+            }
             Err((error, _, location)) => return Err(to_css_error(error, location)),
         }
     }
 
-    Ok((rules, imports))
+    Ok(ParsedStylesheet {
+        rules,
+        imports,
+        keyframes,
+    })
 }
 
 pub(crate) fn selector_class(selector: &str) -> Option<String> {
@@ -449,10 +481,20 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
         name: CowRcStr<'i>,
         input: &mut CssParser<'i>,
     ) -> Result<Self::Prelude, ParseError<Self::Error>> {
-        if !name.eq_ignore_ascii_case("import") {
-            return Err(ParseError::custom(ParseIssue::new("unsupported at-rule")));
+        if name.eq_ignore_ascii_case("import") {
+            return parse_import(input).map(AtRulePrelude::Import);
         }
-        parse_import(input).map(AtRulePrelude::Import)
+        if name.eq_ignore_ascii_case("keyframes") {
+            let name = input
+                .expect_ident_cloned()
+                .map_err(|_| ParseError::custom(ParseIssue::new("invalid keyframes name")))?
+                .to_string();
+            input
+                .expect_exhausted()
+                .map_err(|_| ParseError::custom(ParseIssue::new("invalid keyframes name")))?;
+            return Ok(AtRulePrelude::Keyframes(name));
+        }
+        Err(ParseError::custom(ParseIssue::new("unsupported at-rule")))
     }
 
     fn rule_without_block(
@@ -462,8 +504,125 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     ) -> Result<Self::AtRule, ()> {
         match prelude {
             AtRulePrelude::Import(import) => Ok(ParsedRule::Import(import)),
+            AtRulePrelude::Keyframes(_) => Err(()),
         }
     }
+
+    fn parse_block(
+        &mut self,
+        prelude: Self::Prelude,
+        _start: &ParserState,
+        input: &mut CssParser<'i>,
+    ) -> Result<Self::AtRule, ParseError<Self::Error>> {
+        match prelude {
+            AtRulePrelude::Import(_) => {
+                Err(ParseError::custom(ParseIssue::new("invalid import rule")))
+            }
+            AtRulePrelude::Keyframes(name) => parse_keyframes(input)
+                .map(|frames| ParsedRule::Keyframes(Keyframes { name, frames })),
+        }
+    }
+}
+
+struct KeyframeRuleParser;
+
+impl<'i> QualifiedRuleParser<'i> for KeyframeRuleParser {
+    type Prelude = Vec<f32>;
+    type QualifiedRule = Vec<Keyframe>;
+    type Error = ParseIssue;
+
+    fn parse_prelude(
+        &mut self,
+        input: &mut CssParser<'i>,
+    ) -> Result<Self::Prelude, ParseError<Self::Error>> {
+        let start = input.position();
+        while input.next().is_ok() {}
+        let selectors = split_top_level_commas(input.slice_from(start));
+        if selectors.is_empty() {
+            return Err(ParseError::custom(ParseIssue::new(
+                "invalid keyframe selector",
+            )));
+        }
+        selectors
+            .into_iter()
+            .map(|selector| {
+                let offset = if selector.eq_ignore_ascii_case("from") {
+                    0.0
+                } else if selector.eq_ignore_ascii_case("to") {
+                    1.0
+                } else {
+                    let value = selector
+                        .strip_suffix('%')
+                        .ok_or_else(|| {
+                            ParseError::custom(ParseIssue::new("invalid keyframe selector"))
+                        })?
+                        .trim()
+                        .parse::<f32>()
+                        .map_err(|_| {
+                            ParseError::custom(ParseIssue::new("invalid keyframe selector"))
+                        })?;
+                    if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                        return Err(ParseError::custom(ParseIssue::new(
+                            "invalid keyframe selector",
+                        )));
+                    }
+                    value / 100.0
+                };
+                Ok(offset)
+            })
+            .collect()
+    }
+
+    fn parse_block(
+        &mut self,
+        offsets: Self::Prelude,
+        _start: &ParserState,
+        input: &mut CssParser<'i>,
+    ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
+        let declarations = parse_declarations(input).map_err(ParseError::custom)?;
+        let timing_function = declarations.iter().rev().find_map(|declaration| {
+            let Declaration::Animation(property) = declaration else {
+                return None;
+            };
+            (property.name == "animation-timing-function").then(|| property.value.clone())
+        });
+        Ok(offsets
+            .into_iter()
+            .map(|offset| Keyframe {
+                offset,
+                timing_function: timing_function.clone(),
+                declarations: declarations.clone(),
+            })
+            .collect())
+    }
+}
+
+impl<'i> AtRuleParser<'i> for KeyframeRuleParser {
+    type Prelude = ();
+    type AtRule = Vec<Keyframe>;
+    type Error = ParseIssue;
+}
+
+fn parse_keyframes(input: &mut CssParser<'_>) -> Result<Vec<Keyframe>, ParseError<ParseIssue>> {
+    let mut parser = KeyframeRuleParser;
+    let mut frames = Vec::new();
+    for parsed in StyleSheetParser::new(input, &mut parser) {
+        match parsed {
+            Ok(mut parsed) => frames.append(&mut parsed),
+            Err((error, _, location)) => {
+                let issue = match error.kind {
+                    ParseErrorKind::Custom(issue) => issue,
+                    ParseErrorKind::Basic(_) => ParseIssue {
+                        message: "invalid keyframes rule",
+                        line: Some(location.line),
+                    },
+                };
+                return Err(ParseError::custom(issue));
+            }
+        }
+    }
+    frames.sort_by(|first, second| first.offset.total_cmp(&second.offset));
+    Ok(frames)
 }
 
 fn parse_import<'i>(input: &mut CssParser<'i>) -> Result<String, ParseError<ParseIssue>> {
@@ -579,6 +738,13 @@ impl<'i> DeclarationParser<'i> for Declarations {
         input: &mut CssParser<'i>,
         _declaration_start: &ParserState,
     ) -> Result<Self::Declaration, ParseError<Self::Error>> {
+        if crate::animation::is_property(&name) {
+            let value = consume_value(input)?;
+            return crate::animation::parse_property(&name, &value)
+                .map(Declaration::Animation)
+                .map(Some)
+                .map_err(ParseError::custom);
+        }
         if let Some(declaration) =
             crate::layout_style::parse(&name, input).map_err(ParseError::custom)?
         {
