@@ -200,7 +200,7 @@ pub(crate) enum FillRule {
     Evenodd,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct PathClip {
     quads: Vec<[Pos2; 4]>,
 }
@@ -2612,6 +2612,8 @@ pub(crate) fn path_clip(paths: Vec<Vec<Pos2>>, fill_rule: FillRule) -> PathClip 
 
 pub(crate) fn clip_mesh_to_paths(mesh: egui::epaint::Mesh, clip: &PathClip) -> egui::epaint::Mesh {
     let mut output = egui::epaint::Mesh::with_texture(mesh.texture_id);
+    output.vertices.reserve(mesh.vertices.len());
+    output.indices.reserve(mesh.indices.len());
     let quad_bounds = clip
         .quads
         .iter()

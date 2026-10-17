@@ -327,8 +327,7 @@ impl Declaration {
             output.format.font_size_set = true;
         }
         let keyword = self.value.trim();
-        let keyword = keyword.to_ascii_lowercase();
-        if self.name == "text-align" && keyword == "match-parent" {
+        if self.name == "text-align" && keyword.eq_ignore_ascii_case("match-parent") {
             output.format.text_align = match parent.format.text_align.as_str() {
                 "start" if parent.layout.direction == taffy::Direction::Ltr => "left",
                 "start" => "right",
@@ -339,15 +338,20 @@ impl Declaration {
             .into();
             return Ok(());
         }
-        if keyword == "inherit" || keyword == "unset" && inherited(&self.name) {
+        if keyword.eq_ignore_ascii_case("inherit")
+            || keyword.eq_ignore_ascii_case("unset") && inherited(&self.name)
+        {
             copy_property(&self.name, output, parent);
             return Ok(());
         }
-        if matches!(keyword.as_str(), "initial" | "unset" | "revert") {
+        if ["initial", "unset", "revert"]
+            .iter()
+            .any(|value| keyword.eq_ignore_ascii_case(value))
+        {
             copy_property(&self.name, output, &BoxStyle::default());
             return Ok(());
         }
-        if keyword == "revert-layer" {
+        if keyword.eq_ignore_ascii_case("revert-layer") {
             return Err("cascade layers are unsupported");
         }
         self.apply(output, units)

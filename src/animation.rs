@@ -675,6 +675,14 @@ pub(crate) fn sample(
     keyframes: &HashMap<String, Vec<Keyframe>>,
     underlying: &[Declaration],
 ) -> Sample {
+    if properties.is_empty() {
+        return Sample {
+            declarations: Vec::new(),
+            layout_active: false,
+            can_defer_layout: true,
+        };
+    }
+
     let configs = configs(properties);
     let state_id = id.with("ecss.animation");
     let previous = context

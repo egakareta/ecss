@@ -20,6 +20,7 @@ const ACTIVE: &str = "ecss.layout.active";
 const LABEL_SELECTION_PRESS: &str = "ecss.text_selection.press";
 const ELEMENT_IMAGES: &str = "ecss.element-images";
 const ELEMENT_OCCURRENCES: &str = "ecss.element-occurrences";
+const GRADIENT_MESH_CACHE: &str = "ecss.gradient-mesh-cache";
 
 #[derive(Clone, Debug, PartialEq)]
 struct Geometry {
@@ -42,18 +43,15 @@ impl Geometry {
         crate::nonnegative_rect(self.border - self.stroke - self.padding)
     }
     fn translated(&self, offset: Vec2) -> Self {
-        Self {
-            border: self.border.translate(offset),
-            collapsed_segments: self
-                .collapsed_segments
-                .iter()
-                .map(|segment| crate::formatting::CollapsedBorderSegment {
-                    rect: segment.rect.translate(offset),
-                    edges: segment.edges.clone(),
-                })
-                .collect(),
-            ..self.clone()
+        if offset == Vec2::ZERO {
+            return self.clone();
         }
+        let mut translated = self.clone();
+        translated.border = self.border.translate(offset);
+        for segment in &mut translated.collapsed_segments {
+            segment.rect = segment.rect.translate(offset);
+        }
+        translated
     }
 }
 
@@ -230,21 +228,25 @@ pub(crate) fn show(
         viewport: ui.ctx().viewport_rect().size(),
         pixels_per_point: ui.ctx().pixels_per_point(),
     };
-    let applicable_rules: Vec<_> = matching_rules(stylesheet, class)
-        .filter(|rule| {
-            rule.state == RuleState::Base
-                || rule.state == RuleState::Hovered && state & 1 != 0
-                || rule.state == RuleState::Active && state & 2 != 0
-        })
-        .collect();
+    let applicable_rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
+        applicable_rules(stylesheet, class, state).collect();
     let mut animation_properties = Vec::new();
-    let mut underlying_declarations = Vec::new();
     for rule in &applicable_rules {
         for declaration in &rule.declarations {
-            match declaration {
-                Declaration::Animation(property) => animation_properties.push(property.clone()),
-                _ => underlying_declarations.push(declaration.clone()),
+            if let Declaration::Animation(property) = declaration {
+                animation_properties.push(property.clone());
             }
+        }
+    }
+    let mut underlying_declarations = Vec::new();
+    if !animation_properties.is_empty() {
+        for rule in &applicable_rules {
+            underlying_declarations.extend(
+                rule.declarations
+                    .iter()
+                    .filter(|declaration| !matches!(declaration, Declaration::Animation(_)))
+                    .cloned(),
+            );
         }
     }
     for rule in &applicable_rules {
@@ -1138,16 +1140,12 @@ pub(crate) fn show(
                             paint_area = paint_area.translate(-scroll);
                         }
                     }
-                    shapes.push(clip_background_shape(
-                        egui::Shape::Mesh(
-                            radial_gradient_mesh(
-                                background_surface,
-                                paint_area,
-                                background_sample_offset,
-                                gradient,
-                            )
-                            .into(),
-                        ),
+                    shapes.push(gradient_paint_shape(
+                        ui.ctx(),
+                        background_surface,
+                        paint_area,
+                        background_sample_offset,
+                        GradientPaint::Radial(gradient.clone()),
                         shape_clip.as_ref(),
                     ));
                 }
@@ -1167,16 +1165,12 @@ pub(crate) fn show(
                             paint_area = paint_area.translate(-scroll);
                         }
                     }
-                    shapes.push(clip_background_shape(
-                        egui::Shape::Mesh(
-                            linear_gradient_mesh(
-                                background_surface,
-                                paint_area,
-                                background_sample_offset,
-                                gradient,
-                            )
-                            .into(),
-                        ),
+                    shapes.push(gradient_paint_shape(
+                        ui.ctx(),
+                        background_surface,
+                        paint_area,
+                        background_sample_offset,
+                        GradientPaint::Linear(gradient.clone()),
                         shape_clip.as_ref(),
                     ));
                 }
@@ -1196,16 +1190,12 @@ pub(crate) fn show(
                             paint_area = paint_area.translate(-scroll);
                         }
                     }
-                    shapes.push(clip_background_shape(
-                        egui::Shape::Mesh(
-                            conic_gradient_mesh(
-                                background_surface,
-                                paint_area,
-                                background_sample_offset,
-                                gradient,
-                            )
-                            .into(),
-                        ),
+                    shapes.push(gradient_paint_shape(
+                        ui.ctx(),
+                        background_surface,
+                        paint_area,
+                        background_sample_offset,
+                        GradientPaint::Conic(gradient.clone()),
                         shape_clip.as_ref(),
                     ));
                 }
@@ -2422,6 +2412,18 @@ fn matching_rules<'a>(
         .map(move |index| &rules[index])
 }
 
+fn applicable_rules<'a>(
+    stylesheet: &'a Stylesheet,
+    class: &'a str,
+    state: u8,
+) -> impl Iterator<Item = &'a crate::css::Rule> + 'a {
+    matching_rules(stylesheet, class).filter(move |rule| {
+        rule.state == RuleState::Base
+            || rule.state == RuleState::Hovered && state & 1 != 0
+            || rule.state == RuleState::Active && state & 2 != 0
+    })
+}
+
 fn matching_pseudo_rules<'a>(
     stylesheet: &'a Stylesheet,
     class: &'a str,
@@ -2828,19 +2830,99 @@ fn pseudo_decoration_shapes(input: PseudoDecorationInput<'_>) -> Vec<egui::Shape
     shapes
 }
 
-struct BackgroundPaint {
+struct BackgroundPaint<'a> {
     color: Color32,
-    images: Vec<crate::css::BackgroundImage>,
-    attachments: Vec<crate::css::BackgroundAttachment>,
-    clips: Vec<crate::css::BackgroundClip>,
+    images: &'a [crate::css::BackgroundImage],
+    attachments: &'a [crate::css::BackgroundAttachment],
+    clips: &'a [crate::css::BackgroundClip],
 }
 
-fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> BackgroundPaint {
+#[derive(Clone, PartialEq)]
+enum GradientPaint {
+    Linear(crate::css::LinearGradient),
+    Radial(crate::css::RadialGradient),
+    Conic(crate::css::ConicGradient),
+}
+
+#[derive(Clone, PartialEq)]
+struct GradientMeshKey {
+    gradient: GradientPaint,
+    surface: Rect,
+    paint_area: Rect,
+    sample_offset: Vec2,
+    clip: Option<crate::box_decoration::PathClip>,
+}
+
+#[derive(Default)]
+struct GradientMeshCache {
+    entries: Vec<(GradientMeshKey, Arc<egui::epaint::Mesh>)>,
+}
+
+fn gradient_paint_shape(
+    context: &Context,
+    surface: Rect,
+    paint_area: Rect,
+    sample_offset: Vec2,
+    gradient: GradientPaint,
+    clip: Option<&crate::box_decoration::PathClip>,
+) -> egui::Shape {
+    let key = GradientMeshKey {
+        gradient,
+        surface,
+        paint_area,
+        sample_offset,
+        clip: clip.cloned(),
+    };
+    let cache = context.data_mut(|data| {
+        let id = Id::new(GRADIENT_MESH_CACHE);
+        if let Some(cache) = data.get_temp::<Arc<std::sync::Mutex<GradientMeshCache>>>(id) {
+            cache
+        } else {
+            let cache = Arc::new(std::sync::Mutex::new(GradientMeshCache::default()));
+            data.insert_temp(id, cache.clone());
+            cache
+        }
+    });
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, mesh)) = cache.entries.iter().find(|(entry, _)| entry == &key) {
+        return egui::Shape::Mesh(mesh.clone());
+    }
+
+    let mesh = match &key.gradient {
+        GradientPaint::Linear(gradient) => {
+            linear_gradient_mesh(surface, paint_area, sample_offset, gradient)
+        }
+        GradientPaint::Radial(gradient) => {
+            radial_gradient_mesh(surface, paint_area, sample_offset, gradient)
+        }
+        GradientPaint::Conic(gradient) => {
+            conic_gradient_mesh(surface, paint_area, sample_offset, gradient)
+        }
+    };
+    let egui::Shape::Mesh(mesh) =
+        clip_background_shape(egui::Shape::Mesh(mesh.into()), key.clip.as_ref())
+    else {
+        unreachable!()
+    };
+    if cache.entries.len() == 32 {
+        cache.entries.remove(0);
+    }
+    cache.entries.push((key, mesh.clone()));
+    egui::Shape::Mesh(mesh)
+}
+
+fn resolved_background<'a>(
+    stylesheet: &'a Stylesheet,
+    class: &'a str,
+    state: u8,
+) -> BackgroundPaint<'a> {
     let mut background = BackgroundPaint {
         color: Color32::TRANSPARENT,
-        images: vec![crate::css::BackgroundImage::None],
-        attachments: vec![crate::css::BackgroundAttachment::Scroll],
-        clips: vec![crate::css::BackgroundClip::Border],
+        images: &[],
+        attachments: &[],
+        clips: &[],
     };
     for rule in matching_rules(stylesheet, class) {
         if rule.state != RuleState::Base
@@ -2854,15 +2936,15 @@ fn resolved_background(stylesheet: &Stylesheet, class: &str, state: u8) -> Backg
                 Declaration::Background(color) => background.color = *color,
                 Declaration::BackgroundShorthand(value) => {
                     background.color = value.color;
-                    background.images = value.images.clone();
-                    background.attachments = value.attachments.clone();
-                    background.clips = value.clips.clone();
+                    background.images = &value.images;
+                    background.attachments = &value.attachments;
+                    background.clips = &value.clips;
                 }
-                Declaration::BackgroundImage(images) => background.images = images.clone(),
+                Declaration::BackgroundImage(images) => background.images = images,
                 Declaration::BackgroundAttachment(attachments) => {
-                    background.attachments = attachments.clone();
+                    background.attachments = attachments;
                 }
-                Declaration::BackgroundClip(clips) => background.clips = clips.clone(),
+                Declaration::BackgroundClip(clips) => background.clips = clips,
                 _ => {}
             }
         }
@@ -2979,7 +3061,7 @@ struct ImageResources<'a> {
 
 fn fragment_background_shapes(
     resources: &ImageResources<'_>,
-    background: &BackgroundPaint,
+    background: &BackgroundPaint<'_>,
     geometry: &BoxDecorationGeometry<'_>,
     fill: Color32,
     color_clip: crate::css::BackgroundClip,
@@ -3054,16 +3136,12 @@ fn fragment_background_shapes(
                     crate::css::BackgroundAttachment::Scroll
                     | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
                 };
-                shapes.push(clip_background_shape(
-                    egui::Shape::Mesh(
-                        linear_gradient_mesh(
-                            background_surface,
-                            paint_area,
-                            sample_offset,
-                            gradient,
-                        )
-                        .into(),
-                    ),
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Linear(gradient.clone()),
                     shape_clip.as_ref(),
                 ));
             }
@@ -3080,16 +3158,12 @@ fn fragment_background_shapes(
                     crate::css::BackgroundAttachment::Scroll
                     | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
                 };
-                shapes.push(clip_background_shape(
-                    egui::Shape::Mesh(
-                        radial_gradient_mesh(
-                            background_surface,
-                            paint_area,
-                            sample_offset,
-                            gradient,
-                        )
-                        .into(),
-                    ),
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Radial(gradient.clone()),
                     shape_clip.as_ref(),
                 ));
             }
@@ -3106,16 +3180,12 @@ fn fragment_background_shapes(
                     crate::css::BackgroundAttachment::Scroll
                     | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
                 };
-                shapes.push(clip_background_shape(
-                    egui::Shape::Mesh(
-                        conic_gradient_mesh(
-                            background_surface,
-                            paint_area,
-                            sample_offset,
-                            gradient,
-                        )
-                        .into(),
-                    ),
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Conic(gradient.clone()),
                     shape_clip.as_ref(),
                 ));
             }
@@ -3884,27 +3954,46 @@ fn linear_gradient_mesh(
     boundaries.dedup_by(|first, second| (*first - *second).abs() <= f32::EPSILON);
 
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
+    let boundary_colors = boundaries
+        .iter()
+        .map(|position| stops.sample(position.clamp(0.0, 1.0)))
+        .collect::<smallvec::SmallVec<[Color32; 36]>>();
     let mut mesh = Mesh::default();
-    let mut polygon = Vec::with_capacity(6);
-    let mut scratch = Vec::with_capacity(8);
-    for interval in boundaries.windows(2) {
+    let intervals = boundaries.len().saturating_sub(1);
+    mesh.vertices.reserve(intervals * 8);
+    mesh.indices.reserve(intervals * 18);
+    let mut polygon = smallvec::SmallVec::<[LinearGradientPoint; 8]>::new();
+    let mut scratch = smallvec::SmallVec::<[LinearGradientPoint; 8]>::new();
+    for (index, interval) in boundaries.windows(2).enumerate() {
         let lower = min + interval[0] * range - offset_projection;
         let upper = min + interval[1] * range - offset_projection;
         polygon.clear();
-        polygon.extend(clip_corners);
-        clip_gradient_polygon(&mut polygon, &mut scratch, direction, lower, true);
-        clip_gradient_polygon(&mut polygon, &mut scratch, direction, upper, false);
+        polygon.extend(clip_corners.map(|position| {
+            let projection = position.to_vec2().dot(direction);
+            LinearGradientPoint {
+                position,
+                projection,
+                gradient_position: (projection + offset_projection - min) / range,
+            }
+        }));
+        clip_gradient_polygon(&mut polygon, &mut scratch, lower, interval[0], true);
+        clip_gradient_polygon(&mut polygon, &mut scratch, upper, interval[1], false);
         if polygon.len() < 3 {
             continue;
         }
         let first = mesh.vertices.len() as u32;
         for point in &polygon {
-            let t = ((point.to_vec2().dot(direction) + offset_projection - min) / range)
-                .clamp(0.0, 1.0);
+            let color = if point.gradient_position == interval[0] {
+                boundary_colors[index]
+            } else if point.gradient_position == interval[1] {
+                boundary_colors[index + 1]
+            } else {
+                stops.sample(point.gradient_position.clamp(0.0, 1.0))
+            };
             mesh.vertices.push(Vertex {
-                pos: *point,
+                pos: point.position,
                 uv: Pos2::ZERO,
-                color: stops.sample(t),
+                color,
             });
         }
         for index in 1..polygon.len() - 1 {
@@ -3914,11 +4003,18 @@ fn linear_gradient_mesh(
     mesh
 }
 
+#[derive(Clone, Copy)]
+struct LinearGradientPoint {
+    position: Pos2,
+    projection: f32,
+    gradient_position: f32,
+}
+
 fn clip_gradient_polygon(
-    polygon: &mut Vec<Pos2>,
-    scratch: &mut Vec<Pos2>,
-    direction: Vec2,
+    polygon: &mut smallvec::SmallVec<[LinearGradientPoint; 8]>,
+    scratch: &mut smallvec::SmallVec<[LinearGradientPoint; 8]>,
     boundary: f32,
+    gradient_position: f32,
     keep_greater: bool,
 ) {
     if polygon.is_empty() {
@@ -3926,11 +4022,11 @@ fn clip_gradient_polygon(
     }
     scratch.clear();
     let mut previous_index = polygon.len() - 1;
-    let mut previous_distance = polygon[previous_index].to_vec2().dot(direction) - boundary;
+    let mut previous_distance = polygon[previous_index].projection - boundary;
     for current_index in 0..polygon.len() {
         let previous = polygon[previous_index];
         let current = polygon[current_index];
-        let current_distance = current.to_vec2().dot(direction) - boundary;
+        let current_distance = current.projection - boundary;
         let previous_inside = if keep_greater {
             previous_distance >= -1.0e-5
         } else {
@@ -3943,7 +4039,11 @@ fn clip_gradient_polygon(
         };
         if previous_inside != current_inside {
             let amount = previous_distance / (previous_distance - current_distance);
-            scratch.push(previous.lerp(current, amount));
+            scratch.push(LinearGradientPoint {
+                position: previous.position.lerp(current.position, amount),
+                projection: boundary,
+                gradient_position,
+            });
         }
         if current_inside {
             scratch.push(current);
@@ -3982,6 +4082,7 @@ fn linear_gradient_slice_mesh(
         .fold(f32::NEG_INFINITY, f32::max);
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
+    reserve_gradient_grid(&mut mesh, steps);
     for y in 0..=steps {
         for x in 0..=steps {
             let u = x as f32 / steps as f32;
@@ -4028,6 +4129,7 @@ fn radial_gradient_mesh(
     let (center, radii, corner_extent) = radial_gradient_parameters(paint_area, gradient);
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
+    reserve_gradient_grid(&mut mesh, STEPS);
     for y in 0..=STEPS {
         for x in 0..=STEPS {
             let point = pos2(
@@ -4063,6 +4165,7 @@ fn radial_gradient_slice_mesh(
     let (center, radii, corner_extent) = radial_gradient_parameters(image, gradient);
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
+    reserve_gradient_grid(&mut mesh, STEPS);
     for y in 0..=STEPS {
         for x in 0..=STEPS {
             let u = x as f32 / STEPS as f32;
@@ -4219,6 +4322,7 @@ fn conic_gradient_mesh(
     );
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
+    reserve_gradient_grid(&mut mesh, STEPS);
     for y in 0..=STEPS {
         for x in 0..=STEPS {
             let point = pos2(
@@ -4255,6 +4359,7 @@ fn conic_gradient_slice_mesh(
     );
     let stops = PreparedGradient::new(&gradient.stops, gradient.repeating, gradient.color_space);
     let mut mesh = Mesh::default();
+    reserve_gradient_grid(&mut mesh, STEPS);
     for y in 0..=STEPS {
         for x in 0..=STEPS {
             let u = x as f32 / STEPS as f32;
@@ -4303,8 +4408,14 @@ fn add_grid_triangles(mesh: &mut egui::epaint::Mesh, steps: usize) {
     }
 }
 
+fn reserve_gradient_grid(mesh: &mut egui::epaint::Mesh, steps: usize) {
+    let side = steps + 1;
+    mesh.vertices.reserve(side * side);
+    mesh.indices.reserve(steps * steps * 6);
+}
+
 struct PreparedGradient {
-    stops: Vec<PreparedGradientStop>,
+    stops: smallvec::SmallVec<[PreparedGradientStop; 8]>,
     repeating: bool,
     color_space: crate::css::GradientColorSpace,
 }
@@ -4329,7 +4440,10 @@ impl PreparedGradient {
         repeating: bool,
         color_space: crate::css::GradientColorSpace,
     ) -> Self {
-        let mut positions = source.iter().map(|stop| stop.position).collect::<Vec<_>>();
+        let mut positions = source
+            .iter()
+            .map(|stop| stop.position)
+            .collect::<smallvec::SmallVec<[Option<f32>; 8]>>();
         if positions[0].is_none() {
             positions[0] = Some(0.0);
         }
@@ -4379,7 +4493,7 @@ impl PreparedGradient {
                     hint_after,
                 }
             })
-            .collect();
+            .collect::<smallvec::SmallVec<[PreparedGradientStop; 8]>>();
         Self {
             stops,
             repeating,
@@ -5248,8 +5362,9 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
             .unwrap();
         }
     }
+    let absolute_layouts = tree.absolute_layouts();
     for (i, node) in frame.nodes.iter().enumerate() {
-        let layout = tree.absolute_layout(ids[i]);
+        let layout = absolute_layouts[usize::from(ids[i])].expect("layout was resolved");
         let mut ancestor = Some(i);
         let mut fixed = false;
         while let Some(p) = ancestor {
@@ -5702,7 +5817,11 @@ fn clip_background_shape(
     };
     match shape {
         egui::Shape::Mesh(mesh) => egui::Shape::Mesh(
-            crate::box_decoration::clip_mesh_to_paths(mesh.as_ref().clone(), clip).into(),
+            crate::box_decoration::clip_mesh_to_paths(
+                std::sync::Arc::try_unwrap(mesh).unwrap_or_else(|mesh| mesh.as_ref().clone()),
+                clip,
+            )
+            .into(),
         ),
         egui::Shape::Vec(shapes) => egui::Shape::Vec(
             shapes

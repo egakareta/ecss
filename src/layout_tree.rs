@@ -379,6 +379,22 @@ impl<'a> Tree<'a> {
     }
 
     pub fn absolute_layout(&self, id: NodeId) -> Layout {
+        self.absolute_layout_cached(id, &mut vec![None; self.nodes.len()])
+    }
+
+    pub fn absolute_layouts(&self) -> Vec<Option<Layout>> {
+        let mut layouts = vec![None; self.nodes.len()];
+        for index in 0..self.nodes.len() {
+            self.absolute_layout_cached(NodeId::from(index), &mut layouts);
+        }
+        layouts
+    }
+
+    fn absolute_layout_cached(&self, id: NodeId, layouts: &mut [Option<Layout>]) -> Layout {
+        let index = usize::from(id);
+        if let Some(layout) = layouts[index] {
+            return layout;
+        }
         let node = &self.nodes[usize::from(id)];
         let mut layout = node.layout;
         let mut parent = node.layout_parent.or(node.parent);
@@ -390,7 +406,7 @@ impl<'a> Tree<'a> {
                 parent = self.nodes[usize::from(p)].parent;
             }
         }
-        let parent = parent.map(|parent| self.absolute_layout(parent));
+        let parent = parent.map(|parent| self.absolute_layout_cached(parent, layouts));
         let width = parent.map_or(layout.size.height, |parent| parent.size.width);
         if node.layout_axes.vertical() {
             let mode = node.layout_axes;
@@ -418,6 +434,7 @@ impl<'a> Tree<'a> {
             layout.location.x += parent.location.x;
             layout.location.y += parent.location.y;
         }
+        layouts[index] = Some(layout);
         layout
     }
 
