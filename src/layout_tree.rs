@@ -338,7 +338,13 @@ impl<'a> Tree<'a> {
                     (Display::Block, true) => compute_block_layout(tree, id, input, block),
                     (Display::FlowRoot, true) => compute_block_layout(tree, id, input, None),
                     (Display::Flex, true) => compute_flexbox_layout(tree, id, input),
-                    (Display::Grid, true) => compute_grid_layout(tree, id, input),
+                    (Display::Grid, true) => {
+                        let output = compute_grid_layout(tree, id, input);
+                        if input.run_mode == RunMode::PerformLayout {
+                            tree.layout_chained_flows(id, input);
+                        }
+                        output
+                    }
                     (_, false) => {
                         let node = &tree.nodes[usize::from(id)];
                         let mut context = node.context;
@@ -376,6 +382,218 @@ impl<'a> Tree<'a> {
                 output
             }
         })
+    }
+
+    fn grid_area_rect(&self, id: NodeId, name: &str) -> Option<egui::Rect> {
+        let node = &self.nodes[usize::from(id)];
+        let area = node
+            .style
+            .grid_template_areas
+            .as_ref()?
+            .areas
+            .iter()
+            .find(|area| area.name == name)?;
+        let DetailedLayoutInfo::Grid(info) = &node.details else {
+            return None;
+        };
+        let line = |value: u16| value.to_string().parse().ok();
+        let row: taffy::Line<taffy::GridPlacement<String>> = taffy::Line {
+            start: line(area.row_start)?,
+            end: line(area.row_end)?,
+        };
+        let column: taffy::Line<taffy::GridPlacement<String>> = taffy::Line {
+            start: line(area.column_start)?,
+            end: line(area.column_end)?,
+        };
+        let padding_box = taffy::Rect {
+            left: node.layout.border.left + node.layout.padding.left,
+            right: node.layout.size.width - node.layout.border.right - node.layout.padding.right,
+            top: node.layout.border.top + node.layout.padding.top,
+            bottom: node.layout.size.height
+                - node.layout.border.bottom
+                - node.layout.padding.bottom,
+        };
+        let rect = info.resolve_absolute_grid_area(row, column, node.style.direction, padding_box);
+        Some(egui::Rect::from_min_max(
+            egui::pos2(rect.left, rect.top),
+            egui::pos2(rect.right, rect.bottom),
+        ))
+    }
+
+    fn layout_chained_flows(&mut self, id: NodeId, input: LayoutInput) {
+        let index = usize::from(id);
+        let chains = self.nodes[index].format.chains.clone();
+        let children = self.nodes[index].children.clone();
+        let mut flows = Vec::new();
+        for child in &children {
+            if let Some(flow) = self.nodes[usize::from(*child)].format.flow.as_ref()
+                && !flows.contains(flow)
+            {
+                flows.push(flow.clone());
+            }
+        }
+        for flow in flows {
+            if chains
+                .iter()
+                .any(|chain| chain.iter().skip(1).any(|name| name == &flow))
+            {
+                continue;
+            }
+            let chain = chains
+                .iter()
+                .find(|chain| chain.first() == Some(&flow))
+                .cloned()
+                .unwrap_or_else(|| vec![flow.clone()]);
+            let mut items: Vec<_> = children
+                .iter()
+                .copied()
+                .filter(|child| {
+                    let node = &self.nodes[usize::from(*child)];
+                    node.format.flow.as_deref() == Some(&flow)
+                        && node.style.display != Display::None
+                        && !node.style.position.is_out_of_flow()
+                })
+                .collect();
+            if items.is_empty() {
+                continue;
+            }
+            items.sort_by_key(|child| usize::from(*child));
+            let regions: Vec<_> = chain
+                .iter()
+                .filter_map(|name| self.grid_area_rect(id, name))
+                .collect();
+            if regions.is_empty() {
+                continue;
+            }
+            if items.len() == 1 {
+                let child = items[0];
+                let child_index = usize::from(child);
+                let initial = self.nodes[child_index].layout;
+                let initial_margin = initial.margin;
+                if initial_margin.top + initial.size.height + initial_margin.bottom
+                    > regions[0].height() + 0.01
+                    && regions.len() > 1
+                {
+                    let mut region_index = 1;
+                    loop {
+                        let region = regions[region_index];
+                        let mut pending = vec![child];
+                        while let Some(descendant) = pending.pop() {
+                            let descendant_index = usize::from(descendant);
+                            self.nodes[descendant_index].layout_parent = None;
+                            let descendants = self.nodes[descendant_index].children.clone();
+                            CacheTree::cache_clear(self, descendant);
+                            pending.extend(descendants);
+                        }
+                        let margin = self.nodes[child_index].layout.margin;
+                        let width = (region.width() - margin.left - margin.right).max(0.0);
+                        let known_width = self.nodes[child_index]
+                            .style
+                            .size
+                            .width
+                            .is_auto()
+                            .then_some(width);
+                        let output = self.compute_child_layout(
+                            child,
+                            LayoutInput {
+                                run_mode: RunMode::PerformLayout,
+                                known_dimensions: Size {
+                                    width: known_width,
+                                    height: None,
+                                },
+                                parent_size: Size {
+                                    width: Some(region.width()),
+                                    height: Some(region.height()),
+                                },
+                                available_space: Size {
+                                    width: AvailableSpace::Definite(width),
+                                    height: AvailableSpace::MaxContent,
+                                },
+                                vertical_margins_are_collapsible: taffy::Line::FALSE,
+                                ..input
+                            },
+                        );
+                        let margin = self.nodes[child_index].layout.margin;
+                        let needed = margin.top + output.size.height + margin.bottom;
+                        if needed <= region.height() + 0.01 || region_index + 1 == regions.len() {
+                            let node = &mut self.nodes[child_index];
+                            node.layout.location = taffy::Point {
+                                x: region.left() + margin.left,
+                                y: region.top() + margin.top,
+                            };
+                            node.layout.size = output.size;
+                            node.layout_parent = Some(id);
+                            node.layout_axes = self.axes.last().copied().unwrap_or_default();
+                            break;
+                        }
+                        region_index += 1;
+                    }
+                }
+                continue;
+            }
+
+            let mut region_index = 0;
+            let mut cursor = regions[0].top();
+            for child in items {
+                loop {
+                    let region = regions[region_index];
+                    let child_index = usize::from(child);
+                    let margin = self.nodes[child_index].layout.margin;
+                    let width = (region.width() - margin.left - margin.right).max(0.0);
+                    let known_width = self.nodes[child_index]
+                        .style
+                        .size
+                        .width
+                        .is_auto()
+                        .then_some(width);
+                    let mut pending = vec![child];
+                    while let Some(descendant) = pending.pop() {
+                        let descendant_index = usize::from(descendant);
+                        self.nodes[descendant_index].layout_parent = None;
+                        let descendants = self.nodes[descendant_index].children.clone();
+                        CacheTree::cache_clear(self, descendant);
+                        pending.extend(descendants);
+                    }
+                    let output = self.compute_child_layout(
+                        child,
+                        LayoutInput {
+                            run_mode: RunMode::PerformLayout,
+                            known_dimensions: Size {
+                                width: known_width,
+                                height: None,
+                            },
+                            parent_size: Size {
+                                width: Some(region.width()),
+                                height: Some(region.height()),
+                            },
+                            available_space: Size {
+                                width: AvailableSpace::Definite(width),
+                                height: AvailableSpace::MaxContent,
+                            },
+                            vertical_margins_are_collapsible: taffy::Line::FALSE,
+                            ..input
+                        },
+                    );
+                    let needed = margin.top + output.size.height + margin.bottom;
+                    if cursor + needed > region.bottom() + 0.01 && region_index + 1 < regions.len()
+                    {
+                        region_index += 1;
+                        cursor = regions[region_index].top();
+                        continue;
+                    }
+                    let node = &mut self.nodes[child_index];
+                    node.layout.location = taffy::Point {
+                        x: region.left() + margin.left,
+                        y: cursor + margin.top,
+                    };
+                    node.layout.size = output.size;
+                    node.layout_parent = Some(id);
+                    node.layout_axes = self.axes.last().copied().unwrap_or_default();
+                    cursor += needed;
+                    break;
+                }
+            }
+        }
     }
 
     pub fn absolute_layout(&self, id: NodeId) -> Layout {

@@ -81,8 +81,9 @@
 
 ## Box model and layout
 
-- **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Unsupported.**
-  - CSS properties: `chains`, `flow`, `grid`, `grid-template`, `grid-template-areas`, `grid-template-columns`, `grid-template-rows`.
+- **[CSS Grid Template Layout](https://www.w3.org/TR/css3-layout/) - Partial.**
+  - CSS properties: `chains`, `flow`, ~~`grid`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~, ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
+  - Partial because chained flows advance at widget boundaries; a widget is not fragmented between slots, and anonymous content does not flow through template slots.
 - **[CSS Basic Box Model](https://www.w3.org/TR/css3-box/) - Partial.**
   - CSS properties: ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
     ~~`padding-right`~~, ~~`padding-top`~~.

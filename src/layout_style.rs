@@ -12,6 +12,7 @@ pub(crate) struct Declaration {
 pub(crate) struct BoxStyle {
     pub layout: Style,
     pub format: crate::formatting::Formatting,
+    template_grid: bool,
     pub display_set: bool,
     pub inline: bool,
     pub contents: bool,
@@ -82,6 +83,7 @@ impl Default for BoxStyle {
                 box_sizing: BoxSizing::ContentBox,
                 ..Style::default()
             },
+            template_grid: false,
             display_set: false,
             inline: false,
             contents: false,
@@ -310,6 +312,8 @@ fn supported(name: &str) -> bool {
                 | "grid-area"
                 | "grid-template"
                 | "grid-template-areas"
+                | "flow"
+                | "chains"
                 | "float"
                 | "clear"
                 | "direction"
@@ -750,6 +754,7 @@ impl Declaration {
                 }
             }
             "grid-template-columns" | "grid-template-rows" => {
+                output.template_grid = true;
                 let axis = usize::from(name == "grid-template-rows");
                 output.format.subgrid[axis] = parts
                     .first()
@@ -784,9 +789,20 @@ impl Declaration {
                     s.grid_template_row_names = names;
                 }
             }
-            "grid" => apply_grid_shorthand(value, s, &mut output.format, units)?,
-            "grid-template" => apply_grid_template(value, s, &mut output.format, units)?,
-            "grid-template-areas" => s.grid_template_areas = areas(value)?,
+            "grid" => {
+                apply_grid_shorthand(value, s, &mut output.format, units)?;
+                output.template_grid = true;
+            }
+            "grid-template" => {
+                apply_grid_template(value, s, &mut output.format, units)?;
+                output.template_grid = true;
+            }
+            "grid-template-areas" => {
+                s.grid_template_areas = areas(value)?;
+                output.template_grid = true;
+            }
+            "flow" => output.format.flow = parse_flow(value)?,
+            "chains" => output.format.chains = parse_chains(value)?,
             "grid-auto-columns" => {
                 s.grid_auto_columns = parts
                     .iter()
@@ -868,6 +884,14 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     if name == "overflow-clip-margin" {
         out.overflow_clip_box = source.overflow_clip_box;
         out.overflow_clip_margin = source.overflow_clip_margin;
+        return;
+    }
+    if name == "flow" {
+        out.format.flow.clone_from(&source.format.flow);
+        return;
+    }
+    if name == "chains" {
+        out.format.chains.clone_from(&source.format.chains);
         return;
     }
     if name == "margin-trim" {
@@ -1220,6 +1244,9 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
 
 impl BoxStyle {
     pub(crate) fn finish(&mut self) {
+        if self.template_grid && !self.display_set {
+            self.layout.display = Display::Grid;
+        }
         let widths = std::array::from_fn::<_, 4, _>(|i| {
             if matches!(
                 self.border_styles[i],
@@ -1608,9 +1635,11 @@ fn apply_flex(
 
 fn track(value: &str, units: Units) -> Result<TrackSizingFunction, &'static str> {
     match value {
+        "*" => return Ok(fr(1.0)),
         "auto" => return Ok(auto()),
         "min-content" => return Ok(min_content()),
         "max-content" => return Ok(max_content()),
+        "fit-content" => return Ok(minmax(min_content(), max_content())),
         _ => {}
     }
     if let Some(n) = value.strip_suffix("fr") {
@@ -1685,6 +1714,86 @@ fn placement_pair(value: &str) -> Result<taffy::Line<GridPlacement<String>>, &'s
         start: placement(a.trim())?,
         end: placement(b.trim())?,
     })
+}
+
+fn parse_flow(value: &str) -> Result<Option<String>, &'static str> {
+    if value.eq_ignore_ascii_case("normal") {
+        return Ok(None);
+    }
+    if value == "*" {
+        return Ok(Some(value.to_owned()));
+    }
+    let mut parser = Parser::new(value);
+    let name = parser
+        .expect_ident_cloned()
+        .map_err(|_| "invalid flow name")?;
+    parser.expect_exhausted().map_err(|_| "invalid flow name")?;
+    Ok(Some(name.to_string()))
+}
+
+fn parse_chains(value: &str) -> Result<Vec<Vec<String>>, &'static str> {
+    if value.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    let mut chains = vec![Vec::new()];
+    let mut names = std::collections::HashSet::new();
+    for part in components(value)? {
+        if part == "," {
+            if chains.last().is_none_or(Vec::is_empty) {
+                return Err("empty grid chain");
+            }
+            chains.push(Vec::new());
+            continue;
+        }
+        let Some(name) = parse_flow(&part)? else {
+            return Err("invalid grid chain name");
+        };
+        if !names.insert(name.clone()) {
+            return Err("duplicate grid chain name");
+        }
+        chains.last_mut().unwrap().push(name);
+    }
+    if chains.last().is_none_or(Vec::is_empty) {
+        return Err("empty grid chain");
+    }
+    Ok(chains)
+}
+
+pub(crate) fn resolve_flow(child: &mut BoxStyle, parent: &BoxStyle) {
+    if parent.layout.display != Display::Grid {
+        return;
+    }
+    let Some(areas) = parent.layout.grid_template_areas.as_ref() else {
+        return;
+    };
+    let name = child.format.flow.clone().or_else(|| {
+        areas
+            .areas
+            .iter()
+            .find(|area| area.name == "*")
+            .or_else(|| {
+                (!parent.format.chains.is_empty())
+                    .then(|| areas.areas.first())
+                    .flatten()
+            })
+            .map(|area| area.name.clone())
+    });
+    let Some(name) = name else {
+        return;
+    };
+    let Some(area) = areas.areas.iter().find(|area| area.name == name) else {
+        return;
+    };
+    let line = |value: u16| placement(&value.to_string()).expect("grid area lines are valid");
+    child.layout.grid_row = taffy::Line {
+        start: line(area.row_start),
+        end: line(area.row_end),
+    };
+    child.layout.grid_column = taffy::Line {
+        start: line(area.column_start),
+        end: line(area.column_end),
+    };
+    child.format.flow = Some(name);
 }
 
 pub(crate) fn border_style(value: &str) -> Result<BorderStyle, &'static str> {
@@ -1949,6 +2058,65 @@ fn apply_grid_shorthand(
     Ok(())
 }
 
+fn apply_legacy_grid_dimensions(
+    column_value: &str,
+    row_value: &str,
+    style: &mut Style,
+    units: Units,
+) -> Result<(), &'static str> {
+    let columns = tracks(column_value, units)?;
+    let rows = tracks(row_value, units)?;
+    if columns.is_empty() || rows.is_empty() {
+        return Err("grid template requires at least one row and column");
+    }
+    let column_count = components(column_value)?.len();
+    let row_count = components(row_value)?.len();
+    let cells = vec!["*"; column_count].join(" ");
+    let area_rows = (0..row_count)
+        .map(|_| format!("\"{cells}\""))
+        .collect::<Vec<_>>()
+        .join(" ");
+    style.grid_template_columns = columns;
+    style.grid_template_rows = rows;
+    style.grid_template_areas = areas(&area_rows)?;
+    Ok(())
+}
+
+fn apply_legacy_grid_areas(
+    parts: &[String],
+    area_start: usize,
+    style: &mut Style,
+    format: &mut crate::formatting::Formatting,
+    units: Units,
+) -> Result<(), &'static str> {
+    let columns = tracks(&parts[..area_start].join(" "), units)?;
+    if columns.is_empty() {
+        return Err("grid template requires at least one column");
+    }
+    let mut area_rows = Vec::new();
+    let mut row_sizes = Vec::new();
+    let mut index = area_start;
+    while index < parts.len() {
+        if quoted_string(&parts[index]).is_none() {
+            return Err("expected grid area row");
+        }
+        area_rows.push(parts[index].clone());
+        index += 1;
+        if parts
+            .get(index)
+            .is_some_and(|part| quoted_string(part).is_none())
+        {
+            row_sizes.push(parts[index].clone());
+            index += 1;
+        } else {
+            row_sizes.push("fit-content".to_owned());
+        }
+    }
+    style.grid_template_areas = areas(&area_rows.join(" "))?;
+    style.grid_template_columns = columns;
+    set_grid_template_axis(&row_sizes.join(" "), 1, style, format, units)
+}
+
 fn apply_grid_template(
     value: &str,
     style: &mut Style,
@@ -1973,6 +2141,22 @@ fn apply_grid_template(
     }
     let rows = &parts[..slash.unwrap_or(parts.len())];
     let columns = slash.map(|index| &parts[index + 1..]);
+    let area_start = rows.iter().position(|part| quoted_string(part).is_some());
+    if let Some(area_start) = area_start
+        && area_start > 0
+        && slash.is_none()
+    {
+        return apply_legacy_grid_areas(rows, area_start, style, format, units);
+    }
+    let legacy_dimension_syntax = parts
+        .iter()
+        .any(|part| matches!(part.as_str(), "*" | "fit-content"));
+    if area_start.is_none()
+        && legacy_dimension_syntax
+        && let Some(columns) = columns
+    {
+        return apply_legacy_grid_dimensions(&rows.join(" "), &columns.join(" "), style, units);
+    }
     if rows.is_empty() || columns.is_some_and(|columns| columns.is_empty()) {
         return Err("invalid grid-template");
     }
@@ -2099,8 +2283,7 @@ fn areas(value: &str) -> Result<Option<taffy::GridTemplateAreas<String>>, &'stat
         return Err("invalid grid template areas");
     }
     let columns = rows[0].len();
-    let mut areas: std::collections::BTreeMap<String, (usize, usize, usize, usize)> =
-        Default::default();
+    let mut areas: Vec<(String, (usize, usize, usize, usize))> = Vec::new();
     for (y, row) in rows.iter().enumerate() {
         if row.len() != columns {
             return Err("unequal grid template rows");
@@ -2109,7 +2292,12 @@ fn areas(value: &str) -> Result<Option<taffy::GridTemplateAreas<String>>, &'stat
             if name.chars().all(|c| c == '.') {
                 continue;
             }
-            let area = areas.entry(name.clone()).or_insert((x, y, x + 1, y + 1));
+            let area = if let Some((_, area)) = areas.iter_mut().find(|(area, _)| area == name) {
+                area
+            } else {
+                areas.push((name.clone(), (x, y, x + 1, y + 1)));
+                &mut areas.last_mut().unwrap().1
+            };
             area.0 = area.0.min(x);
             area.1 = area.1.min(y);
             area.2 = area.2.max(x + 1);

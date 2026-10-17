@@ -312,6 +312,7 @@ pub(crate) fn show(
             }
         }
     }
+    crate::layout_style::resolve_flow(&mut style, &parent_style);
     style.finish();
     let style = Rc::new(style);
     let scroll = ui

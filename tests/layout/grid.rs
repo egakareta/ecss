@@ -2,6 +2,61 @@ use super::*;
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn template_flow_places_a_widget_in_its_named_slot() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { width:100px; height:40px; grid:20px * \"main side\" 40px; } .item { flow:side; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rect = Rect::NOTHING;
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rect = ui.add(empty_response.selector(".item")).rect;
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert_eq!(rect.left(), 20.0, "{rect:?}");
+    assert_eq!(rect.size(), vec2(80.0, 40.0), "{rect:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn chains_continue_each_flow_in_the_next_slot_when_the_current_slot_is_full() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; width:200px; height:50px; grid-template-columns:50px 50px 50px 50px; grid-template-rows:50px; grid-template-areas:\"* a b c\"; chains:* a, b c; } .first-item, .second-item { width:50px; height:30px; } .third-item, .fourth-item { width:50px; height:30px; flow:b; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = vec![
+                    ui.add(empty_response.selector(".first-item")).rect,
+                    ui.add(empty_response.selector(".second-item")).rect,
+                    ui.add(empty_response.selector(".third-item")).rect,
+                    ui.add(empty_response.selector(".fourth-item")).rect,
+                ];
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert_eq!(rects[0].left(), 0.0, "{rects:?}");
+    assert_eq!(rects[1].left(), 50.0, "{rects:?}");
+    assert_eq!(rects[0].top(), rects[1].top(), "{rects:?}");
+    assert_eq!(rects[2].left(), 100.0, "{rects:?}");
+    assert_eq!(rects[3].left(), 150.0, "{rects:?}");
+    assert_eq!(rects[2].top(), rects[3].top(), "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn grid_template_shorthand_builds_tracks_and_named_areas() {
     let context = Context::default();
     Stylesheet::parse(
