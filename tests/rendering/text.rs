@@ -699,7 +699,7 @@ async fn inline_padding_and_borders_paint_around_text_without_expanding_line_hei
             .add(
                 (|ui: &mut egui::Ui| {
                     boxes.push(ui.add(egui::Label::new("X").selector(".text")).rect);
-                    boxes.push(ui.add(empty_box.selector(".next")).rect);
+                    boxes.push(ui.add(empty_response.selector(".next")).rect);
                     ui.response()
                 })
                 .selector(".flow"),

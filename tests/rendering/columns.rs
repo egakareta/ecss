@@ -9,7 +9,7 @@ async fn column_fragments_paint_in_destination_columns_without_painting_gutters_
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         let response = ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -47,11 +47,11 @@ async fn column_spanners_create_full_width_boxes_between_column_sets_test() {
         let mut boxes = Vec::new();
         ui.add(
             (|ui: &mut egui::Ui| {
-                boxes.push(ui.add(empty_box.selector(".item")).rect);
-                boxes.push(ui.add(empty_box.selector(".item")).rect);
-                boxes.push(ui.add(empty_box.selector(".span")).rect);
-                boxes.push(ui.add(empty_box.selector(".item")).rect);
-                boxes.push(ui.add(empty_box.selector(".item")).rect);
+                boxes.push(ui.add(empty_response.selector(".item")).rect);
+                boxes.push(ui.add(empty_response.selector(".item")).rect);
+                boxes.push(ui.add(empty_response.selector(".span")).rect);
+                boxes.push(ui.add(empty_response.selector(".item")).rect);
+                boxes.push(ui.add(empty_response.selector(".item")).rect);
                 ui.response()
             })
             .selector(".columns"),
@@ -80,7 +80,7 @@ async fn column_rules_and_cloned_fragment_borders_render_their_styles_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -108,7 +108,7 @@ async fn cloned_column_fragments_repeat_border_images_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -130,7 +130,7 @@ async fn cloned_column_fragments_repeat_background_images_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -152,7 +152,7 @@ async fn cloned_column_fragments_repaint_background_gradients_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -165,7 +165,10 @@ async fn cloned_column_fragments_repaint_background_gradients_test() {
     }
     for x in [40.0, 90.0] {
         let right = pixel(&pixels, x, 15.0);
-        assert!(right[2] > right[0], "right fragment pixel at {x} was {right:?}");
+        assert!(
+            right[2] > right[0],
+            "right fragment pixel at {x} was {right:?}"
+        );
     }
 }
 
@@ -180,7 +183,7 @@ async fn cloned_column_fragments_repaint_radial_gradient_centers_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -189,7 +192,10 @@ async fn cloned_column_fragments_repaint_radial_gradient_centers_test() {
     .await;
     for x in [22.0, 77.0] {
         let center = pixel(&pixels, x, 15.0);
-        assert!(center[0] > center[2] * 4, "radial center at {x} was {center:?}");
+        assert!(
+            center[0] > center[2] * 4,
+            "radial center at {x} was {center:?}"
+        );
     }
 }
 
@@ -214,7 +220,7 @@ async fn cloned_column_fragments_repeat_url_background_images_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".box"));
+                ui.add(empty_response.selector(".box"));
                 ui.response()
             })
             .selector(".columns"),
@@ -237,7 +243,7 @@ async fn fragmented_border_image_outset_paints_outside_each_clone_test() {
             ui.add_space(40.0);
             ui.add(
                 (|ui: &mut egui::Ui| {
-                    ui.add(empty_box.selector(".box"));
+                    ui.add(empty_response.selector(".box"));
                     ui.response()
                 })
                 .selector(".columns"),
@@ -265,7 +271,7 @@ async fn multicolumn_box_shadows_follow_box_decoration_break_test() {
         let pixels = render_ui_pixels(stylesheet, move |ui| {
             ui.add(
                 (|ui: &mut egui::Ui| {
-                    ui.add(empty_box.selector(".box"));
+                    ui.add(empty_response.selector(".box"));
                     ui.response()
                 })
                 .selector(".columns"),
@@ -281,7 +287,10 @@ async fn multicolumn_box_shadows_follow_box_decoration_break_test() {
     for shadow in ["0 0 0 3px red", "inset 0 0 0 3px red"] {
         let sliced_shadow = shadow_pixels("slice", shadow).await;
         let cloned_shadow = shadow_pixels("clone", shadow).await;
-        assert!(sliced_shadow > 0, "slice should keep unbroken shadow edges for {shadow}");
+        assert!(
+            sliced_shadow > 0,
+            "slice should keep unbroken shadow edges for {shadow}"
+        );
         assert!(
             cloned_shadow > sliced_shadow,
             "clone should paint a shadow around each column fragment for {shadow}: clone={cloned_shadow}, slice={sliced_shadow}"

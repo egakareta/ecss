@@ -32,11 +32,6 @@ struct OffscreenRenderer {
 // thread-local state that is unsafe to tear down with each test thread.
 static RENDERER_THREAD: OnceLock<mpsc::Sender<RenderRequest>> = OnceLock::new();
 
-pub(super) fn empty_box(ui: &mut egui::Ui) -> egui::Response {
-    ui.allocate_exact_size(egui::Vec2::ZERO, egui::Sense::hover())
-        .1
-}
-
 pub(super) fn pixel(pixels: &[[u8; 4]], x: f32, y: f32) -> [u8; 4] {
     pixels[y.floor() as usize * WIDTH as usize + x.floor() as usize]
 }

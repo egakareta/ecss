@@ -11,8 +11,8 @@ async fn content_and_border_box_sizes_include_the_correct_edges_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".content")).rect,
-            ui.add(empty_box.selector(".border")).rect,
+            ui.add(empty_response.selector(".content")).rect,
+            ui.add(empty_response.selector(".border")).rect,
         ];
     })
     .await;
@@ -44,7 +44,7 @@ async fn svg_url_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -71,7 +71,7 @@ async fn svg_image_set_type_hint_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -94,7 +94,7 @@ async fn svg_border_image_without_intrinsic_dimensions_uses_the_border_area_test
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -118,10 +118,10 @@ async fn element_image_source_paints_as_a_background_test() {
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#source"));
+        ui.add(empty_response.selector("#source"));
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".target")).rect,
-            ui.add(empty_box.selector(".fade")).rect,
+            ui.add(empty_response.selector(".target")).rect,
+            ui.add(empty_response.selector(".fade")).rect,
         ];
     })
     .await;
@@ -149,11 +149,11 @@ async fn element_image_source_requires_a_stacking_context_test() {
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#source"));
-        ui.add(empty_box.selector("#hidden-source"));
+        ui.add(empty_response.selector("#source"));
+        ui.add(empty_response.selector("#hidden-source"));
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".target")).rect,
-            ui.add(empty_box.selector(".hidden-target")).rect,
+            ui.add(empty_response.selector(".target")).rect,
+            ui.add(empty_response.selector(".hidden-target")).rect,
         ];
     })
     .await;
@@ -180,12 +180,12 @@ async fn element_image_source_flex_item_with_z_index_is_eligible_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector("#source"));
+                ui.add(empty_response.selector("#source"));
                 ui.response()
             })
             .selector("#container"),
         );
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -205,8 +205,8 @@ async fn element_image_source_fixed_positioned_with_auto_z_index_is_eligible_tes
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#source"));
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+        ui.add(empty_response.selector("#source"));
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -228,12 +228,12 @@ async fn element_image_hidden_context_keeps_visible_descendants_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".child"));
+                ui.add(empty_response.selector(".child"));
                 ui.response()
             })
             .selector("#parent"),
         );
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -255,12 +255,12 @@ async fn element_image_ignores_references_in_display_none_descendants_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector("#inert"));
+                ui.add(empty_response.selector("#inert"));
                 ui.response()
             })
             .selector("#holder"),
         );
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#target")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -291,7 +291,7 @@ async fn element_image_uses_the_first_matching_id_test() {
                 .selector("#duplicate"),
             );
         }
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -312,8 +312,8 @@ async fn opposite_concave_corner_hulls_constrain_border_radii_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".scoops")).rect,
-            ui.add(empty_box.selector(".reference")).rect,
+            ui.add(empty_response.selector(".scoops")).rect,
+            ui.add(empty_response.selector(".reference")).rect,
         ];
     })
     .await;
@@ -355,7 +355,7 @@ async fn corner_shorthands_match_their_longhand_expansions_test() {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.add(empty_box.selector(short));
+                ui.add(empty_response.selector(short));
             });
         }
     })
@@ -365,7 +365,7 @@ async fn corner_shorthands_match_their_longhand_expansions_test() {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.add(empty_box.selector(long));
+                ui.add(empty_response.selector(long));
             });
         }
     })
@@ -393,8 +393,8 @@ async fn calculated_superellipse_parameter_matches_its_keyword_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".keyword")).rect,
-            ui.add(empty_box.selector(".calculated")).rect,
+            ui.add(empty_response.selector(".keyword")).rect,
+            ui.add(empty_response.selector(".calculated")).rect,
         ];
     })
     .await;
@@ -428,7 +428,7 @@ async fn outer_shadow_does_not_paint_inside_a_transparent_box_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shadow")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shadow")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -445,7 +445,7 @@ async fn box_shadow_spread_preserves_square_corners_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shadow")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shadow")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -465,8 +465,8 @@ async fn element_image_source_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#source"));
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".target")).rect);
+        ui.add(empty_response.selector("#source"));
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".target")).rect);
     })
     .await;
     let target = bounds.lock().unwrap().unwrap();
@@ -491,8 +491,8 @@ async fn cyclic_element_image_references_are_invalid_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector("#first")).rect,
-            ui.add(empty_box.selector("#second")).rect,
+            ui.add(empty_response.selector("#first")).rect,
+            ui.add(empty_response.selector("#second")).rect,
         ];
     })
     .await;
@@ -520,7 +520,7 @@ async fn element_image_cycle_through_a_descendant_is_invalid_test() {
         let capture = capture.clone();
         ui.add(
             (move |ui: &mut egui::Ui| {
-                *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#child")).rect);
+                *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#child")).rect);
                 ui.response()
             })
             .selector("#parent"),
@@ -547,7 +547,7 @@ async fn element_image_cycle_through_an_unidentified_descendant_is_invalid_test(
         let capture = capture.clone();
         ui.add(
             (move |ui: &mut egui::Ui| {
-                *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".child")).rect);
+                *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector("#parent"),
@@ -573,12 +573,12 @@ async fn element_image_cycles_across_root_selectors_include_cached_descendants_t
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".child"));
+                ui.add(empty_response.selector(".child"));
                 ui.response()
             })
             .selector("#parent"),
         );
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#other")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#other")).rect);
     })
     .await;
     let other = bounds.lock().unwrap().unwrap();
@@ -598,8 +598,8 @@ async fn overridden_element_image_reference_does_not_create_a_cycle_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#first"));
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+        ui.add(empty_response.selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
     })
     .await;
     let second = bounds.lock().unwrap().unwrap();
@@ -619,8 +619,8 @@ async fn border_shorthand_reset_does_not_create_an_element_image_cycle_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_box.selector("#first"));
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+        ui.add(empty_response.selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
     })
     .await;
     let second = bounds.lock().unwrap().unwrap();
@@ -641,7 +641,7 @@ async fn first_letter_border_image_participates_in_element_cycle_detection_test(
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(egui::Label::new("A").selector("#first"));
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector("#second")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
     })
     .await;
     let second = bounds.lock().unwrap().unwrap();
@@ -662,7 +662,7 @@ async fn border_hairline_resolves_to_one_device_pixel_test() {
         let bounds = std::sync::Arc::new(Mutex::new(None));
         let capture = bounds.clone();
         let pixels = render_ui_pixels_at_scale(stylesheet.clone(), scale, move |ui| {
-            *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".hairline")).rect);
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".hairline")).rect);
         })
         .await;
         let rect = bounds.lock().unwrap().unwrap();
@@ -691,11 +691,11 @@ async fn background_layers_use_their_matching_clip_values_test() {
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".layered")).rect);
+            .push(ui.add(empty_response.selector(".layered")).rect);
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".shorthand")).rect);
+            .push(ui.add(empty_response.selector(".shorthand")).rect);
     })
     .await;
     for rect in bounds.lock().unwrap().iter() {
@@ -720,7 +720,7 @@ async fn border_shape_circle_clips_background_and_draws_its_stroke_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -749,7 +749,7 @@ async fn border_shape_outer_shadow_spread_expands_the_shape_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -769,8 +769,8 @@ async fn border_shape_outer_shadow_preserves_evenodd_holes_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".evenodd")).rect,
-            ui.add(empty_box.selector(".nonzero")).rect,
+            ui.add(empty_response.selector(".evenodd")).rect,
+            ui.add(empty_response.selector(".nonzero")).rect,
         ];
     })
     .await;
@@ -795,8 +795,8 @@ async fn border_shape_inset_shadow_uses_inner_path_subcontours_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".evenodd")).rect,
-            ui.add(empty_box.selector(".nonzero")).rect,
+            ui.add(empty_response.selector(".evenodd")).rect,
+            ui.add(empty_response.selector(".nonzero")).rect,
         ];
     })
     .await;
@@ -817,7 +817,7 @@ async fn basic_shape_positions_support_edge_offsets_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -838,7 +838,7 @@ async fn border_shape_clips_gradient_background_images_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -868,7 +868,7 @@ async fn border_shape_clips_tiled_url_background_images_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -896,7 +896,7 @@ async fn border_shape_clips_descendant_content_test() {
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -934,7 +934,7 @@ async fn border_shape_preserves_visible_descendant_overflow_test() {
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -964,7 +964,7 @@ async fn border_limit_percentages_use_border_box_dimensions_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -992,7 +992,7 @@ async fn border_radius_clips_overflow_content_to_the_curved_padding_edge_test() 
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -1030,7 +1030,7 @@ async fn border_radius_clips_when_visible_overflow_computes_to_auto_test() {
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -1063,7 +1063,7 @@ async fn overflow_clip_margin_expands_rounded_descendant_clipping_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".child"));
+                ui.add(empty_response.selector(".child"));
                 ui.response()
             })
             .selector(".parent"),
@@ -1095,7 +1095,7 @@ async fn overflow_clip_margin_expands_border_shape_descendant_clipping_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".child"));
+                ui.add(empty_response.selector(".child"));
                 ui.response()
             })
             .selector(".parent"),
@@ -1138,7 +1138,7 @@ async fn image_set_selects_the_nearest_supported_resolution_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1175,7 +1175,7 @@ async fn image_set_resolution_scales_background_intrinsic_size_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels_at_scale(stylesheet, 2.0, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1196,7 +1196,7 @@ async fn image_color_paints_as_a_background_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1229,11 +1229,11 @@ async fn cross_fade_combines_loaded_images_and_colors_test() {
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".image")).rect);
+            .push(ui.add(empty_response.selector(".image")).rect);
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".transparent")).rect);
+            .push(ui.add(empty_response.selector(".transparent")).rect);
     })
     .await;
     let bounds = bounds.lock().unwrap();
@@ -1259,7 +1259,7 @@ async fn cross_fade_accepts_percentage_before_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".blend")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".blend")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1279,7 +1279,7 @@ async fn image_set_selects_cross_fade_candidate_at_output_scale_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels_at_scale(stylesheet, 2.0, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".blend")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".blend")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1316,7 +1316,7 @@ async fn image_set_keeps_generated_cross_fade_natural_size_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1345,7 +1345,7 @@ async fn conic_gradient_background_uses_clockwise_css_angles_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1365,7 +1365,7 @@ async fn conic_gradient_resolves_start_angle_and_center_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1389,7 +1389,7 @@ async fn repeating_linear_gradient_repeats_its_stop_interval_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1410,7 +1410,7 @@ async fn gradient_color_stops_can_specify_a_hard_stop_interval_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1434,11 +1434,11 @@ async fn gradient_transition_hints_place_the_midpoint_color_test() {
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".hint")).rect);
+            .push(ui.add(empty_response.selector(".hint")).rect);
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".linear")).rect);
+            .push(ui.add(empty_response.selector(".linear")).rect);
     })
     .await;
     let bounds = bounds.lock().unwrap();
@@ -1463,11 +1463,11 @@ async fn gradients_use_oklab_by_default_and_can_select_srgb_test() {
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".oklab")).rect);
+            .push(ui.add(empty_response.selector(".oklab")).rect);
         capture
             .lock()
             .unwrap()
-            .push(ui.add(empty_box.selector(".srgb")).rect);
+            .push(ui.add(empty_response.selector(".srgb")).rect);
     })
     .await;
     let bounds = bounds.lock().unwrap();
@@ -1490,7 +1490,7 @@ async fn radial_gradient_resolves_ellipse_radii_and_position_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1530,7 +1530,7 @@ async fn image_set_border_image_source_uses_the_selected_resolution_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1550,7 +1550,7 @@ async fn image_color_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1573,8 +1573,8 @@ async fn solid_color_border_image_honors_space_repeat_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".space")).rect,
-            ui.add(empty_box.selector(".stretch")).rect,
+            ui.add(empty_response.selector(".space")).rect,
+            ui.add(empty_response.selector(".stretch")).rect,
         ];
     })
     .await;
@@ -1626,7 +1626,7 @@ async fn border_image_repeat_tiles_the_center_region_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1664,8 +1664,8 @@ async fn border_image_slice_values_clamp_to_image_dimensions_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".number")).rect,
-            ui.add(empty_box.selector(".percentage")).rect,
+            ui.add(empty_response.selector(".number")).rect,
+            ui.add(empty_response.selector(".percentage")).rect,
         ];
     })
     .await;
@@ -1698,7 +1698,7 @@ async fn conic_gradient_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1719,7 +1719,7 @@ async fn border_shape_clips_border_image_paint_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1743,7 +1743,7 @@ async fn cross_fade_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1764,7 +1764,7 @@ async fn radial_gradient_paints_as_a_border_image_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1789,10 +1789,10 @@ async fn partial_borders_draw_only_the_limited_or_clipped_segments_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".limited")).rect,
-            ui.add(empty_box.selector(".clipped")).rect,
-            ui.add(empty_box.selector(".fractional")).rect,
-            ui.add(empty_box.selector(".fractional-fixed")).rect,
+            ui.add(empty_response.selector(".limited")).rect,
+            ui.add(empty_response.selector(".clipped")).rect,
+            ui.add(empty_response.selector(".fractional")).rect,
+            ui.add(empty_response.selector(".fractional-fixed")).rect,
         ];
     })
     .await;
@@ -1845,7 +1845,7 @@ async fn zero_width_adjacent_border_takes_the_entire_corner_transition_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".corner")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".corner")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1866,7 +1866,7 @@ async fn border_corner_color_transition_tracks_border_width_ratio_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".corner")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".corner")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -1890,9 +1890,9 @@ async fn zero_flex_border_clip_does_not_create_an_implicit_flex_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".zero")).rect),
-            Some(ui.add(empty_box.selector(".fixed")).rect),
-            Some(ui.add(empty_box.selector(".implicit")).rect),
+            Some(ui.add(empty_response.selector(".zero")).rect),
+            Some(ui.add(empty_response.selector(".fixed")).rect),
+            Some(ui.add(empty_response.selector(".implicit")).rect),
         ];
     })
     .await;
@@ -1924,9 +1924,9 @@ async fn striped_border_color_paints_from_the_padding_edge_outward_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".striped")).rect),
-            Some(ui.add(empty_box.selector(".partial")).rect),
-            Some(ui.add(empty_box.selector(".partial-fixed")).rect),
+            Some(ui.add(empty_response.selector(".striped")).rect),
+            Some(ui.add(empty_response.selector(".partial")).rect),
+            Some(ui.add(empty_response.selector(".partial-fixed")).rect),
         ];
     })
     .await;
@@ -1998,7 +1998,7 @@ async fn striped_border_shape_color_starts_at_the_padding_edge_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shaped")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shaped")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2024,7 +2024,7 @@ async fn linear_gradient_border_image_is_sliced_and_painted_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2044,7 +2044,7 @@ async fn border_image_width_auto_uses_border_width_for_gradients_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2067,9 +2067,9 @@ async fn border_image_width_and_outset_use_computed_border_widths_when_style_is_
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".width")).rect),
-            Some(ui.add(empty_box.selector(".outset")).rect),
-            Some(ui.add(empty_box.selector(".length-width")).rect),
+            Some(ui.add(empty_response.selector(".width")).rect),
+            Some(ui.add(empty_response.selector(".outset")).rect),
+            Some(ui.add(empty_response.selector(".length-width")).rect),
         ];
     })
     .await;
@@ -2123,7 +2123,7 @@ async fn border_image_width_auto_resolves_density_corrected_slices_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels_at_scale(stylesheet, 2.0, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".image")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".image")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2141,7 +2141,7 @@ async fn svg_path_border_shape_uses_its_closed_contour_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".diamond")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".diamond")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2170,7 +2170,7 @@ async fn svg_path_border_shape_preserves_subpaths_and_evenodd_holes_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2196,7 +2196,7 @@ async fn shape_border_shape_handles_curves_and_evenodd_subpaths_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2222,7 +2222,7 @@ async fn shape_border_shape_arcs_resolve_css_radii_and_sweep_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".shape")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".shape")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2256,8 +2256,8 @@ async fn polygon_border_shape_respects_fill_rules_on_retraced_contours_test() {
         ui.add(
             (|ui: &mut egui::Ui| {
                 *capture.lock().unwrap() = vec![
-                    ui.add(empty_box.selector(".even")).rect,
-                    ui.add(empty_box.selector(".nonzero")).rect,
+                    ui.add(empty_response.selector(".even")).rect,
+                    ui.add(empty_response.selector(".nonzero")).rect,
                 ];
                 ui.response()
             })
@@ -2288,8 +2288,8 @@ async fn outer_and_inset_box_shadows_paint_on_their_respective_sides_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".outer")).rect,
-            ui.add(empty_box.selector(".inner")).rect,
+            ui.add(empty_response.selector(".outer")).rect,
+            ui.add(empty_response.selector(".inner")).rect,
         ];
     })
     .await;
@@ -2318,7 +2318,7 @@ async fn inset_box_shadow_blur_follows_gaussian_edge_profile_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2352,8 +2352,8 @@ async fn inset_box_shadow_spread_and_offset_follow_padding_edge_test() {
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = vec![
-            ui.add(empty_box.selector(".spread")).rect,
-            ui.add(empty_box.selector(".offset")).rect,
+            ui.add(empty_response.selector(".spread")).rect,
+            ui.add(empty_response.selector(".offset")).rect,
         ];
     })
     .await;
@@ -2393,7 +2393,7 @@ async fn box_shadow_offset_none_is_case_insensitive_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2413,7 +2413,7 @@ async fn box_shadow_longhand_lists_repeat_and_truncate_to_offsets_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2445,7 +2445,7 @@ async fn box_shadow_blur_scales_beyond_128_pixels_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2466,7 +2466,7 @@ async fn box_shadow_blur_approximates_gaussian_profile_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2501,7 +2501,7 @@ async fn percentages_auto_margins_and_min_max_use_the_containing_block_test() {
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -2537,8 +2537,8 @@ async fn absolute_position_skips_static_ancestors_and_does_not_consume_flow_test
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        absolute = Some(ui.add(empty_box.selector(".absolute")).rect);
-                        normal = Some(ui.add(empty_box.selector(".normal")).rect);
+                        absolute = Some(ui.add(empty_response.selector(".absolute")).rect);
+                        normal = Some(ui.add(empty_response.selector(".normal")).rect);
                         ui.response()
                     })
                     .selector(".static"),
@@ -2573,7 +2573,7 @@ async fn logical_border_pairs_resolve_against_direction_and_affect_box_size_test
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".box")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
     })
     .await;
     let rect = bounds.lock().unwrap().unwrap();
@@ -2605,8 +2605,8 @@ async fn upright_text_orientation_maps_logical_border_corners_with_ltr_direction
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".upright")).rect),
-            Some(ui.add(empty_box.selector(".mixed")).rect),
+            Some(ui.add(empty_response.selector(".upright")).rect),
+            Some(ui.add(empty_response.selector(".mixed")).rect),
         ];
     })
     .await;
@@ -2660,8 +2660,8 @@ async fn corner_block_start_shorthand_maps_radii_in_inline_start_end_order_test(
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".upright")).rect),
-            Some(ui.add(empty_box.selector(".mixed")).rect),
+            Some(ui.add(empty_response.selector(".upright")).rect),
+            Some(ui.add(empty_response.selector(".mixed")).rect),
         ];
     })
     .await;
@@ -2699,8 +2699,8 @@ async fn upright_text_orientation_maps_logical_border_clips_with_ltr_direction_t
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         *capture.lock().unwrap() = [
-            Some(ui.add(empty_box.selector(".upright")).rect),
-            Some(ui.add(empty_box.selector(".mixed")).rect),
+            Some(ui.add(empty_response.selector(".upright")).rect),
+            Some(ui.add(empty_response.selector(".mixed")).rect),
         ];
     })
     .await;

@@ -1,11 +1,21 @@
+#[path = "common/mod.rs"]
+mod common;
+
 mod rendering {
+    use super::common::*;
     use ecss::*;
     use eframe::egui;
     use std::sync::Mutex;
+    mod support;
     use support::*;
 
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    automod::dir!("tests/rendering");
+    mod backgrounds;
+    mod box_model;
+    mod columns;
+    mod layout;
+    mod tables;
+    mod text;
 }

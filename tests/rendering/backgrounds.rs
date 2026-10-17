@@ -46,7 +46,7 @@ async fn background_shorthand_gradient_and_content_clip_render_correctly_test() 
     let widget_rect = std::sync::Arc::new(Mutex::new(None));
     let rect_from_ui = widget_rect.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        let response = ui.add(empty_box.selector(".gradient"));
+        let response = ui.add(empty_response.selector(".gradient"));
         *rect_from_ui.lock().unwrap() = Some(response.rect);
     })
     .await;
@@ -75,7 +75,7 @@ async fn gradient_background_respects_border_radius_and_padding_clip_test() {
     let bounds = std::sync::Arc::new(Mutex::new(None));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        *capture.lock().unwrap() = Some(ui.add(empty_box.selector(".gradient")).rect);
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".gradient")).rect);
     })
     .await;
 
@@ -110,7 +110,7 @@ async fn background_image_data_url_is_decoded_and_tiled_test() {
     let widget_rect = std::sync::Arc::new(Mutex::new(None));
     let rect_from_ui = widget_rect.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        let response = ui.add(empty_box.selector(".image"));
+        let response = ui.add(empty_response.selector(".image"));
         *rect_from_ui.lock().unwrap() = Some(response.rect);
     })
     .await;

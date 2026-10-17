@@ -39,7 +39,6 @@ unicode-linebreak = "0.1"
 wuff = "0.2"
 
 [dev-dependencies]
-automod = "1"
 eframe = { version = "0.36", default-features = false, features = ["wayland", "wgpu"] }
 futures-channel = "0.3"
 log = "0.4"

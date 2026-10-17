@@ -13,8 +13,8 @@ async fn collapsed_table_borders_choose_one_shared_edge_test() {
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         cells = vec![
-                            ui.add(empty_box.selector(".a")).rect,
-                            ui.add(empty_box.selector(".b")).rect,
+                            ui.add(empty_response.selector(".a")).rect,
+                            ui.add(empty_response.selector(".b")).rect,
                         ];
                         ui.response()
                     })
@@ -61,8 +61,8 @@ async fn collapsed_table_shared_edges_preserve_the_winning_stripes_test() {
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         cells = vec![
-                            ui.add(empty_box.selector(".a")).rect,
-                            ui.add(empty_box.selector(".b")).rect,
+                            ui.add(empty_response.selector(".a")).rect,
+                            ui.add(empty_response.selector(".b")).rect,
                         ];
                         ui.response()
                     })
@@ -109,25 +109,25 @@ async fn collapsed_table_column_and_group_borders_compete_with_cell_borders_test
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".first-column"));
+                        ui.add(empty_response.selector(".first-column"));
                         ui.response()
                     })
                     .selector(".column-group"),
                 );
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".second-column"));
+                        ui.add(empty_response.selector(".second-column"));
                         ui.response()
                     })
                     .selector(".second-group"),
                 );
-                ui.add(empty_box.selector(".third-column"));
+                ui.add(empty_response.selector(".third-column"));
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         cells = vec![
-                            ui.add(empty_box.selector(".cell")).rect,
-                            ui.add(empty_box.selector(".cell")).rect,
-                            ui.add(empty_box.selector(".cell")).rect,
+                            ui.add(empty_response.selector(".cell")).rect,
+                            ui.add(empty_response.selector(".cell")).rect,
+                            ui.add(empty_response.selector(".cell")).rect,
                         ];
                         ui.response()
                     })
@@ -184,23 +184,23 @@ async fn collapsed_table_column_and_group_borders_follow_rtl_columns_test() {
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".first-column"));
+                        ui.add(empty_response.selector(".first-column"));
                         ui.response()
                     })
                     .selector(".column-group"),
                 );
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".second-column"));
+                        ui.add(empty_response.selector(".second-column"));
                         ui.response()
                     })
                     .selector(".second-group"),
                 );
-                ui.add(empty_box.selector(".third-column"));
+                ui.add(empty_response.selector(".third-column"));
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         cells = (0..3)
-                            .map(|_| ui.add(empty_box.selector(".cell")).rect)
+                            .map(|_| ui.add(empty_response.selector(".cell")).rect)
                             .collect();
                         ui.response()
                     })
@@ -244,8 +244,8 @@ async fn collapsed_table_equal_cell_borders_follow_table_direction_test() {
                     ui.add(
                         (|ui: &mut egui::Ui| {
                             cells = vec![
-                                ui.add(empty_box.selector(".a")).rect,
-                                ui.add(empty_box.selector(".b")).rect,
+                                ui.add(empty_response.selector(".a")).rect,
+                                ui.add(empty_response.selector(".b")).rect,
                             ];
                             ui.response()
                         })
@@ -292,8 +292,8 @@ async fn collapsed_table_outer_border_widths_follow_table_direction_test() {
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         cells = vec![
-                            ui.add(empty_box.selector(".a")).rect,
-                            ui.add(empty_box.selector(".b")).rect,
+                            ui.add(empty_response.selector(".a")).rect,
+                            ui.add(empty_response.selector(".b")).rect,
                         ];
                         ui.response()
                     })
@@ -333,7 +333,7 @@ async fn collapsed_table_missing_cells_do_not_pull_outer_borders_inward_test() {
                     ui.add(
                         (|ui: &mut egui::Ui| {
                             cells = (0..count)
-                                .map(|_| ui.add(empty_box.selector(".cell")).rect)
+                                .map(|_| ui.add(empty_response.selector(".cell")).rect)
                                 .collect();
                             ui.response()
                         })
@@ -352,7 +352,11 @@ async fn collapsed_table_missing_cells_do_not_pull_outer_borders_inward_test() {
     let rows = bounds.as_ref().unwrap();
     let short_row_cell = rows[1][0];
     assert_eq!(
-        pixel(&pixels, short_row_cell.right() + 3.0, short_row_cell.center().y),
+        pixel(
+            &pixels,
+            short_row_cell.right() + 3.0,
+            short_row_cell.center().y
+        ),
         [255; 4]
     );
     assert_eq!(
@@ -381,7 +385,7 @@ async fn collapsed_table_missing_cells_respect_rtl_outer_border_test() {
                     ui.add(
                         (|ui: &mut egui::Ui| {
                             cells = (0..count)
-                                .map(|_| ui.add(empty_box.selector(".cell")).rect)
+                                .map(|_| ui.add(empty_response.selector(".cell")).rect)
                                 .collect();
                             ui.response()
                         })
@@ -400,7 +404,11 @@ async fn collapsed_table_missing_cells_respect_rtl_outer_border_test() {
     let rows = bounds.as_ref().unwrap();
     let short_row_cell = rows[1][0];
     assert_eq!(
-        pixel(&pixels, short_row_cell.left() - 3.0, short_row_cell.center().y),
+        pixel(
+            &pixels,
+            short_row_cell.left() - 3.0,
+            short_row_cell.center().y
+        ),
         [255; 4]
     );
     assert_eq!(
@@ -425,11 +433,11 @@ async fn collapsed_table_anonymous_rows_paint_missing_outer_border_segments_test
         let mut full_row = Vec::new();
         ui.add(
             (|ui: &mut egui::Ui| {
-                cells.push(ui.add(empty_box.selector(".cell")).rect);
+                cells.push(ui.add(empty_response.selector(".cell")).rect);
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         full_row = (0..2)
-                            .map(|_| ui.add(empty_box.selector(".cell")).rect)
+                            .map(|_| ui.add(empty_response.selector(".cell")).rect)
                             .collect();
                         ui.response()
                     })
@@ -478,11 +486,11 @@ async fn collapsed_table_missing_declared_columns_keep_the_outer_border_at_the_g
         let mut cell = None;
         let table = ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".column"));
-                ui.add(empty_box.selector(".column"));
+                ui.add(empty_response.selector(".column"));
+                ui.add(empty_response.selector(".column"));
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        cell = Some(ui.add(empty_box.selector(".cell")).rect);
+                        cell = Some(ui.add(empty_response.selector(".cell")).rect);
                         ui.response()
                     })
                     .selector(".row"),
@@ -522,11 +530,11 @@ async fn collapsed_vertical_table_anonymous_rows_paint_missing_outer_border_segm
         let mut full_row = Vec::new();
         ui.add(
             (|ui: &mut egui::Ui| {
-                anonymous = Some(ui.add(empty_box.selector(".cell")).rect);
+                anonymous = Some(ui.add(empty_response.selector(".cell")).rect);
                 ui.add(
                     (|ui: &mut egui::Ui| {
                         full_row = (0..2)
-                            .map(|_| ui.add(empty_box.selector(".cell")).rect)
+                            .map(|_| ui.add(empty_response.selector(".cell")).rect)
                             .collect();
                         ui.response()
                     })
@@ -576,7 +584,7 @@ async fn collapsed_table_cells_ignore_border_radius_test() {
                         (|ui: &mut egui::Ui| {
                             let response = ui.add(
                                 (|ui: &mut egui::Ui| {
-                                    ui.add(empty_box.selector(".fill"));
+                                    ui.add(empty_response.selector(".fill"));
                                     ui.response()
                                 })
                                 .selector(cell),
@@ -628,7 +636,7 @@ async fn collapsed_table_cell_borders_ignore_border_radius_test() {
                     ui.add(
                         (|ui: &mut egui::Ui| {
                             capture.lock().unwrap()[index] =
-                                Some(ui.add(empty_box.selector(cell)).rect);
+                                Some(ui.add(empty_response.selector(cell)).rect);
                             ui.response()
                         })
                         .selector(".row"),
@@ -671,7 +679,7 @@ async fn collapsed_table_box_background_ignores_border_radius_test() {
                 (|ui: &mut egui::Ui| {
                     ui.add(
                         (|ui: &mut egui::Ui| {
-                            ui.add(empty_box.selector(".cell"));
+                            ui.add(empty_response.selector(".cell"));
                             ui.response()
                         })
                         .selector(".row"),
@@ -713,7 +721,7 @@ async fn collapsed_table_box_shadow_ignores_border_radius_test() {
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".cell"));
+                        ui.add(empty_response.selector(".cell"));
                         ui.response()
                     })
                     .selector(".row"),
@@ -754,7 +762,7 @@ async fn collapsed_table_internal_cells_do_not_paint_outer_shadows_test() {
                     ui.add(
                         (|ui: &mut egui::Ui| {
                             capture.lock().unwrap()[index] =
-                                Some(ui.add(empty_box.selector(cell)).rect);
+                                Some(ui.add(empty_response.selector(cell)).rect);
                             ui.response()
                         })
                         .selector(".row"),
@@ -809,7 +817,7 @@ async fn collapsed_tables_do_not_paint_border_images_test() {
                 (|ui: &mut egui::Ui| {
                     ui.add(
                         (|ui: &mut egui::Ui| {
-                            ui.add(empty_box.selector(".cell"));
+                            ui.add(empty_response.selector(".cell"));
                             ui.response()
                         })
                         .selector(".row"),
@@ -844,8 +852,8 @@ async fn empty_table_cells_hide_borders_and_backgrounds_without_changing_tracks_
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".cell"));
-                        ui.add(empty_box.selector(".visible"));
+                        ui.add(empty_response.selector(".cell"));
+                        ui.add(empty_response.selector(".visible"));
                         ui.response()
                     })
                     .selector(".row"),

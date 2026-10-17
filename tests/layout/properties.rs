@@ -19,8 +19,8 @@ fn css_wide_values_copy_parent_properties_and_restore_initial_values() {
         ui.add(
             (|ui: &mut Ui| {
                 rects = vec![
-                    ui.add(empty.selector(".inherited")).rect,
-                    ui.add(empty.selector(".initial")).rect,
+                    ui.add(empty_response.selector(".inherited")).rect,
+                    ui.add(empty_response.selector(".initial")).rect,
                 ];
                 ui.response()
             })
@@ -43,8 +43,8 @@ fn unset_and_inherit_follow_writing_mode_when_mapping_logical_sizes() {
         ui.add(
             (|ui: &mut Ui| {
                 rects = vec![
-                    ui.add(empty.selector(".unset")).rect,
-                    ui.add(empty.selector(".horizontal")).rect,
+                    ui.add(empty_response.selector(".unset")).rect,
+                    ui.add(empty_response.selector(".horizontal")).rect,
                 ];
                 ui.response()
             })
@@ -64,7 +64,7 @@ fn css_math_defers_percentages_and_validates_dimensions() {
     for (i, width) in [100.0, 200.0, 400.0].into_iter().enumerate() {
         let mut rect = Rect::NOTHING;
         frame(&context, width, i as f64, Vec::new(), |ui| {
-            rect = ui.add(empty.selector(".box")).rect;
+            rect = ui.add(empty_response.selector(".box")).rect;
         });
         assert_eq!(rect.width(), [40.0, 90.0, 140.0][i]);
         assert!((rect.height() - 10.0).abs() < 0.01);
@@ -84,7 +84,7 @@ fn css_math_defers_percentages_and_validates_dimensions() {
             .install(&context);
         let mut rect = Rect::NOTHING;
         frame(&context, 200.0, index as f64 + 3.0, Vec::new(), |ui| {
-            rect = ui.add(empty.selector(".box")).rect;
+            rect = ui.add(empty_response.selector(".box")).rect;
         });
         assert!(
             (rect.width() - expected).abs() < 0.01,
@@ -97,8 +97,8 @@ fn css_math_defers_percentages_and_validates_dimensions() {
         ui.add(
             (|ui: &mut Ui| {
                 widths = vec![
-                    ui.add(empty.selector(".double")).rect.width(),
-                    ui.add(empty.selector(".single")).rect.width(),
+                    ui.add(empty_response.selector(".double")).rect.width(),
+                    ui.add(empty_response.selector(".single")).rect.width(),
                 ];
                 ui.response()
             })

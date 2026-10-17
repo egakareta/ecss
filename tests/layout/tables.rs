@@ -14,7 +14,7 @@ fn table_rows_share_columns_and_border_spacing() {
                     ui.add(
                         (|ui: &mut Ui| {
                             for _ in 0..2 {
-                                cells.push(ui.add(empty.selector(".cell")).rect);
+                                cells.push(ui.add(empty_response.selector(".cell")).rect);
                             }
                             ui.response()
                         })
@@ -52,7 +52,7 @@ fn collapsed_table_row_does_not_consume_a_row_track() {
                 for class in [".row", ".collapsed", ".row"] {
                     ui.add(
                         (|ui: &mut Ui| {
-                            rects.push(ui.add(empty.selector(".cell")).rect);
+                            rects.push(ui.add(empty_response.selector(".cell")).rect);
                             ui.response()
                         })
                         .selector(class),
@@ -84,12 +84,12 @@ fn collapsed_table_column_does_not_consume_a_column_track() {
         rects.clear();
         ui.add(
             (|ui: &mut Ui| {
-                ui.add(empty.selector(".collapsed-column"));
-                ui.add(empty.selector(".column"));
+                ui.add(empty_response.selector(".collapsed-column"));
+                ui.add(empty_response.selector(".column"));
                 ui.add(
                     (|ui: &mut Ui| {
-                        rects.push(ui.add(empty.selector(".cell")).rect);
-                        rects.push(ui.add(empty.selector(".cell")).rect);
+                        rects.push(ui.add(empty_response.selector(".cell")).rect);
+                        rects.push(ui.add(empty_response.selector(".cell")).rect);
                         ui.response()
                     })
                     .selector(".row"),
@@ -123,7 +123,7 @@ fn collapsed_table_row_group_removes_its_tracks() {
             (|ui: &mut Ui| {
                 ui.add(
                     (|ui: &mut Ui| {
-                        rects.push(ui.add(empty.selector(".cell")).rect);
+                        rects.push(ui.add(empty_response.selector(".cell")).rect);
                         ui.response()
                     })
                     .selector(".row"),
@@ -132,7 +132,7 @@ fn collapsed_table_row_group_removes_its_tracks() {
                     (|ui: &mut Ui| {
                         ui.add(
                             (|ui: &mut Ui| {
-                                rects.push(ui.add(empty.selector(".cell")).rect);
+                                rects.push(ui.add(empty_response.selector(".cell")).rect);
                                 ui.response()
                             })
                             .selector(".row"),
@@ -143,7 +143,7 @@ fn collapsed_table_row_group_removes_its_tracks() {
                 );
                 ui.add(
                     (|ui: &mut Ui| {
-                        rects.push(ui.add(empty.selector(".cell")).rect);
+                        rects.push(ui.add(empty_response.selector(".cell")).rect);
                         ui.response()
                     })
                     .selector(".row"),

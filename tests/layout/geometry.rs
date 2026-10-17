@@ -15,8 +15,8 @@ fn resizing_reflows_nested_percentage_and_flex_boxes() {
             ui.add(
                 (|ui: &mut Ui| {
                     rectangles = vec![
-                        ui.add(empty.selector(".item")).rect,
-                        ui.add(empty.selector(".item")).rect,
+                        ui.add(empty_response.selector(".item")).rect,
+                        ui.add(empty_response.selector(".item")).rect,
                     ];
                     ui.response()
                 })
@@ -38,8 +38,8 @@ fn right_to_left_flex_and_logical_margins_resolve_from_computed_direction() {
         ui.add(
             (|ui: &mut Ui| {
                 rects = vec![
-                    ui.add(empty.selector(".first")).rect,
-                    ui.add(empty.selector(".second")).rect,
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
                 ];
                 ui.response()
             })
@@ -60,10 +60,10 @@ fn inline_boxes_wrap_and_block_boxes_start_new_lines() {
         ui.add(
             (|ui: &mut Ui| {
                 rects = vec![
-                    ui.add(empty.selector(".inline")).rect,
-                    ui.add(empty.selector(".inline")).rect,
-                    ui.add(empty.selector(".block")).rect,
-                    ui.add(empty.selector(".inline")).rect,
+                    ui.add(empty_response.selector(".inline")).rect,
+                    ui.add(empty_response.selector(".inline")).rect,
+                    ui.add(empty_response.selector(".block")).rect,
+                    ui.add(empty_response.selector(".inline")).rect,
                 ];
                 ui.response()
             })
@@ -86,9 +86,9 @@ fn columns_balance_blocks_and_respect_forced_column_breaks() {
         ui.add(
             (|ui: &mut Ui| {
                 rects = vec![
-                    ui.add(empty.selector(".item")).rect,
-                    ui.add(empty.selector(".break")).rect,
-                    ui.add(empty.selector(".item")).rect,
+                    ui.add(empty_response.selector(".item")).rect,
+                    ui.add(empty_response.selector(".break")).rect,
+                    ui.add(empty_response.selector(".item")).rect,
                 ];
                 ui.response()
             })
@@ -113,8 +113,8 @@ fn vertical_writing_uses_logical_sizes_and_block_progression() {
             ui.add(
                 (|ui: &mut Ui| {
                     rects = vec![
-                        ui.add(empty.selector(".item")).rect,
-                        ui.add(empty.selector(".item")).rect,
+                        ui.add(empty_response.selector(".item")).rect,
+                        ui.add(empty_response.selector(".item")).rect,
                     ];
                     ui.response()
                 })
@@ -144,9 +144,9 @@ fn collapsed_flex_item_keeps_its_line_strut_but_not_main_axis_space() {
         container = ui
             .add(
                 (|ui: &mut Ui| {
-                    items.push(ui.add(empty.selector(".item")).rect);
-                    items.push(ui.add(empty.selector(".collapsed")).rect);
-                    items.push(ui.add(empty.selector(".item")).rect);
+                    items.push(ui.add(empty_response.selector(".item")).rect);
+                    items.push(ui.add(empty_response.selector(".collapsed")).rect);
+                    items.push(ui.add(empty_response.selector(".item")).rect);
                     ui.response()
                 })
                 .selector(".flex"),
@@ -178,18 +178,18 @@ fn collapsed_flex_item_uses_its_current_intrinsic_cross_size() {
         container = ui
             .add(
                 (|ui: &mut Ui| {
-                    items.push(ui.add(empty.selector(".item")).rect);
+                    items.push(ui.add(empty_response.selector(".item")).rect);
                     items.push(
                         ui.add(
                             (|ui: &mut Ui| {
-                                ui.add(empty.selector(".inner"));
+                                ui.add(empty_response.selector(".inner"));
                                 ui.response()
                             })
                             .selector(".collapsed"),
                         )
                         .rect,
                     );
-                    items.push(ui.add(empty.selector(".item")).rect);
+                    items.push(ui.add(empty_response.selector(".item")).rect);
                     ui.response()
                 })
                 .selector(".flex"),
@@ -219,8 +219,8 @@ fn margin_trim_removes_selected_first_and_last_child_margins() {
         rects.clear();
         ui.add(
             (|ui: &mut Ui| {
-                rects.push(ui.add(empty.selector(".first")).rect);
-                rects.push(ui.add(empty.selector(".last")).rect);
+                rects.push(ui.add(empty_response.selector(".first")).rect);
+                rects.push(ui.add(empty_response.selector(".last")).rect);
                 ui.response()
             })
             .selector(".container"),
@@ -246,7 +246,7 @@ fn margin_trim_removes_inline_edge_margins_from_each_block_child() {
         ui.add(
             (|ui: &mut Ui| {
                 for _ in 0..3 {
-                    rects.push(ui.add(empty.selector(".child")).rect);
+                    rects.push(ui.add(empty_response.selector(".child")).rect);
                 }
                 ui.response()
             })
@@ -274,7 +274,7 @@ fn margin_trim_applies_to_ordered_flex_items() {
         ui.add(
             (|ui: &mut Ui| {
                 for class in [".first", ".middle", ".last"] {
-                    rects.push(ui.add(empty.selector(class)).rect);
+                    rects.push(ui.add(empty_response.selector(class)).rect);
                 }
                 ui.response()
             })
@@ -301,7 +301,7 @@ fn inline_text_flows_around_a_float() {
         text.clear();
         ui.add(
             (|ui: &mut Ui| {
-                rects.push(ui.add(empty.selector(".float")).rect);
+                rects.push(ui.add(empty_response.selector(".float")).rect);
                 for _ in 0..16 {
                     text.push(ui.add(egui::Label::new("X ").selector(".text")).rect);
                 }

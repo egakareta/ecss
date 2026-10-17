@@ -13,7 +13,7 @@ fn wheel_scroll_moves_descendants_and_clamps_at_both_extents() {
     let mut build = |ui: &mut Ui| {
         ui.add(
             (|ui: &mut Ui| {
-                top.set(ui.add(empty.selector(".child")).rect.top());
+                top.set(ui.add(empty_response.selector(".child")).rect.top());
                 ui.response()
             })
             .selector(".scroll"),
@@ -79,8 +79,8 @@ fn sticky_boxes_remain_at_the_scrollport_edge_while_siblings_scroll() {
         ui.add(
             (|ui: &mut Ui| {
                 positions = (
-                    ui.add(empty.selector(".sticky")).rect.top(),
-                    ui.add(empty.selector(".child")).rect.top(),
+                    ui.add(empty_response.selector(".sticky")).rect.top(),
+                    ui.add(empty_response.selector(".child")).rect.top(),
                 );
                 ui.response()
             })
@@ -127,7 +127,7 @@ fn dragging_a_scrollbar_moves_content_on_the_repaint_frame() {
     let mut build = |ui: &mut Ui| {
         ui.add(
             (|ui: &mut Ui| {
-                top = ui.add(empty.selector(".child")).rect.top();
+                top = ui.add(empty_response.selector(".child")).rect.top();
                 ui.response()
             })
             .selector(".scroll"),
@@ -179,7 +179,7 @@ fn logical_overflow_maps_to_block_axis_in_each_writing_mode() {
         frame(&context, 100.0, 0.0, Vec::new(), |ui| {
             ui.add(
                 (|ui: &mut Ui| {
-                    visible = ui.add(empty.selector(".child")).interact_rect;
+                    visible = ui.add(empty_response.selector(".child")).interact_rect;
                     ui.response()
                 })
                 .selector(".flow"),
@@ -206,7 +206,7 @@ fn logical_overflow_maps_to_block_axis_in_each_writing_mode() {
             (|ui: &mut Ui| {
                 ui.add(
                     (|ui: &mut Ui| {
-                        visible = ui.add(empty.selector(".grandchild")).interact_rect;
+                        visible = ui.add(empty_response.selector(".grandchild")).interact_rect;
                         ui.response()
                     })
                     .selector(".child"),
@@ -234,7 +234,7 @@ fn overflow_clip_margin_expands_only_clip_overflow_edges() {
         for class in [".clip", ".hidden", ".content"] {
             ui.add(
                 (|ui: &mut Ui| {
-                    rects.push(ui.add(empty.selector(".child")).interact_rect);
+                    rects.push(ui.add(empty_response.selector(".child")).interact_rect);
                     ui.response()
                 })
                 .selector(class),
@@ -265,7 +265,7 @@ fn scrollbar_gutter_stable_reserves_scrollport_space() {
         for class in [".auto", ".stable", ".both", ".hidden", ".clip"] {
             let response = ui.add(
                 (|ui: &mut Ui| {
-                    children.push(ui.add(empty.selector(".child")).rect);
+                    children.push(ui.add(empty_response.selector(".child")).rect);
                     ui.response()
                 })
                 .selector(class),

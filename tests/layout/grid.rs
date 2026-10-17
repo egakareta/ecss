@@ -14,17 +14,17 @@ fn grid_template_shorthand_builds_tracks_and_named_areas() {
         rects.clear();
         ui.add(
             (|ui: &mut Ui| {
-                rects.push(ui.add(empty.selector(".a")).rect);
-                rects.push(ui.add(empty.selector(".b")).rect);
+                rects.push(ui.add(empty_response.selector(".a")).rect);
+                rects.push(ui.add(empty_response.selector(".b")).rect);
                 ui.response()
             })
             .selector(".grid"),
         );
         ui.add(
             (|ui: &mut Ui| {
-                rects.push(ui.add(empty.selector(".header")).rect);
-                rects.push(ui.add(empty.selector(".left")).rect);
-                rects.push(ui.add(empty.selector(".right")).rect);
+                rects.push(ui.add(empty_response.selector(".header")).rect);
+                rects.push(ui.add(empty_response.selector(".left")).rect);
+                rects.push(ui.add(empty_response.selector(".right")).rect);
                 ui.response()
             })
             .selector(".areas"),
@@ -61,7 +61,7 @@ fn grid_shorthand_sets_auto_flow_and_implicit_tracks() {
         ui.add(
             (|ui: &mut Ui| {
                 for _ in 0..3 {
-                    rects.push(ui.add(empty.selector(".item")).rect);
+                    rects.push(ui.add(empty_response.selector(".item")).rect);
                 }
                 ui.response()
             })
@@ -90,14 +90,14 @@ fn subgrid_uses_parent_track_sizes_and_intrinsic_child_contributions() {
     frame(&context, 300.0, 0.0, Vec::new(), |ui| {
         ui.add(
             (|ui: &mut Ui| {
-                let first = ui.add(empty.selector(".first")).rect;
-                let second = ui.add(empty.selector(".second")).rect;
+                let first = ui.add(empty_response.selector(".first")).rect;
+                let second = ui.add(empty_response.selector(".second")).rect;
                 let mut nested = Vec::new();
                 ui.add(
                     (|ui: &mut Ui| {
                         nested = vec![
-                            ui.add(empty.selector(".large")).rect,
-                            ui.add(empty.selector(".small")).rect,
+                            ui.add(empty_response.selector(".large")).rect,
+                            ui.add(empty_response.selector(".small")).rect,
                         ];
                         ui.response()
                     })

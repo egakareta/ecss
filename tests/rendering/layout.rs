@@ -15,8 +15,8 @@ async fn nested_selectors_distribute_flex_space_and_gap_test() {
         ui.add(
             (|ui: &mut egui::Ui| {
                 *capture.lock().unwrap() = vec![
-                    ui.add(empty_box.selector(".first")).rect,
-                    ui.add(empty_box.selector(".second")).rect,
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
                 ];
                 ui.response()
             })
@@ -58,9 +58,9 @@ async fn grid_tracks_spans_and_gaps_control_selector_boxes_test() {
         ui.add(
             (|ui: &mut egui::Ui| {
                 *capture.lock().unwrap() = vec![
-                    ui.add(empty_box.selector(".first")).rect,
-                    ui.add(empty_box.selector(".second")).rect,
-                    ui.add(empty_box.selector(".wide")).rect,
+                    ui.add(empty_response.selector(".first")).rect,
+                    ui.add(empty_response.selector(".second")).rect,
+                    ui.add(empty_response.selector(".wide")).rect,
                 ];
                 ui.response()
             })
@@ -95,8 +95,8 @@ async fn overflow_and_display_none_clip_paint_and_remove_layout_space_test() {
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".absent"));
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                ui.add(empty_response.selector(".absent"));
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".parent"),
@@ -134,7 +134,7 @@ async fn flow_root_keeps_visible_overflow_test() {
         let mut child = None;
         let root = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".child")).rect);
+                child = Some(ui.add(empty_response.selector(".child")).rect);
                 ui.response()
             })
             .selector(".root"),
@@ -165,9 +165,9 @@ async fn named_grid_areas_position_children_independently_of_source_order_test()
         ui.add(
             (|ui: &mut egui::Ui| {
                 *capture.lock().unwrap() = vec![
-                    ui.add(empty_box.selector(".main")).rect,
-                    ui.add(empty_box.selector(".head")).rect,
-                    ui.add(empty_box.selector(".nav")).rect,
+                    ui.add(empty_response.selector(".main")).rect,
+                    ui.add(empty_response.selector(".head")).rect,
+                    ui.add(empty_response.selector(".nav")).rect,
                 ];
                 ui.response()
             })
@@ -205,9 +205,9 @@ async fn floats_and_clear_position_selector_boxes_test() {
         ui.add(
             (|ui: &mut egui::Ui| {
                 *capture.lock().unwrap() = vec![
-                    ui.add(empty_box.selector(".left")).rect,
-                    ui.add(empty_box.selector(".right")).rect,
-                    ui.add(empty_box.selector(".clear")).rect,
+                    ui.add(empty_response.selector(".left")).rect,
+                    ui.add(empty_response.selector(".right")).rect,
+                    ui.add(empty_response.selector(".clear")).rect,
                 ];
                 ui.response()
             })
@@ -243,11 +243,11 @@ async fn flex_order_wrap_and_contents_use_only_selector_composition_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                let first = ui.add(empty_box.selector(".first")).rect;
+                let first = ui.add(empty_response.selector(".first")).rect;
                 let mut second = None;
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        second = Some(ui.add(empty_box.selector(".second")).rect);
+                        second = Some(ui.add(empty_response.selector(".second")).rect);
                         ui.response()
                     })
                     .selector(".contents"),
@@ -286,7 +286,7 @@ async fn visible_descendants_override_hidden_ancestors_without_removing_layout_t
         let mut child = None;
         let parent = ui.add(
             (|ui: &mut egui::Ui| {
-                child = Some(ui.add(empty_box.selector(".visible")).rect);
+                child = Some(ui.add(empty_response.selector(".visible")).rect);
                 ui.response()
             })
             .selector(".hidden"),
@@ -324,12 +324,12 @@ async fn stacking_contexts_contain_descendant_z_indices_test() {
                 (|ui: &mut egui::Ui| {
                     ui.add(
                         (|ui: &mut egui::Ui| {
-                            ui.add(empty_box.selector(".child"));
+                            ui.add(empty_response.selector(".child"));
                             ui.response()
                         })
                         .selector(parent),
                     );
-                    ui.add(empty_box.selector(".sibling"));
+                    ui.add(empty_response.selector(".sibling"));
                     ui.response()
                 })
                 .selector(".root"),
@@ -357,8 +357,8 @@ async fn vertical_writing_paints_boxes_in_the_declared_block_direction_test() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add(
             (|ui: &mut egui::Ui| {
-                ui.add(empty_box.selector(".red"));
-                ui.add(empty_box.selector(".blue"));
+                ui.add(empty_response.selector(".red"));
+                ui.add(empty_response.selector(".blue"));
                 ui.response()
             })
             .selector(".flow"),
@@ -379,8 +379,8 @@ async fn subgrid_inherits_tracks_gaps_and_named_lines_on_both_axes_test() {
             (|ui: &mut egui::Ui| {
                 ui.add(
                     (|ui: &mut egui::Ui| {
-                        ui.add(empty_box.selector(".red"));
-                        ui.add(empty_box.selector(".blue"));
+                        ui.add(empty_response.selector(".red"));
+                        ui.add(empty_response.selector(".blue"));
                         ui.response()
                     })
                     .selector(".sub"),

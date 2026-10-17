@@ -164,7 +164,7 @@ fn hover_specificity_overrides_later_base_layout_declarations() {
         .install(&context);
     let mut width = 0.0;
     let mut build = |ui: &mut Ui| {
-        width = ui.add(empty.selector(".box")).rect.width();
+        width = ui.add(empty_response.selector(".box")).rect.width();
     };
     frame(&context, 200.0, 0.0, Vec::new(), &mut build);
     frame(
