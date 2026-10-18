@@ -273,11 +273,21 @@ pub(super) fn pseudo_decoration_style(
     let mut style = BoxStyle::default();
     style.layout.direction = parent.layout.direction;
     style.format = parent.format.clone();
+    let custom_declarations = rules
+        .iter()
+        .flat_map(|rule| &rule.declarations)
+        .collect::<Vec<_>>();
+    style.custom_properties =
+        crate::css::variables::compute(&parent.custom_properties, &custom_declarations);
     let mut fill = Color32::TRANSPARENT;
     let mut color = current;
     for rule in rules {
-        for declaration in &rule.declarations {
-            match declaration {
+        for source in &rule.declarations {
+            let Some(declaration) = crate::css::resolve_deferred(source, &style.custom_properties)
+            else {
+                continue;
+            };
+            match &declaration {
                 Declaration::Color(value) => color = *value,
                 Declaration::Background(value) => fill = *value,
                 Declaration::BackgroundShorthand(value) => fill = value.color,

@@ -234,6 +234,7 @@ pub(crate) fn show(
     };
     let mut style = BoxStyle::default();
     style.layout.direction = parent_style.layout.direction;
+    style.custom_properties = parent_style.custom_properties.clone();
     style.hidden = parent_style.hidden;
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
@@ -279,11 +280,79 @@ pub(crate) fn show(
         viewport: ui.ctx().viewport_rect().size(),
         pixels_per_point: ui.ctx().pixels_per_point(),
     };
-    let applicable_rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
-        applicable_rules(stylesheet, class, state).collect();
+    let resolve_rules = |state: u8| {
+        let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
+            applicable_rules(stylesheet, class, state).collect();
+        let custom_declarations = rules
+            .iter()
+            .flat_map(|rule| &rule.declarations)
+            .collect::<Vec<_>>();
+        let custom_properties =
+            crate::css::variables::compute(&parent_style.custom_properties, &custom_declarations);
+        let resolved = rules
+            .iter()
+            .map(|rule| {
+                (
+                    rule.state,
+                    rule.declarations
+                        .iter()
+                        .filter_map(|declaration| {
+                            crate::css::resolve_deferred(declaration, &custom_properties)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        (custom_properties, resolved)
+    };
+    let (custom_properties, resolved_rules) = resolve_rules(state);
+    style.custom_properties = custom_properties;
+    let (_, base_visual_rules) = resolve_rules(0);
+    let (_, hovered_visual_rules) = resolve_rules(1);
+    let (_, active_visual_rules) = resolve_rules(2);
+    let mut background_urls = Vec::new();
+    let mut font_families = None;
+    let mut font_weight = 400;
+    let mut font_italic = false;
+    for declaration in resolved_rules
+        .iter()
+        .flat_map(|(_, declarations)| declarations)
+    {
+        match declaration {
+            Declaration::BackgroundShorthand(background) => {
+                for image in &background.images {
+                    image.collect_urls(&mut background_urls);
+                }
+            }
+            Declaration::BackgroundImage(images) => {
+                for image in images {
+                    image.collect_urls(&mut background_urls);
+                }
+            }
+            Declaration::FontFamily(families) => font_families = Some(families.clone()),
+            Declaration::FontWeight(weight) => font_weight = *weight,
+            Declaration::FontStyle(italic) => font_italic = *italic,
+            Declaration::Layout(declaration) if declaration.name.starts_with("border-image") => {
+                background_urls
+                    .extend(crate::box_decoration::border_image_urls(&declaration.value));
+            }
+            _ => {}
+        }
+    }
+    stylesheet.start_background_image_load_for_urls(ui.ctx(), &background_urls);
+    let font_request = font_families
+        .map(|families| crate::fonts::FontRequest {
+            families,
+            weight: font_weight,
+            italic: font_italic,
+        })
+        .or_else(|| stylesheet.font_request_for_class(class));
+    if let Some(request) = &font_request {
+        stylesheet.start_font_load_for_request(request.clone(), ui.ctx());
+    }
     let mut animation_properties = Vec::new();
-    for rule in &applicable_rules {
-        for declaration in &rule.declarations {
+    for (_, declarations) in &resolved_rules {
+        for declaration in declarations {
             if let Declaration::Animation(property) = declaration {
                 animation_properties.push(property.clone());
             }
@@ -291,17 +360,17 @@ pub(crate) fn show(
     }
     let mut underlying_declarations = Vec::new();
     if !animation_properties.is_empty() {
-        for rule in &applicable_rules {
+        for (_, declarations) in &resolved_rules {
             underlying_declarations.extend(
-                rule.declarations
+                declarations
                     .iter()
                     .filter(|declaration| !matches!(declaration, Declaration::Animation(_)))
                     .cloned(),
             );
         }
     }
-    for rule in &applicable_rules {
-        for declaration in &rule.declarations {
+    for (_, declarations) in &resolved_rules {
+        for declaration in declarations {
             if let Declaration::Layout(declaration) = declaration
                 && declaration.name == "font-size"
             {
@@ -313,8 +382,8 @@ pub(crate) fn show(
     }
     units.font = style.format.em;
 
-    for rule in &applicable_rules {
-        for declaration in &rule.declarations {
+    for (_, declarations) in &resolved_rules {
+        for declaration in declarations {
             if let Declaration::Layout(declaration) = declaration
                 && matches!(
                     declaration.name.as_str(),
@@ -327,8 +396,8 @@ pub(crate) fn show(
             }
         }
     }
-    for rule in &applicable_rules {
-        for declaration in &rule.declarations {
+    for (_, declarations) in &resolved_rules {
+        for declaration in declarations {
             if let Declaration::Layout(declaration) = declaration {
                 if declaration.name == "font-size" {
                     continue;
@@ -339,12 +408,35 @@ pub(crate) fn show(
             }
         }
     }
+    let keyframes = stylesheet
+        .keyframes
+        .iter()
+        .map(|(name, frames)| {
+            (
+                name.clone(),
+                frames
+                    .iter()
+                    .map(|frame| crate::css::Keyframe {
+                        offset: frame.offset,
+                        timing_function: frame.timing_function.clone(),
+                        declarations: frame
+                            .declarations
+                            .iter()
+                            .filter_map(|declaration| {
+                                crate::css::resolve_deferred(declaration, &style.custom_properties)
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let animation = crate::animation::sample(
         ui.ctx(),
         id,
         ui.input(|input| input.time),
         &animation_properties,
-        &stylesheet.keyframes,
+        &keyframes,
         &underlying_declarations,
     );
     {
@@ -459,8 +551,14 @@ pub(crate) fn show(
     widgets.active.fg_stroke = inherited_visuals.active.fg_stroke;
     widgets.open.fg_stroke = inherited_visuals.open.fg_stroke;
     content_ui.spacing_mut().item_spacing = Vec2::ZERO;
-    for rule in matching_rules(stylesheet, class) {
-        crate::apply_declarations(&mut content_ui, rule.state, &rule.declarations);
+    for (visual_state, rules) in [
+        (RuleState::Base, &base_visual_rules),
+        (RuleState::Hovered, &hovered_visual_rules),
+        (RuleState::Active, &active_visual_rules),
+    ] {
+        for (_, declarations) in rules {
+            crate::apply_declarations(&mut content_ui, visual_state, declarations);
+        }
     }
     if state != 0 {
         let effective_state = if state & 2 != 0 {
@@ -468,12 +566,12 @@ pub(crate) fn show(
         } else {
             RuleState::Hovered
         };
-        for rule in matching_rules(stylesheet, class) {
-            if rule.state == RuleState::Base
-                || rule.state == RuleState::Hovered && state & 1 != 0
-                || rule.state == RuleState::Active && state & 2 != 0
+        for (rule_state, declarations) in &resolved_rules {
+            if *rule_state == RuleState::Base
+                || *rule_state == RuleState::Hovered && state & 1 != 0
+                || *rule_state == RuleState::Active && state & 2 != 0
             {
-                crate::apply_declarations(&mut content_ui, effective_state, &rule.declarations);
+                crate::apply_declarations(&mut content_ui, effective_state, declarations);
             }
         }
     }
@@ -481,7 +579,7 @@ pub(crate) fn show(
     if style.padding_set {
         content_ui.spacing_mut().button_padding = Vec2::ZERO;
     }
-    if let Some(request) = stylesheet.font_request_for_class(class)
+    if let Some(request) = font_request
         && let Some(family) = stylesheet.fonts.read().ok().and_then(|fonts| {
             fonts.family(ui.ctx(), &request.families, request.weight, request.italic)
         })
@@ -919,7 +1017,8 @@ pub(crate) fn show(
             .visuals
             .widgets
             .state(response.widget_state());
-        let background_style = resolved_background(stylesheet, class, current_state);
+        let (_, current_state_rules) = resolve_rules(current_state);
+        let background_style = resolved_background_from_rules(&current_state_rules);
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO
         } else if frame_stroke.is_some()

@@ -1,4 +1,5 @@
 use super::*;
+use ecss::InlineStyle;
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
@@ -54,6 +55,63 @@ fn unset_and_inherit_follow_writing_mode_when_mapping_logical_sizes() {
     assert_eq!(rects[0].size(), vec2(70.0, 40.0), "{rects:?}");
     assert_eq!(rects[1].size(), vec2(40.0, 70.0), "{rects:?}");
     assert!(Stylesheet::parse(".box {width:revert-layer;}").is_err());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn custom_properties_inherit_resolve_fallbacks_and_reject_cycles() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { --base:100px; --base:70px !important; --base:80px; --height:32px; }\
+         .child { --derived:var(--base); width:var(--derived); height:var(--height); }\
+         .fallback { width:var(--missing, var(--base)); height:var(--height); }\
+         .cycle { --first:var(--second); --second:var(--first); width:var(--first, 48px); height:10px; }\
+         .case-sensitive { --Size:55px; width:var(--size, 45px); height:10px; }\
+         .escaped { --b\\61se:60px; width:v\\61r( --base ); height:10px; }\
+         .joined-token { --count:4; width:var(--count)px; height:10px; }\
+         .invalid { width:20px; width:var(--missing); height:10px; } .default { height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    let mut inline_rect = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = [
+                    ".child",
+                    ".fallback",
+                    ".cycle",
+                    ".case-sensitive",
+                    ".escaped",
+                    ".joined-token",
+                    ".invalid",
+                    ".default",
+                ]
+                .into_iter()
+                .map(|selector| ui.add(empty_response.selector(selector)).rect)
+                .collect();
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        inline_rect = ui
+            .add(empty_response.inline_style(
+                InlineStyle::parse(
+                    "--inline-width:38px !important; --inline-width:44px; width:var(--inline-width); height:10px;",
+                )
+                .unwrap(),
+            ))
+            .rect;
+    });
+    assert_eq!(rects[0].size(), vec2(70.0, 32.0));
+    assert_eq!(rects[1].size(), vec2(70.0, 32.0));
+    assert_eq!(rects[2].size(), vec2(48.0, 10.0));
+    assert_eq!(rects[3].size(), vec2(45.0, 10.0));
+    assert_eq!(rects[4].size(), vec2(60.0, 10.0));
+    assert_eq!(rects[5].size(), rects[6].size());
+    assert_eq!(rects[6].size(), rects[7].size());
+    assert_eq!(inline_rect.size(), vec2(38.0, 10.0));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

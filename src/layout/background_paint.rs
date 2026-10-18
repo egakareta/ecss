@@ -11,10 +11,34 @@ pub(super) struct BackgroundPaint<'a> {
     pub(super) sizes: &'a [crate::css::BackgroundSize],
 }
 
+pub(super) fn resolved_background_from_rules<'a>(
+    rules: &'a [(RuleState, Vec<Declaration>)],
+) -> BackgroundPaint<'a> {
+    background_from_declarations(
+        rules
+            .iter()
+            .flat_map(|(_, declarations)| declarations.iter()),
+    )
+}
+
 pub(super) fn resolved_background<'a>(
     stylesheet: &'a Stylesheet,
     class: &'a str,
     state: u8,
+) -> BackgroundPaint<'a> {
+    background_from_declarations(
+        matching_rules(stylesheet, class)
+            .filter(move |rule| {
+                rule.state == RuleState::Base
+                    || rule.state == RuleState::Hovered && state & 1 != 0
+                    || rule.state == RuleState::Active && state & 2 != 0
+            })
+            .flat_map(|rule| rule.declarations.iter()),
+    )
+}
+
+fn background_from_declarations<'a>(
+    declarations: impl Iterator<Item = &'a Declaration>,
 ) -> BackgroundPaint<'a> {
     let mut background = BackgroundPaint {
         color: Color32::TRANSPARENT,
@@ -26,37 +50,29 @@ pub(super) fn resolved_background<'a>(
         repeats: &[],
         sizes: &[],
     };
-    for rule in matching_rules(stylesheet, class) {
-        if rule.state != RuleState::Base
-            && !(rule.state == RuleState::Hovered && state & 1 != 0)
-            && !(rule.state == RuleState::Active && state & 2 != 0)
-        {
-            continue;
-        }
-        for declaration in &rule.declarations {
-            match declaration {
-                Declaration::Background(color) => background.color = *color,
-                Declaration::BackgroundShorthand(value) => {
-                    background.color = value.color;
-                    background.images = &value.images;
-                    background.attachments = &value.attachments;
-                    background.clips = &value.clips;
-                    background.origins = &value.origins;
-                    background.positions = &value.positions;
-                    background.repeats = &value.repeats;
-                    background.sizes = &value.sizes;
-                }
-                Declaration::BackgroundImage(images) => background.images = images,
-                Declaration::BackgroundAttachment(attachments) => {
-                    background.attachments = attachments;
-                }
-                Declaration::BackgroundClip(clips) => background.clips = clips,
-                Declaration::BackgroundOrigin(origins) => background.origins = origins,
-                Declaration::BackgroundPosition(positions) => background.positions = positions,
-                Declaration::BackgroundRepeat(repeats) => background.repeats = repeats,
-                Declaration::BackgroundSize(sizes) => background.sizes = sizes,
-                _ => {}
+    for declaration in declarations {
+        match declaration {
+            Declaration::Background(color) => background.color = *color,
+            Declaration::BackgroundShorthand(value) => {
+                background.color = value.color;
+                background.images = &value.images;
+                background.attachments = &value.attachments;
+                background.clips = &value.clips;
+                background.origins = &value.origins;
+                background.positions = &value.positions;
+                background.repeats = &value.repeats;
+                background.sizes = &value.sizes;
             }
+            Declaration::BackgroundImage(images) => background.images = images,
+            Declaration::BackgroundAttachment(attachments) => {
+                background.attachments = attachments;
+            }
+            Declaration::BackgroundClip(clips) => background.clips = clips,
+            Declaration::BackgroundOrigin(origins) => background.origins = origins,
+            Declaration::BackgroundPosition(positions) => background.positions = positions,
+            Declaration::BackgroundRepeat(repeats) => background.repeats = repeats,
+            Declaration::BackgroundSize(sizes) => background.sizes = sizes,
+            _ => {}
         }
     }
     background

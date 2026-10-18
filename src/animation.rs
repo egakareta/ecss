@@ -1312,7 +1312,9 @@ fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declarat
         | Declaration::FontStyle(_) => None,
         Declaration::Layout(layout) => Some((layout.name.clone(), declaration.clone())),
         Declaration::BorderRadius(_) => Some(("border-radius".to_owned(), declaration.clone())),
-        Declaration::Animation(_) => None,
+        Declaration::Animation(_)
+        | Declaration::CustomProperty { .. }
+        | Declaration::Deferred { .. } => None,
     }
 }
 

@@ -18,6 +18,7 @@ use crate::CssError;
 
 mod background;
 mod color;
+pub(crate) mod variables;
 
 pub(crate) use background::parse_background_image;
 use background::{
@@ -88,6 +89,15 @@ pub(crate) enum Declaration {
     FontWeight(u16),
     FontStyle(bool),
     Animation(crate::animation::Property),
+    CustomProperty {
+        name: String,
+        value: String,
+        important: bool,
+    },
+    Deferred {
+        name: String,
+        value: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -821,11 +831,13 @@ impl<'i> DeclarationParser<'i> for Declarations {
             let start = input.state();
             while input.next().is_ok() {}
             let source = input.slice_from(start.position()).trim();
-            let source = strip_important(source).unwrap_or(source).trim();
+            let stripped = strip_important(source);
+            let important = stripped.is_some();
+            let source = stripped.unwrap_or(source).trim();
             let mut input = CssParser::new(source);
-            return self.parse_value_content(name, &mut input);
+            return self.parse_value_content(name, &mut input, important);
         }
-        self.parse_value_content(name, input)
+        self.parse_value_content(name, input, false)
     }
 }
 
@@ -834,7 +846,27 @@ impl Declarations {
         &mut self,
         name: CowRcStr<'i>,
         input: &mut CssParser<'i>,
+        important: bool,
     ) -> Result<Option<Declaration>, ParseError<&'static str>> {
+        let start = input.state();
+        while input.next().is_ok() {}
+        let value = input.slice_from(start.position()).trim().to_owned();
+
+        if name.starts_with("--") {
+            let stripped = strip_important(&value);
+            return Ok(Some(Declaration::CustomProperty {
+                name: name.to_string(),
+                value: stripped.unwrap_or(&value).trim().to_owned(),
+                important: important || stripped.is_some(),
+            }));
+        }
+        if variables::contains_var(&value) {
+            return Ok(Some(Declaration::Deferred {
+                name: name.to_ascii_lowercase(),
+                value,
+            }));
+        }
+        input.reset(&start);
         if crate::animation::is_property(&name) {
             let value = consume_value(input)?;
             return crate::animation::parse_property(&name, &value)
@@ -894,6 +926,31 @@ impl Declarations {
         };
         Ok(declaration)
     }
+}
+
+pub(crate) fn resolve_deferred(
+    declaration: &Declaration,
+    properties: &variables::CustomProperties,
+) -> Option<Declaration> {
+    let Declaration::Deferred { name, value } = declaration else {
+        return Some(declaration.clone());
+    };
+    let Some(value) = variables::substitute(value, properties) else {
+        return Some(invalid_computed_value(name));
+    };
+    let source = format!("{name}: {value};");
+    let mut input = CssParser::new(&source);
+    let mut declarations = parse_declarations(&mut input, false).unwrap_or_default();
+    declarations
+        .pop()
+        .or_else(|| Some(invalid_computed_value(name)))
+}
+
+fn invalid_computed_value(name: &str) -> Declaration {
+    Declaration::Layout(crate::layout_style::Declaration {
+        name: name.to_owned(),
+        value: "unset".to_owned(),
+    })
 }
 
 fn parse_background<'i>(

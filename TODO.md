@@ -38,8 +38,8 @@
 - **[CSS Values and Units Level 5](https://www.w3.org/TR/css-values-5/) - Unsupported.**
   - CSS properties: `interpolate-size`.
 - **[CSS Counter Styles Level 3](https://www.w3.org/TR/css-counter-styles-3/) - Unsupported.**
-- **[CSS Custom Properties for Cascading Variables Level 1](https://www.w3.org/TR/css-variables/) - Unsupported.**
-  - CSS properties: `--*`.
+- **[CSS Custom Properties for Cascading Variables Level 1](https://www.w3.org/TR/css-variables/) - Supported.**
+  - CSS properties: ~~`--*`~~.
 - **[CSS Will Change Module Level 1](https://www.w3.org/TR/css-will-change-1/) - Supported.**
   - CSS properties: `will-change`.
   - Optimization hints are ignored. `position` hints establish containing blocks and stacking contexts, while `z-index` hints establish stacking contexts where that property applies.

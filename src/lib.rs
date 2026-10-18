@@ -267,7 +267,15 @@ impl Stylesheet {
 
     fn start_background_image_load(&self, context: &egui::Context) {
         let urls = self.background_image_urls();
-        let urls = self.background_images.mark_load_started(context, &urls);
+        self.start_background_image_load_for_urls(context, &urls);
+    }
+
+    pub(crate) fn start_background_image_load_for_urls(
+        &self,
+        context: &egui::Context,
+        urls: &[String],
+    ) {
+        let urls = self.background_images.mark_load_started(context, urls);
         if urls.is_empty() {
             return;
         }
@@ -294,6 +302,50 @@ impl Stylesheet {
             {
                 fonts.merge(loaded_fonts);
                 font_revision.fetch_add(1, Ordering::Release);
+            }
+        });
+    }
+
+    #[allow(deprecated)]
+    pub(crate) fn start_font_load_for_request(
+        &self,
+        request: FontRequest,
+        context: &egui::Context,
+    ) {
+        if self.imports.is_empty()
+            || self.font_requests().iter().any(|loaded| {
+                loaded.families == request.families
+                    && loaded.weight == request.weight
+                    && loaded.italic == request.italic
+            })
+        {
+            return;
+        }
+        let id = Id::new((
+            "ecss.dynamic-font-load",
+            request.families.clone(),
+            request.weight,
+            request.italic,
+        ));
+        let started = context
+            .data(|data| data.get_temp::<bool>(id))
+            .unwrap_or(false);
+        if started {
+            return;
+        }
+        context.data_mut(|data| data.insert_temp(id, true));
+
+        let imports = self.imports.clone();
+        let fonts = self.fonts.clone();
+        let font_revision = self.font_revision.clone();
+        let context = context.clone();
+        spawn_background(async move {
+            if let Ok(loaded_fonts) = FontAssets::load(&imports, &[request]).await
+                && let Ok(mut fonts) = fonts.write()
+            {
+                fonts.merge(loaded_fonts);
+                font_revision.fetch_add(1, Ordering::Release);
+                context.request_repaint();
             }
         });
     }
@@ -885,7 +937,9 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_)
-        | Declaration::Animation(_) => {}
+        | Declaration::Animation(_)
+        | Declaration::CustomProperty { .. }
+        | Declaration::Deferred { .. } => {}
     }
 }
 

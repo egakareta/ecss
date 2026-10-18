@@ -38,6 +38,54 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inherited_custom_properties_resolve_widget_background_colors_test() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { --surface:#f00; } .primary { background-color:var(--surface); }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                let response = ui.add(egui::Button::new("X").selector(".primary"));
+                *rect_from_ui.lock().unwrap() = Some(response.rect);
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    let x = (rect.min.x + 4.0).floor() as usize;
+    let y = (rect.min.y + 3.0).floor() as usize;
+    assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn custom_property_backgrounds_paint_on_selector_boxes_test() {
+    let stylesheet = Stylesheet::parse(
+        ".surface { width:60px; height:30px; --paint:#f00; background-color:var(--paint); }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let response = ui.add(egui::Label::new("X").selector(".surface"));
+        *rect_from_ui.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    let x = (rect.min.x + 50.0).floor() as usize;
+    let y = (rect.min.y + 15.0).floor() as usize;
+    assert_eq!(pixels[y * WIDTH as usize + x], [255, 0, 0, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn keyframes_animate_background_color_at_the_timeline_midpoint_test() {
     let stylesheet = Stylesheet::parse(
         "@keyframes fade { from { background-color: #000; width: 40px; padding: 0; }\
@@ -61,6 +109,29 @@ async fn keyframes_animate_background_color_at_the_timeline_midpoint_test() {
     );
     let pixel = pixel(&pixels, rect.min.x + 25.5, rect.min.y + 15.5);
     assert_eq!(pixel, [128, 128, 128, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn custom_properties_resolve_in_keyframe_declarations_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes fade { from { background-color:var(--from); } to { background-color:var(--to); } }\
+         .animated { --from:#000; --to:#fff; width:40px; height:24px; animation:fade 1s linear both; }",
+    )
+    .unwrap();
+    let widget_rect = std::sync::Arc::new(Mutex::new(None));
+    let rect_from_ui = widget_rect.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        *rect_from_ui.lock().unwrap() =
+            Some(ui.add(egui::Button::new("X").selector(".animated")).rect);
+    })
+    .await;
+
+    let rect = widget_rect.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.min.x + 5.5, rect.min.y + 5.5),
+        [128, 128, 128, 255]
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

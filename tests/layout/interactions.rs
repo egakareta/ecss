@@ -176,3 +176,27 @@ fn hover_specificity_overrides_later_base_layout_declarations() {
     );
     assert_eq!(width, 80.0);
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn hover_custom_properties_resolve_widget_visuals_for_the_hover_state() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".button { --surface:#2458b5; background-color:var(--surface); } .button:hover { --surface:#19448f; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut hovered_background = egui::Color32::TRANSPARENT;
+    let mut build = |ui: &mut Ui| {
+        let inspect_style = |ui: &mut Ui| {
+            hovered_background = ui.style().visuals.widgets.hovered.bg_fill;
+            empty_response(ui)
+        };
+        ui.add(inspect_style.selector(".button"));
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    assert_eq!(
+        hovered_background,
+        egui::Color32::from_rgb(0x19, 0x44, 0x8f)
+    );
+}
