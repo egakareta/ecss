@@ -298,6 +298,258 @@ pub(super) fn parse_background_clips<'i>(
         .collect()
 }
 
+pub(super) fn parse_background_origins<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Vec<BackgroundOrigin>, ParseError<&'static str>> {
+    split_top_level_commas(&consume_value(input)?)
+        .into_iter()
+        .map(|value| parse_background_origin_value(&value))
+        .collect()
+}
+
+pub(super) fn parse_background_origin_value(
+    value: &str,
+) -> Result<BackgroundOrigin, ParseError<&'static str>> {
+    let mut input = CssParser::new(value);
+    let origin = match input.expect_ident()?.to_ascii_lowercase().as_str() {
+        "border-box" => BackgroundOrigin::Border,
+        "padding-box" => BackgroundOrigin::Padding,
+        "content-box" => BackgroundOrigin::Content,
+        _ => return Err(ParseError::custom("unsupported background origin")),
+    };
+    input.expect_exhausted()?;
+    Ok(origin)
+}
+
+pub(super) fn parse_background_positions<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Vec<BackgroundPosition>, ParseError<&'static str>> {
+    split_top_level_commas(&consume_value(input)?)
+        .into_iter()
+        .map(|value| parse_background_position_value(&value))
+        .collect()
+}
+
+pub(super) fn parse_background_position_value(
+    value: &str,
+) -> Result<BackgroundPosition, ParseError<&'static str>> {
+    let values = crate::layout_style::components(value).map_err(ParseError::custom)?;
+    if values.is_empty() || values.len() > 4 {
+        return Err(ParseError::custom(
+            "background position requires one to four values",
+        ));
+    }
+    let arena = crate::math::Arena::default();
+    let units = crate::layout_style::Units {
+        math: &arena,
+        font: 16.0,
+        root_font: 16.0,
+        viewport: egui::Vec2::splat(1000.0),
+        pixels_per_point: 1.0,
+    };
+    let mut x = None;
+    let mut y = None;
+    let mut pending = Vec::new();
+    let mut index = 0;
+    while index < values.len() {
+        let keyword = values[index].to_ascii_lowercase();
+        match keyword.as_str() {
+            "left" | "right" => {
+                let offset = if values.len() >= 3
+                    && values
+                        .get(index + 1)
+                        .is_some_and(|value| is_background_length_percentage(value, true))
+                {
+                    index += 1;
+                    values[index].clone()
+                } else {
+                    "0px".to_owned()
+                };
+                if x.replace(if keyword == "left" {
+                    BackgroundPositionAxis::Start(offset)
+                } else {
+                    BackgroundPositionAxis::End(offset)
+                })
+                .is_some()
+                {
+                    return Err(ParseError::custom(
+                        "duplicate horizontal background position",
+                    ));
+                }
+            }
+            "top" | "bottom" => {
+                let offset = if values.len() >= 3
+                    && values
+                        .get(index + 1)
+                        .is_some_and(|value| is_background_length_percentage(value, true))
+                {
+                    index += 1;
+                    values[index].clone()
+                } else {
+                    "0px".to_owned()
+                };
+                if y.replace(if keyword == "top" {
+                    BackgroundPositionAxis::Start(offset)
+                } else {
+                    BackgroundPositionAxis::End(offset)
+                })
+                .is_some()
+                {
+                    return Err(ParseError::custom("duplicate vertical background position"));
+                }
+            }
+            _ => pending.push(index),
+        }
+        index += 1;
+    }
+    for index in pending {
+        let axis = if x.is_none() { &mut x } else { &mut y };
+        let value = if values[index].eq_ignore_ascii_case("center") {
+            BackgroundPositionAxis::Center
+        } else {
+            crate::box_decoration::length_percentage(&values[index], units, true)
+                .map_err(ParseError::custom)?;
+            BackgroundPositionAxis::FreeSpace(values[index].clone())
+        };
+        if axis.replace(value).is_some() {
+            return Err(ParseError::custom("too many background position values"));
+        }
+    }
+    Ok(BackgroundPosition {
+        x: x.unwrap_or(BackgroundPositionAxis::Center),
+        y: y.unwrap_or(BackgroundPositionAxis::Center),
+    })
+}
+
+pub(super) fn parse_background_sizes<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Vec<BackgroundSize>, ParseError<&'static str>> {
+    split_top_level_commas(&consume_value(input)?)
+        .into_iter()
+        .map(|value| {
+            let values = crate::layout_style::components(&value).map_err(ParseError::custom)?;
+            parse_background_size_components(&values)
+        })
+        .collect()
+}
+
+pub(super) fn parse_background_size_components(
+    values: &[String],
+) -> Result<BackgroundSize, ParseError<&'static str>> {
+    if values.len() == 1 {
+        match values[0].to_ascii_lowercase().as_str() {
+            "cover" => return Ok(BackgroundSize::Cover),
+            "contain" => return Ok(BackgroundSize::Contain),
+            _ => {}
+        }
+    }
+    if values.is_empty() || values.len() > 2 {
+        return Err(ParseError::custom(
+            "background size requires one or two values",
+        ));
+    }
+    let arena = crate::math::Arena::default();
+    let units = crate::layout_style::Units {
+        math: &arena,
+        font: 16.0,
+        root_font: 16.0,
+        viewport: egui::Vec2::splat(1000.0),
+        pixels_per_point: 1.0,
+    };
+    let mut parsed = Vec::with_capacity(2);
+    for value in values {
+        if value.eq_ignore_ascii_case("auto") {
+            parsed.push(BackgroundSizeComponent::Auto);
+        } else {
+            crate::box_decoration::length_percentage(value, units, false)
+                .map_err(ParseError::custom)?;
+            parsed.push(BackgroundSizeComponent::Value(value.clone()));
+        }
+    }
+    if parsed.len() == 1 {
+        parsed.push(BackgroundSizeComponent::Auto);
+    }
+    Ok(BackgroundSize::Explicit([
+        parsed.remove(0),
+        parsed.remove(0),
+    ]))
+}
+
+pub(super) fn parse_background_repeats<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Vec<BackgroundRepeatPair>, ParseError<&'static str>> {
+    split_top_level_commas(&consume_value(input)?)
+        .into_iter()
+        .map(|value| parse_background_repeat_component(&value))
+        .collect()
+}
+
+pub(super) fn parse_background_repeat_component(
+    value: &str,
+) -> Result<BackgroundRepeatPair, ParseError<&'static str>> {
+    let values = crate::layout_style::components(value).map_err(ParseError::custom)?;
+    let pair = match values.as_slice() {
+        [single] => match single.to_ascii_lowercase().as_str() {
+            "repeat" => BackgroundRepeatPair::default(),
+            "no-repeat" => BackgroundRepeatPair {
+                x: BackgroundRepeat::NoRepeat,
+                y: BackgroundRepeat::NoRepeat,
+            },
+            "space" => BackgroundRepeatPair {
+                x: BackgroundRepeat::Space,
+                y: BackgroundRepeat::Space,
+            },
+            "round" => BackgroundRepeatPair {
+                x: BackgroundRepeat::Round,
+                y: BackgroundRepeat::Round,
+            },
+            "repeat-x" => BackgroundRepeatPair {
+                x: BackgroundRepeat::Repeat,
+                y: BackgroundRepeat::NoRepeat,
+            },
+            "repeat-y" => BackgroundRepeatPair {
+                x: BackgroundRepeat::NoRepeat,
+                y: BackgroundRepeat::Repeat,
+            },
+            _ => return Err(ParseError::custom("unsupported background repeat")),
+        },
+        [first, second] => BackgroundRepeatPair {
+            x: parse_background_repeat_atom(first)
+                .ok_or_else(|| ParseError::custom("invalid background repeat"))?,
+            y: parse_background_repeat_atom(second)
+                .ok_or_else(|| ParseError::custom("invalid background repeat"))?,
+        },
+        _ => {
+            return Err(ParseError::custom(
+                "background repeat requires one or two values",
+            ));
+        }
+    };
+    Ok(pair)
+}
+
+pub(super) fn parse_background_repeat_atom(value: &str) -> Option<BackgroundRepeat> {
+    Some(match value.to_ascii_lowercase().as_str() {
+        "repeat" => BackgroundRepeat::Repeat,
+        "no-repeat" => BackgroundRepeat::NoRepeat,
+        "space" => BackgroundRepeat::Space,
+        "round" => BackgroundRepeat::Round,
+        _ => return None,
+    })
+}
+
+pub(super) fn is_background_length_percentage(value: &str, negative: bool) -> bool {
+    let arena = crate::math::Arena::default();
+    let units = crate::layout_style::Units {
+        math: &arena,
+        font: 16.0,
+        root_font: 16.0,
+        viewport: egui::Vec2::splat(1000.0),
+        pixels_per_point: 1.0,
+    };
+    crate::box_decoration::length_percentage(value, units, negative).is_ok()
+}
+
 pub(super) fn parse_background_clip_value(
     value: &str,
 ) -> Result<BackgroundClip, ParseError<&'static str>> {

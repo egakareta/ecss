@@ -1576,7 +1576,7 @@ fn radius_pair(values: &[String], units: Units) -> Result<[LengthPercentage; 2],
     ])
 }
 
-fn length_percentage(
+pub(crate) fn length_percentage(
     value: &str,
     units: Units,
     negative: bool,

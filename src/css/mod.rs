@@ -22,7 +22,10 @@ mod color;
 pub(crate) use background::parse_background_image;
 use background::{
     consume_value, parse_background_attachment_value, parse_background_attachments,
-    parse_background_clip_value, parse_background_clips, split_top_level_commas,
+    parse_background_clip_value, parse_background_clips, parse_background_origins,
+    parse_background_position_value, parse_background_positions, parse_background_repeat_atom,
+    parse_background_repeats, parse_background_size_components, parse_background_sizes,
+    split_top_level_commas,
 };
 pub(crate) use color::parse_color;
 
@@ -75,6 +78,10 @@ pub(crate) enum Declaration {
     BackgroundImage(Vec<BackgroundImage>),
     BackgroundAttachment(Vec<BackgroundAttachment>),
     BackgroundClip(Vec<BackgroundClip>),
+    BackgroundOrigin(Vec<BackgroundOrigin>),
+    BackgroundPosition(Vec<BackgroundPosition>),
+    BackgroundRepeat(Vec<BackgroundRepeatPair>),
+    BackgroundSize(Vec<BackgroundSize>),
     Layout(crate::layout_style::Declaration),
     BorderRadius(u8),
     FontFamily(Vec<String>),
@@ -89,6 +96,10 @@ pub(crate) struct BackgroundShorthand {
     pub(crate) images: Vec<BackgroundImage>,
     pub(crate) attachments: Vec<BackgroundAttachment>,
     pub(crate) clips: Vec<BackgroundClip>,
+    pub(crate) origins: Vec<BackgroundOrigin>,
+    pub(crate) positions: Vec<BackgroundPosition>,
+    pub(crate) repeats: Vec<BackgroundRepeatPair>,
+    pub(crate) sizes: Vec<BackgroundSize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -358,6 +369,56 @@ pub(crate) enum BackgroundClip {
     Border,
     Padding,
     Content,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BackgroundOrigin {
+    Border,
+    #[default]
+    Padding,
+    Content,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BackgroundRepeat {
+    #[default]
+    Repeat,
+    NoRepeat,
+    Space,
+    Round,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackgroundRepeatPair {
+    pub(crate) x: BackgroundRepeat,
+    pub(crate) y: BackgroundRepeat,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BackgroundPosition {
+    pub(crate) x: BackgroundPositionAxis,
+    pub(crate) y: BackgroundPositionAxis,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BackgroundPositionAxis {
+    FreeSpace(String),
+    Start(String),
+    Center,
+    End(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BackgroundSize {
+    Cover,
+    Contain,
+    Explicit([BackgroundSizeComponent; 2]),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BackgroundSizeComponent {
+    Auto,
+    Value(String),
 }
 
 enum ParsedRule {
@@ -776,6 +837,20 @@ impl<'i> DeclarationParser<'i> for Declarations {
             ))
         } else if name.eq_ignore_ascii_case("background-clip") {
             Some(Declaration::BackgroundClip(parse_background_clips(input)?))
+        } else if name.eq_ignore_ascii_case("background-origin") {
+            Some(Declaration::BackgroundOrigin(parse_background_origins(
+                input,
+            )?))
+        } else if name.eq_ignore_ascii_case("background-position") {
+            Some(Declaration::BackgroundPosition(parse_background_positions(
+                input,
+            )?))
+        } else if name.eq_ignore_ascii_case("background-repeat") {
+            Some(Declaration::BackgroundRepeat(parse_background_repeats(
+                input,
+            )?))
+        } else if name.eq_ignore_ascii_case("background-size") {
+            Some(Declaration::BackgroundSize(parse_background_sizes(input)?))
         } else if name.eq_ignore_ascii_case("border-radius") {
             let radius = parse_length(input, "unsupported border radius")?;
             Some(Declaration::BorderRadius(
@@ -808,6 +883,10 @@ fn parse_background<'i>(
         images: Vec::with_capacity(layers.len()),
         attachments: Vec::with_capacity(layers.len()),
         clips: Vec::with_capacity(layers.len()),
+        origins: Vec::with_capacity(layers.len()),
+        positions: Vec::with_capacity(layers.len()),
+        repeats: Vec::with_capacity(layers.len()),
+        sizes: Vec::with_capacity(layers.len()),
     };
 
     for (layer_index, layer) in layers.iter().enumerate() {
@@ -815,35 +894,112 @@ fn parse_background<'i>(
         if components.is_empty() {
             return Err(ParseError::custom("empty background layer"));
         }
+        let slash = components.iter().position(|component| component == "/");
+        if slash.is_some_and(|slash| {
+            slash == 0
+                || slash + 1 == components.len()
+                || components[slash + 1..].contains(&"/".to_owned())
+        }) {
+            return Err(ParseError::custom("invalid background position and size"));
+        }
+        let split = slash.unwrap_or(components.len());
         let mut image = None;
         let mut attachment = None;
-        let mut clip = None;
-        for component in components {
+        let mut repeat_tokens = Vec::new();
+        let mut box_tokens = Vec::new();
+        let mut position_tokens = Vec::new();
+        let mut size_tokens = Vec::new();
+        let mut color_seen = false;
+        for component in &components[..split] {
             if let Ok(color) = parse_color(&mut CssParser::new(&component)) {
-                if layer_index + 1 != layers.len() {
+                if layer_index + 1 != layers.len() || color_seen {
                     return Err(ParseError::custom(
-                        "background color must appear in the final layer",
+                        "background color must appear once in the final layer",
                     ));
                 }
                 background.color = color;
-            } else if let Ok(parsed) = parse_background_image(&component) {
+                color_seen = true;
+            } else if let Ok(parsed) = parse_background_image(component) {
                 if image.replace(parsed).is_some() {
                     return Err(ParseError::custom("duplicate image in background layer"));
                 }
-            } else if let Ok(parsed) = parse_background_attachment_value(&component) {
+            } else if let Ok(parsed) = parse_background_attachment_value(component) {
                 if attachment.replace(parsed).is_some() {
                     return Err(ParseError::custom(
                         "duplicate attachment in background layer",
                     ));
                 }
-            } else if let Ok(parsed) = parse_background_clip_value(&component) {
-                if clip.replace(parsed).is_some() {
-                    return Err(ParseError::custom("duplicate clip in background layer"));
-                }
-            } else if !is_background_extra(&component) {
-                return Err(ParseError::custom("unsupported background value"));
+            } else if let Ok(parsed) = parse_background_clip_value(component) {
+                box_tokens.push(parsed);
+            } else if background::parse_background_repeat_component(component).is_ok() {
+                repeat_tokens.push(component.clone());
+            } else {
+                position_tokens.push(component.clone());
             }
         }
+        let position = if position_tokens.is_empty() {
+            parse_background_position_value("0% 0%")
+        } else {
+            parse_background_position_value(&position_tokens.join(" "))
+        }?;
+
+        let size = if let Some(slash) = slash {
+            let mut after_size = slash + 1;
+            while after_size < components.len()
+                && size_tokens.len() < 3
+                && is_background_size_component(&components[after_size])
+            {
+                size_tokens.push(components[after_size].clone());
+                after_size += 1;
+            }
+            if size_tokens.is_empty() {
+                return Err(ParseError::custom("background slash requires a size"));
+            }
+            for component in &components[after_size..] {
+                if let Ok(parsed) = parse_background_attachment_value(component) {
+                    if attachment.replace(parsed).is_some() {
+                        return Err(ParseError::custom(
+                            "duplicate attachment in background layer",
+                        ));
+                    }
+                } else if let Ok(parsed) = parse_background_clip_value(component) {
+                    box_tokens.push(parsed);
+                } else if background::parse_background_repeat_component(component).is_ok() {
+                    repeat_tokens.push(component.clone());
+                } else if let Ok(color) = parse_color(&mut CssParser::new(component)) {
+                    if layer_index + 1 != layers.len() || color_seen {
+                        return Err(ParseError::custom(
+                            "background color must appear once in the final layer",
+                        ));
+                    }
+                    background.color = color;
+                    color_seen = true;
+                } else {
+                    return Err(ParseError::custom("unsupported background value"));
+                }
+            }
+            parse_background_size_components(&size_tokens)?
+        } else {
+            if components.iter().any(|component| {
+                matches!(component.to_ascii_lowercase().as_str(), "cover" | "contain")
+            }) {
+                return Err(ParseError::custom(
+                    "background cover and contain require a position-size slash",
+                ));
+            }
+            BackgroundSize::Explicit([BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto])
+        };
+
+        if box_tokens.len() > 2 {
+            return Err(ParseError::custom("too many background box values"));
+        }
+        let (origin, clip) = match box_tokens.as_slice() {
+            [] => (BackgroundOrigin::Padding, None),
+            [box_value] => (origin_for_clip(*box_value), Some(*box_value)),
+            [origin, clip] => (origin_for_clip(*origin), Some(*clip)),
+            _ => unreachable!(),
+        };
+        let repeat = parse_background_repeat_tokens(&repeat_tokens).map_err(ParseError::custom)?;
         background
             .images
             .push(image.unwrap_or(BackgroundImage::None));
@@ -853,34 +1009,44 @@ fn parse_background<'i>(
         background
             .clips
             .push(clip.unwrap_or(BackgroundClip::Border));
+        background.origins.push(origin);
+        background.positions.push(position);
+        background.repeats.push(repeat);
+        background.sizes.push(size);
     }
     Ok(background)
 }
 
-fn is_background_extra(value: &str) -> bool {
-    if matches!(
-        value.to_ascii_lowercase().as_str(),
-        "/" | "repeat"
-            | "no-repeat"
-            | "repeat-x"
-            | "repeat-y"
-            | "space"
-            | "round"
-            | "left"
-            | "right"
-            | "top"
-            | "bottom"
-            | "center"
-            | "cover"
-            | "contain"
-    ) {
-        return true;
+fn origin_for_clip(clip: BackgroundClip) -> BackgroundOrigin {
+    match clip {
+        BackgroundClip::Border => BackgroundOrigin::Border,
+        BackgroundClip::Padding => BackgroundOrigin::Padding,
+        BackgroundClip::Content => BackgroundOrigin::Content,
     }
-    let mut input = CssParser::new(value);
+}
+
+fn is_background_size_component(value: &str) -> bool {
     matches!(
-        input.next(),
-        Ok(Token::Number { .. } | Token::Percentage { .. } | Token::Dimension { .. })
-    ) && input.expect_exhausted().is_ok()
+        value.to_ascii_lowercase().as_str(),
+        "auto" | "cover" | "contain"
+    ) || background::is_background_length_percentage(value, false)
+}
+
+fn parse_background_repeat_tokens(values: &[String]) -> Result<BackgroundRepeatPair, &'static str> {
+    match values {
+        [] => Ok(BackgroundRepeatPair::default()),
+        [value] => background::parse_background_repeat_component(value)
+            .map_err(|_| "invalid background repeat"),
+        [first, second] => {
+            let first = parse_background_repeat_atom(first).ok_or("invalid background repeat")?;
+            let second = parse_background_repeat_atom(second).ok_or("invalid background repeat")?;
+            Ok(BackgroundRepeatPair {
+                x: first,
+                y: second,
+            })
+        }
+        _ => Err("too many background repeat values"),
+    }
 }
 
 fn parse_background_images_value<'i>(

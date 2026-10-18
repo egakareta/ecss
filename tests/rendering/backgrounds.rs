@@ -424,6 +424,111 @@ async fn background_image_data_url_is_decoded_and_tiled_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn background_position_size_repeat_origin_and_shorthand_render_test() {
+    let stylesheet = Stylesheet::parse(
+        ".position { width:40px; height:20px; background-image:linear-gradient(to right, red, blue); background-size:20px 10px; background-position:right bottom; background-repeat:no-repeat; }\
+         .repeat { width:40px; height:20px; background-image:linear-gradient(to right, red 50%, blue 50%); background-size:10px 10px; background-repeat:repeat-x; }\
+         .origin { width:40px; height:20px; padding:5px; border:2px solid black; background-image:linear-gradient(to right, red, blue); background-size:100% 100%; background-origin:content-box; background-clip:padding-box; background-repeat:no-repeat; }\
+         .shorthand { width:40px; height:20px; background:linear-gradient(to right, red, blue) right bottom / 20px 10px no-repeat; }\
+         .space { width:40px; height:20px; background-image:linear-gradient(to right, red 10%, blue 10%); background-size:50px 10px; background-repeat:space; background-position:left top; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        for selector in [".position", ".repeat", ".origin", ".shorthand", ".space"] {
+            capture
+                .lock()
+                .unwrap()
+                .push(ui.add(empty_response.selector(selector)).rect);
+        }
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    let position = bounds[0];
+    assert_eq!(
+        pixel(&pixels, position.left() + 5.0, position.top() + 5.0),
+        [255; 4],
+        "position rect was {position:?}"
+    );
+    let positioned = pixel(&pixels, position.right() - 5.0, position.bottom() - 5.0);
+    assert!(
+        positioned[2] > positioned[0],
+        "positioned gradient was {positioned:?}"
+    );
+
+    let repeated = bounds[1];
+    let first_red = pixel(&pixels, repeated.left() + 2.0, repeated.top() + 5.0);
+    let first_blue = pixel(&pixels, repeated.left() + 7.0, repeated.top() + 5.0);
+    let second_red = pixel(&pixels, repeated.left() + 12.0, repeated.top() + 5.0);
+    assert!(first_red[0] > first_red[2], "first tile was {first_red:?}");
+    assert!(
+        first_blue[2] > first_blue[0],
+        "first tile end was {first_blue:?}"
+    );
+    assert!(
+        second_red[0] > second_red[2],
+        "second tile was {second_red:?}"
+    );
+    assert_eq!(
+        pixel(&pixels, repeated.center().x, repeated.bottom() - 3.0),
+        [255; 4]
+    );
+
+    let origin = bounds[2];
+    let content_left = pixel(&pixels, origin.left() + 10.0, origin.center().y);
+    let content_right = pixel(&pixels, origin.left() + 43.0, origin.center().y);
+    assert!(
+        content_left[0] > content_left[2],
+        "content origin start was {content_left:?}"
+    );
+    assert!(
+        content_right[2] > content_right[0],
+        "content origin end was {content_right:?}"
+    );
+    assert_eq!(
+        pixel(&pixels, origin.left() + 4.0, origin.center().y),
+        [255; 4]
+    );
+
+    let shorthand = bounds[3];
+    assert_eq!(
+        pixel(&pixels, shorthand.left() + 5.0, shorthand.top() + 5.0),
+        [255; 4]
+    );
+    let shorthand_pixel = pixel(&pixels, shorthand.right() - 5.0, shorthand.bottom() - 5.0);
+    assert!(
+        shorthand_pixel[2] > shorthand_pixel[0],
+        "shorthand gradient was {shorthand_pixel:?}"
+    );
+
+    let spaced = bounds[4];
+    let first_pixel = pixel(&pixels, spaced.left() + 1.5, spaced.top() + 5.0);
+    assert!(
+        first_pixel[0] > first_pixel[2],
+        "single space-repeated tile ignored its background position: {first_pixel:?}"
+    );
+}
+
+#[test]
+fn malformed_background_position_size_repeat_and_origin_values_are_rejected() {
+    for declaration in [
+        "background-position:left top right",
+        "background-size:-1px",
+        "background-size:cover auto",
+        "background-repeat:repeat no-repeat round",
+        "background-origin:text",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".box {{ {declaration}; }}")).is_err(),
+            "accepted {declaration}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn functional_colors_render_rgb_rgba_hsl_and_hsla_values_test() {
     let stylesheet = Stylesheet::parse(
         ".rgb-comma { background-color: rgb(255, 0, 0); }\

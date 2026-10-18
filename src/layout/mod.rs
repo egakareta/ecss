@@ -950,21 +950,6 @@ pub(crate) fn show(
             };
             background_style.clips[clip_index]
         };
-        let clip_geometry = BoxDecorationGeometry::new(
-            border,
-            &style,
-            final_geometry.stroke,
-            final_geometry.padding,
-            final_geometry.margin,
-        );
-        let box_geometry = BoxDecorationGeometry::new(
-            border,
-            decoration_style,
-            final_geometry.stroke,
-            final_geometry.padding,
-            final_geometry.margin,
-        );
-        let shape_clip_for = |clip| background_clip_path(&clip_geometry, clip, corner_radius);
         let frame_stroke = if style.border_set || final_geometry.collapsed.is_some() {
             egui::Stroke::NONE
         } else {
@@ -1091,11 +1076,20 @@ pub(crate) fn show(
                         color_clip,
                         corner_radius,
                         scroll,
+                        Vec2::ZERO,
+                        None,
                     )
                 })
                 .collect();
         }
         let mut shapes = Vec::new();
+        let background_area = inline_slice_background.then(|| {
+            surfaces
+                .iter()
+                .zip(&inline_background_offsets)
+                .map(|(surface, offset)| surface.translate(*offset))
+                .fold(Rect::NOTHING, Rect::union)
+        });
         if !suppress_outer_shadow && final_geometry.slices.is_empty() {
             for (surface_index, surface) in surfaces.iter().copied().enumerate() {
                 let shadow = crate::box_decoration::shadow_shapes(
@@ -1129,292 +1123,29 @@ pub(crate) fn show(
         }
         for (surface_index, surface) in surfaces.iter().copied().enumerate() {
             let background_offset = inline_background_offsets[surface_index];
-            let color_surface = match color_clip {
-                crate::css::BackgroundClip::Border => surface,
-                crate::css::BackgroundClip::Padding => surface - final_geometry.stroke,
-                crate::css::BackgroundClip::Content => {
-                    surface - final_geometry.stroke - final_geometry.padding
-                }
+            let resources = ImageResources {
+                context: ui.ctx(),
+                images: &stylesheet.background_images,
+                invalid_elements: &blocked_element_ids,
             };
-            shapes.push(box_surface_shape(
-                color_surface,
-                &box_geometry,
-                color_clip,
+            let geometry = BoxDecorationGeometry::new(
+                surface,
+                decoration_style,
+                final_geometry.stroke,
+                final_geometry.padding,
+                final_geometry.margin,
+            );
+            shapes.extend(fragment_background_shapes(
+                &resources,
+                &background_style,
+                &geometry,
                 fill,
+                color_clip,
                 corner_radius,
+                scroll,
+                background_offset,
+                background_area,
             ));
-            let clip_count = background_style.clips.len().max(1);
-            let attachment_count = background_style.attachments.len().max(1);
-            for layer_index in (0..background_style.images.len()).rev() {
-                let layer_image = &background_style.images[layer_index];
-                let layer_clip = background_style
-                    .clips
-                    .get(layer_index % clip_count)
-                    .copied()
-                    .unwrap_or(crate::css::BackgroundClip::Border);
-                let attachment = background_style
-                    .attachments
-                    .get(layer_index % attachment_count)
-                    .copied()
-                    .unwrap_or(crate::css::BackgroundAttachment::Scroll);
-                let background_surface = match layer_clip {
-                    crate::css::BackgroundClip::Border => surface,
-                    crate::css::BackgroundClip::Padding => surface - final_geometry.stroke,
-                    crate::css::BackgroundClip::Content => {
-                        surface - final_geometry.stroke - final_geometry.padding
-                    }
-                };
-                let inline_layer_background_area = if inline_slice_background {
-                    surfaces
-                        .iter()
-                        .zip(&inline_background_offsets)
-                        .map(|(fragment, offset)| {
-                            let area = match layer_clip {
-                                crate::css::BackgroundClip::Border => *fragment,
-                                crate::css::BackgroundClip::Padding => {
-                                    *fragment - final_geometry.stroke
-                                }
-                                crate::css::BackgroundClip::Content => {
-                                    *fragment - final_geometry.stroke - final_geometry.padding
-                                }
-                            };
-                            area.translate(*offset)
-                        })
-                        .fold(Rect::NOTHING, Rect::union)
-                } else {
-                    background_surface
-                };
-                let background_sample_offset = match attachment {
-                    crate::css::BackgroundAttachment::Scroll => background_offset,
-                    crate::css::BackgroundAttachment::Local => background_offset - scroll,
-                    crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
-                };
-                let shape_clip = shape_clip_for(layer_clip);
-                let image_resolution =
-                    layer_image.resolution_for_scale(ui.ctx().pixels_per_point());
-                let background_image = layer_image.for_scale(ui.ctx().pixels_per_point());
-                if let crate::css::BackgroundImage::SolidColor(color) = background_image {
-                    shapes.push(clip_background_shape(
-                        box_surface_shape(
-                            background_surface,
-                            &box_geometry,
-                            layer_clip,
-                            *color,
-                            corner_radius,
-                        ),
-                        shape_clip.as_ref(),
-                    ));
-                }
-                if let crate::css::BackgroundImage::RadialGradient(gradient) = background_image {
-                    let mut paint_area = match attachment {
-                        crate::css::BackgroundAttachment::Scroll => background_surface,
-                        crate::css::BackgroundAttachment::Local => {
-                            background_surface.translate(-scroll)
-                        }
-                        crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
-                    };
-                    if inline_slice_background
-                        && attachment != crate::css::BackgroundAttachment::Fixed
-                    {
-                        paint_area = inline_layer_background_area;
-                        if attachment == crate::css::BackgroundAttachment::Local {
-                            paint_area = paint_area.translate(-scroll);
-                        }
-                    }
-                    shapes.push(gradient_paint_shape(
-                        ui.ctx(),
-                        background_surface,
-                        paint_area,
-                        background_sample_offset,
-                        GradientPaint::Radial(gradient.clone()),
-                        shape_clip.as_ref(),
-                    ));
-                }
-                if let crate::css::BackgroundImage::LinearGradient(gradient) = background_image {
-                    let mut paint_area = match attachment {
-                        crate::css::BackgroundAttachment::Scroll => background_surface,
-                        crate::css::BackgroundAttachment::Local => {
-                            background_surface.translate(-scroll)
-                        }
-                        crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
-                    };
-                    if inline_slice_background
-                        && attachment != crate::css::BackgroundAttachment::Fixed
-                    {
-                        paint_area = inline_layer_background_area;
-                        if attachment == crate::css::BackgroundAttachment::Local {
-                            paint_area = paint_area.translate(-scroll);
-                        }
-                    }
-                    shapes.push(gradient_paint_shape(
-                        ui.ctx(),
-                        background_surface,
-                        paint_area,
-                        background_sample_offset,
-                        GradientPaint::Linear(gradient.clone()),
-                        shape_clip.as_ref(),
-                    ));
-                }
-                if let crate::css::BackgroundImage::ConicGradient(gradient) = background_image {
-                    let mut paint_area = match attachment {
-                        crate::css::BackgroundAttachment::Scroll => background_surface,
-                        crate::css::BackgroundAttachment::Local => {
-                            background_surface.translate(-scroll)
-                        }
-                        crate::css::BackgroundAttachment::Fixed => ui.ctx().viewport_rect(),
-                    };
-                    if inline_slice_background
-                        && attachment != crate::css::BackgroundAttachment::Fixed
-                    {
-                        paint_area = inline_layer_background_area;
-                        if attachment == crate::css::BackgroundAttachment::Local {
-                            paint_area = paint_area.translate(-scroll);
-                        }
-                    }
-                    shapes.push(gradient_paint_shape(
-                        ui.ctx(),
-                        background_surface,
-                        paint_area,
-                        background_sample_offset,
-                        GradientPaint::Conic(gradient.clone()),
-                        shape_clip.as_ref(),
-                    ));
-                }
-                let image_texture = match background_image {
-                    crate::css::BackgroundImage::Url(url) => {
-                        match (
-                            stylesheet.background_images.texture(ui.ctx(), url),
-                            stylesheet.background_images.size(url),
-                        ) {
-                            (Some(texture), Some(size)) => Some((
-                                texture,
-                                vec2(
-                                    size[0].max(1) as f32 / image_resolution,
-                                    size[1].max(1) as f32 / image_resolution,
-                                ),
-                            )),
-                            _ => None,
-                        }
-                    }
-                    crate::css::BackgroundImage::CrossFade(_) => cross_fade_texture(
-                        ui.ctx(),
-                        &stylesheet.background_images,
-                        background_image,
-                        if inline_slice_background {
-                            inline_layer_background_area.size()
-                        } else {
-                            background_surface.size()
-                        },
-                        ui.ctx().pixels_per_point() / image_resolution,
-                        &blocked_element_ids,
-                    )
-                    .map(|(texture, size)| (texture, size / image_resolution)),
-                    _ => None,
-                };
-                let element_source = match background_image {
-                    crate::css::BackgroundImage::Element(id)
-                        if !blocked_element_ids.contains(id) =>
-                    {
-                        element_image(ui.ctx(), id)
-                    }
-                    _ => None,
-                };
-                if let Some((texture, image_size)) = image_texture {
-                    let viewport = ui.ctx().viewport_rect();
-                    let tile_surface = background_surface.translate(background_sample_offset);
-                    let origin = match attachment {
-                        crate::css::BackgroundAttachment::Scroll if inline_slice_background => {
-                            inline_layer_background_area.min
-                        }
-                        crate::css::BackgroundAttachment::Scroll => background_surface.min,
-                        crate::css::BackgroundAttachment::Local if inline_slice_background => {
-                            inline_layer_background_area.min - scroll
-                        }
-                        crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
-                        crate::css::BackgroundAttachment::Fixed => viewport.min,
-                    };
-                    let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
-                    let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
-                    let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
-                    let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
-                    for y in min_y..max_y {
-                        for x in min_x..max_x {
-                            let tile = Rect::from_min_size(
-                                origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
-                                image_size,
-                            );
-                            let visible_virtual = tile.intersect(tile_surface);
-                            if visible_virtual.is_positive() {
-                                let visible = visible_virtual.translate(-background_sample_offset);
-                                let uv = Rect::from_min_max(
-                                    pos2(
-                                        (visible_virtual.left() - tile.left()) / tile.width(),
-                                        (visible_virtual.top() - tile.top()) / tile.height(),
-                                    ),
-                                    pos2(
-                                        (visible_virtual.right() - tile.left()) / tile.width(),
-                                        (visible_virtual.bottom() - tile.top()) / tile.height(),
-                                    ),
-                                );
-                                shapes.push(clip_background_shape(
-                                    egui::Shape::image(texture.id(), visible, uv, Color32::WHITE),
-                                    shape_clip.as_ref(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                if let Some(element) = element_source {
-                    let image_size = element.size;
-                    let viewport = ui.ctx().viewport_rect();
-                    let tile_surface = background_surface.translate(background_sample_offset);
-                    let origin = match attachment {
-                        crate::css::BackgroundAttachment::Scroll if inline_slice_background => {
-                            inline_layer_background_area.min
-                        }
-                        crate::css::BackgroundAttachment::Scroll => background_surface.min,
-                        crate::css::BackgroundAttachment::Local if inline_slice_background => {
-                            inline_layer_background_area.min - scroll
-                        }
-                        crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
-                        crate::css::BackgroundAttachment::Fixed => viewport.min,
-                    };
-                    let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
-                    let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
-                    let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
-                    let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
-                    for y in min_y..max_y {
-                        for x in min_x..max_x {
-                            let tile = Rect::from_min_size(
-                                origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
-                                image_size,
-                            );
-                            let visible = tile.intersect(tile_surface);
-                            if !visible.is_positive() {
-                                continue;
-                            }
-                            let uv = Rect::from_min_max(
-                                pos2(
-                                    (visible.left() - tile.left()) / tile.width(),
-                                    (visible.top() - tile.top()) / tile.height(),
-                                ),
-                                pos2(
-                                    (visible.right() - tile.left()) / tile.width(),
-                                    (visible.bottom() - tile.top()) / tile.height(),
-                                ),
-                            );
-                            let source = Rect::from_min_max(
-                                pos2(uv.left() * image_size.x, uv.top() * image_size.y),
-                                pos2(uv.right() * image_size.x, uv.bottom() * image_size.y),
-                            );
-                            let destination = visible.translate(-background_sample_offset);
-                            for shape in element_slice_shapes(&element, source, destination) {
-                                shapes.push(clip_background_shape(shape, shape_clip.as_ref()));
-                            }
-                        }
-                    }
-                }
-            }
             let inset_shadow = crate::box_decoration::shadow_shapes(
                 surface,
                 decoration_style,

@@ -1303,6 +1303,10 @@ fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declarat
         Declaration::BackgroundImage(_)
         | Declaration::BackgroundAttachment(_)
         | Declaration::BackgroundClip(_)
+        | Declaration::BackgroundOrigin(_)
+        | Declaration::BackgroundPosition(_)
+        | Declaration::BackgroundRepeat(_)
+        | Declaration::BackgroundSize(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_) => None,

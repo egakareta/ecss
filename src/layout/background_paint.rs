@@ -5,6 +5,10 @@ pub(super) struct BackgroundPaint<'a> {
     pub(super) images: &'a [crate::css::BackgroundImage],
     pub(super) attachments: &'a [crate::css::BackgroundAttachment],
     pub(super) clips: &'a [crate::css::BackgroundClip],
+    pub(super) origins: &'a [crate::css::BackgroundOrigin],
+    pub(super) positions: &'a [crate::css::BackgroundPosition],
+    pub(super) repeats: &'a [crate::css::BackgroundRepeatPair],
+    pub(super) sizes: &'a [crate::css::BackgroundSize],
 }
 
 pub(super) fn resolved_background<'a>(
@@ -17,6 +21,10 @@ pub(super) fn resolved_background<'a>(
         images: &[],
         attachments: &[],
         clips: &[],
+        origins: &[],
+        positions: &[],
+        repeats: &[],
+        sizes: &[],
     };
     for rule in matching_rules(stylesheet, class) {
         if rule.state != RuleState::Base
@@ -33,12 +41,20 @@ pub(super) fn resolved_background<'a>(
                     background.images = &value.images;
                     background.attachments = &value.attachments;
                     background.clips = &value.clips;
+                    background.origins = &value.origins;
+                    background.positions = &value.positions;
+                    background.repeats = &value.repeats;
+                    background.sizes = &value.sizes;
                 }
                 Declaration::BackgroundImage(images) => background.images = images,
                 Declaration::BackgroundAttachment(attachments) => {
                     background.attachments = attachments;
                 }
                 Declaration::BackgroundClip(clips) => background.clips = clips,
+                Declaration::BackgroundOrigin(origins) => background.origins = origins,
+                Declaration::BackgroundPosition(positions) => background.positions = positions,
+                Declaration::BackgroundRepeat(repeats) => background.repeats = repeats,
+                Declaration::BackgroundSize(sizes) => background.sizes = sizes,
                 _ => {}
             }
         }
@@ -161,6 +177,8 @@ pub(super) fn fragment_background_shapes(
     color_clip: crate::css::BackgroundClip,
     corner_radius: egui::CornerRadius,
     scroll: Vec2,
+    fragment_offset: Vec2,
+    background_area: Option<Rect>,
 ) -> Vec<egui::Shape> {
     let context = resources.context;
     let images = resources.images;
@@ -186,6 +204,22 @@ pub(super) fn fragment_background_shapes(
     let scale = context.pixels_per_point();
     let clip_count = background.clips.len().max(1);
     let attachment_count = background.attachments.len().max(1);
+    let origin_count = background.origins.len().max(1);
+    let position_count = background.positions.len().max(1);
+    let repeat_count = background.repeats.len().max(1);
+    let size_count = background.sizes.len().max(1);
+    let arena = crate::math::Arena::default();
+    let units = crate::layout_style::Units {
+        math: &arena,
+        font: geometry.style.format.em,
+        root_font: 16.0,
+        viewport: context.viewport_rect().size(),
+        pixels_per_point: scale,
+    };
+    let default_position = crate::css::BackgroundPosition {
+        x: crate::css::BackgroundPositionAxis::Start("0px".to_owned()),
+        y: crate::css::BackgroundPositionAxis::Start("0px".to_owned()),
+    };
     for layer_index in (0..background.images.len()).rev() {
         let layer_image = &background.images[layer_index];
         let layer_clip = background
@@ -198,16 +232,51 @@ pub(super) fn fragment_background_shapes(
             .get(layer_index % attachment_count)
             .copied()
             .unwrap_or(crate::css::BackgroundAttachment::Scroll);
+        let origin = background
+            .origins
+            .get(layer_index % origin_count)
+            .copied()
+            .unwrap_or_default();
+        let position = background
+            .positions
+            .get(layer_index % position_count)
+            .unwrap_or(&default_position);
+        let repeat = background
+            .repeats
+            .get(layer_index % repeat_count)
+            .copied()
+            .unwrap_or_default();
+        let size = background
+            .sizes
+            .get(layer_index % size_count)
+            .unwrap_or(&DEFAULT_BACKGROUND_SIZE);
         let background_surface = match layer_clip {
             crate::css::BackgroundClip::Border => border,
             crate::css::BackgroundClip::Padding => border - stroke,
             crate::css::BackgroundClip::Content => border - stroke - padding,
         };
         let shape_clip = shape_clip_for(border, layer_clip);
+        let sample_offset = match attachment {
+            crate::css::BackgroundAttachment::Local => fragment_offset - scroll,
+            crate::css::BackgroundAttachment::Scroll => fragment_offset,
+            crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+        };
+        let origin_border = background_area.unwrap_or(border);
+        let origin_surface = match origin {
+            crate::css::BackgroundOrigin::Border => origin_border,
+            crate::css::BackgroundOrigin::Padding => origin_border - stroke,
+            crate::css::BackgroundOrigin::Content => origin_border - stroke - padding,
+        };
+        let positioning_area = match attachment {
+            crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+            crate::css::BackgroundAttachment::Local => origin_surface.translate(-scroll),
+            crate::css::BackgroundAttachment::Scroll => origin_surface,
+        };
+        let clipped_area = background_surface.translate(sample_offset);
         let image_resolution = layer_image.resolution_for_scale(scale);
         let image = layer_image.for_scale(scale);
-        match image {
-            crate::css::BackgroundImage::SolidColor(color) => shapes.push(clip_background_shape(
+        if let crate::css::BackgroundImage::SolidColor(color) = image {
+            shapes.push(clip_background_shape(
                 box_surface_shape(
                     background_surface,
                     geometry,
@@ -216,74 +285,8 @@ pub(super) fn fragment_background_shapes(
                     corner_radius,
                 ),
                 shape_clip.as_ref(),
-            )),
-            crate::css::BackgroundImage::LinearGradient(gradient) => {
-                let paint_area = match attachment {
-                    crate::css::BackgroundAttachment::Scroll => background_surface,
-                    crate::css::BackgroundAttachment::Local => {
-                        background_surface.translate(-scroll)
-                    }
-                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
-                };
-                let sample_offset = match attachment {
-                    crate::css::BackgroundAttachment::Local => -scroll,
-                    crate::css::BackgroundAttachment::Scroll
-                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
-                };
-                shapes.push(gradient_paint_shape(
-                    context,
-                    background_surface,
-                    paint_area,
-                    sample_offset,
-                    GradientPaint::Linear(gradient.clone()),
-                    shape_clip.as_ref(),
-                ));
-            }
-            crate::css::BackgroundImage::RadialGradient(gradient) => {
-                let paint_area = match attachment {
-                    crate::css::BackgroundAttachment::Scroll => background_surface,
-                    crate::css::BackgroundAttachment::Local => {
-                        background_surface.translate(-scroll)
-                    }
-                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
-                };
-                let sample_offset = match attachment {
-                    crate::css::BackgroundAttachment::Local => -scroll,
-                    crate::css::BackgroundAttachment::Scroll
-                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
-                };
-                shapes.push(gradient_paint_shape(
-                    context,
-                    background_surface,
-                    paint_area,
-                    sample_offset,
-                    GradientPaint::Radial(gradient.clone()),
-                    shape_clip.as_ref(),
-                ));
-            }
-            crate::css::BackgroundImage::ConicGradient(gradient) => {
-                let paint_area = match attachment {
-                    crate::css::BackgroundAttachment::Scroll => background_surface,
-                    crate::css::BackgroundAttachment::Local => {
-                        background_surface.translate(-scroll)
-                    }
-                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
-                };
-                let sample_offset = match attachment {
-                    crate::css::BackgroundAttachment::Local => -scroll,
-                    crate::css::BackgroundAttachment::Scroll
-                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
-                };
-                shapes.push(gradient_paint_shape(
-                    context,
-                    background_surface,
-                    paint_area,
-                    sample_offset,
-                    GradientPaint::Conic(gradient.clone()),
-                    shape_clip.as_ref(),
-                ));
-            }
-            _ => {}
+            ));
+            continue;
         }
 
         let image_texture = match image {
@@ -303,7 +306,7 @@ pub(super) fn fragment_background_shapes(
                 context,
                 images,
                 layer_image,
-                background_surface.size(),
+                positioning_area.size(),
                 scale / image_resolution,
                 invalid_elements,
             )
@@ -319,33 +322,64 @@ pub(super) fn fragment_background_shapes(
         let image_size = image_texture
             .as_ref()
             .map(|(_, size)| *size)
-            .or_else(|| element_source.as_ref().map(|image| image.size));
-        let Some(image_size) = image_size.filter(|size| size.is_finite() && size.min_elem() > 0.0)
+            .or_else(|| element_source.as_ref().map(|image| image.size))
+            .or_else(|| {
+                matches!(
+                    image,
+                    crate::css::BackgroundImage::LinearGradient(_)
+                        | crate::css::BackgroundImage::RadialGradient(_)
+                        | crate::css::BackgroundImage::ConicGradient(_)
+                )
+                .then_some(positioning_area.size())
+            });
+        let Some(natural_size) =
+            image_size.filter(|size| size.is_finite() && size.x > 0.0 && size.y > 0.0)
         else {
             continue;
         };
-        let sample_offset = match attachment {
-            crate::css::BackgroundAttachment::Scroll => Vec2::ZERO,
-            crate::css::BackgroundAttachment::Local => -scroll,
-            crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+        let image_size =
+            resolve_background_size(size, natural_size, positioning_area.size(), repeat, units);
+        if !image_size.is_finite() || image_size.x <= 0.0 || image_size.y <= 0.0 {
+            continue;
+        }
+        let position_offset =
+            resolve_background_position(position, image_size, positioning_area.size(), units);
+        let image_origin = positioning_area.min + position_offset;
+        let x_tiles = background_tiles(
+            clipped_area.left(),
+            clipped_area.right(),
+            positioning_area.left(),
+            positioning_area.right(),
+            image_size.x,
+            image_origin.x,
+            repeat.x,
+        );
+        let y_tiles = background_tiles(
+            clipped_area.top(),
+            clipped_area.bottom(),
+            positioning_area.top(),
+            positioning_area.bottom(),
+            image_size.y,
+            image_origin.y,
+            repeat.y,
+        );
+        let gradient = match image {
+            crate::css::BackgroundImage::LinearGradient(gradient) => {
+                Some(GradientPaint::Linear(gradient.clone()))
+            }
+            crate::css::BackgroundImage::RadialGradient(gradient) => {
+                Some(GradientPaint::Radial(gradient.clone()))
+            }
+            crate::css::BackgroundImage::ConicGradient(gradient) => {
+                Some(GradientPaint::Conic(gradient.clone()))
+            }
+            _ => None,
         };
-        let tile_surface = background_surface.translate(sample_offset);
-        let origin = match attachment {
-            crate::css::BackgroundAttachment::Scroll => background_surface.min,
-            crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
-            crate::css::BackgroundAttachment::Fixed => context.viewport_rect().min,
-        };
-        let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
-        let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
-        let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
-        let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
-        for y in min_y..max_y {
-            for x in min_x..max_x {
-                let tile = Rect::from_min_size(
-                    origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
-                    image_size,
-                );
-                let visible_virtual = tile.intersect(tile_surface);
+        for (left, right, tile_left) in &x_tiles {
+            for (top, bottom, tile_top) in &y_tiles {
+                let tile = Rect::from_min_size(pos2(*tile_left, *tile_top), image_size);
+                let visible_virtual =
+                    Rect::from_min_max(pos2(*left, *top), pos2(*right, *bottom)).intersect(tile);
                 if !visible_virtual.is_positive() {
                     continue;
                 }
@@ -360,7 +394,16 @@ pub(super) fn fragment_background_shapes(
                         (visible_virtual.bottom() - tile.top()) / tile.height(),
                     ),
                 );
-                if let Some((texture, _)) = &image_texture {
+                if let Some(gradient) = &gradient {
+                    shapes.push(gradient_paint_shape(
+                        context,
+                        visible,
+                        tile,
+                        sample_offset,
+                        gradient.clone(),
+                        shape_clip.as_ref(),
+                    ));
+                } else if let Some((texture, _)) = &image_texture {
                     shapes.push(clip_background_shape(
                         egui::Shape::image(texture.id(), visible, uv, Color32::WHITE),
                         shape_clip.as_ref(),
@@ -378,6 +421,153 @@ pub(super) fn fragment_background_shapes(
         }
     }
     shapes
+}
+
+static DEFAULT_BACKGROUND_SIZE: crate::css::BackgroundSize =
+    crate::css::BackgroundSize::Explicit([
+        crate::css::BackgroundSizeComponent::Auto,
+        crate::css::BackgroundSizeComponent::Auto,
+    ]);
+
+fn resolve_background_size(
+    size: &crate::css::BackgroundSize,
+    natural: Vec2,
+    area: Vec2,
+    repeat: crate::css::BackgroundRepeatPair,
+    units: crate::layout_style::Units<'_>,
+) -> Vec2 {
+    use crate::css::{BackgroundRepeat, BackgroundSize, BackgroundSizeComponent};
+    let mut resolved = match size {
+        BackgroundSize::Cover | BackgroundSize::Contain => {
+            let scale = if matches!(size, BackgroundSize::Cover) {
+                (area.x / natural.x).max(area.y / natural.y)
+            } else {
+                (area.x / natural.x).min(area.y / natural.y)
+            };
+            natural * scale
+        }
+        BackgroundSize::Explicit([width, height]) => {
+            let width = match width {
+                BackgroundSizeComponent::Auto => None,
+                BackgroundSizeComponent::Value(value) => Some(
+                    crate::box_decoration::length_percentage(value, units, false)
+                        .map_or(0.0, |value| value.resolve(area.x)),
+                ),
+            };
+            let height = match height {
+                BackgroundSizeComponent::Auto => None,
+                BackgroundSizeComponent::Value(value) => Some(
+                    crate::box_decoration::length_percentage(value, units, false)
+                        .map_or(0.0, |value| value.resolve(area.y)),
+                ),
+            };
+            match (width, height) {
+                (Some(width), Some(height)) => vec2(width, height),
+                (Some(width), None) => vec2(width, width * natural.y / natural.x),
+                (None, Some(height)) => vec2(height * natural.x / natural.y, height),
+                (None, None) => natural,
+            }
+        }
+    };
+    if repeat.x == BackgroundRepeat::Round && resolved.x > 0.0 && area.x > 0.0 {
+        let previous = resolved.x;
+        let count = (area.x / previous).round().max(1.0);
+        resolved.x = area.x / count;
+        if matches!(
+            size,
+            BackgroundSize::Explicit([_, BackgroundSizeComponent::Auto])
+        ) {
+            resolved.y *= resolved.x / previous;
+        }
+    }
+    if repeat.y == BackgroundRepeat::Round && resolved.y > 0.0 && area.y > 0.0 {
+        let previous = resolved.y;
+        let count = (area.y / previous).round().max(1.0);
+        resolved.y = area.y / count;
+        if matches!(
+            size,
+            BackgroundSize::Explicit([BackgroundSizeComponent::Auto, _])
+        ) {
+            resolved.x *= resolved.y / previous;
+        }
+    }
+    resolved
+}
+
+fn resolve_background_position(
+    position: &crate::css::BackgroundPosition,
+    image_size: Vec2,
+    area: Vec2,
+    units: crate::layout_style::Units<'_>,
+) -> Vec2 {
+    use crate::css::BackgroundPositionAxis;
+    let resolve = |value: &BackgroundPositionAxis, image: f32, extent: f32| {
+        let free = extent - image;
+        match value {
+            BackgroundPositionAxis::FreeSpace(value) => {
+                crate::box_decoration::length_percentage(value, units, true)
+                    .map_or(0.0, |value| value.resolve(free))
+            }
+            BackgroundPositionAxis::Start(value) => {
+                crate::box_decoration::length_percentage(value, units, true)
+                    .map_or(0.0, |value| value.resolve(extent))
+            }
+            BackgroundPositionAxis::Center => free / 2.0,
+            BackgroundPositionAxis::End(value) => {
+                free - crate::box_decoration::length_percentage(value, units, true)
+                    .map_or(0.0, |value| value.resolve(extent))
+            }
+        }
+    };
+    vec2(
+        resolve(&position.x, image_size.x, area.x),
+        resolve(&position.y, image_size.y, area.y),
+    )
+}
+
+fn background_tiles(
+    clip_start: f32,
+    clip_end: f32,
+    area_start: f32,
+    area_end: f32,
+    natural: f32,
+    origin: f32,
+    repeat: crate::css::BackgroundRepeat,
+) -> Vec<(f32, f32, f32)> {
+    use crate::css::BackgroundRepeat;
+    if natural <= 0.0 || clip_end <= clip_start {
+        return Vec::new();
+    }
+    let span = area_end - area_start;
+    let (tile, first, end, gap, initial) = match repeat {
+        BackgroundRepeat::NoRepeat => (natural, 0_isize, 1_isize, 0.0, origin),
+        BackgroundRepeat::Repeat => {
+            let first = ((clip_start - origin) / natural).floor() as isize;
+            let end = ((clip_end - origin) / natural).ceil() as isize;
+            (natural, first, end, 0.0, origin)
+        }
+        BackgroundRepeat::Round => {
+            let count = (span / natural).round().max(1.0) as isize;
+            (span / count as f32, 0, count, 0.0, area_start)
+        }
+        BackgroundRepeat::Space => {
+            let count = (span / natural).floor() as isize;
+            if count >= 2 {
+                let gap = (span - count as f32 * natural) / (count - 1) as f32;
+                (natural, 0, count, gap, area_start)
+            } else {
+                (natural, 0, 1, 0.0, origin)
+            }
+        }
+    };
+    (first..end)
+        .filter_map(|index| {
+            let tile_start = initial + index as f32 * (tile + gap);
+            let visible_start = tile_start.max(clip_start);
+            let visible_end = (tile_start + tile).min(clip_end);
+            (visible_start < visible_end).then_some((visible_start, visible_end, tile_start))
+        })
+        .collect()
 }
 
 pub(super) fn resolved_element_references(

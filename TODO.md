@@ -5,8 +5,8 @@
 ## Core CSS, syntax, and cascading
 
 - **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Partial.**
-  - CSS properties: _~~`azimuth`~~_, ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, `background-position`,
-    `background-repeat`, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
+  - CSS properties: _~~`azimuth`~~_, ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, ~~`background-position`~~,
+    ~~`background-repeat`~~, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
     ~~`border-collapse`~~, ~~`border-color`~~, ~~`border-left`~~, ~~`border-left-color`~~, ~~`border-left-style`~~, ~~`border-left-width`~~,
     ~~`border-right`~~, ~~`border-right-color`~~, ~~`border-right-style`~~, ~~`border-right-width`~~, ~~`border-spacing`~~, ~~`border-style`~~,
     ~~`border-top`~~, ~~`border-top-color`~~, ~~`border-top-style`~~, ~~`border-top-width`~~, ~~`border-width`~~, `bottom`, ~~`caption-side`~~,
@@ -191,10 +191,10 @@
 
 ## Color, backgrounds, images, and effects
 
-- **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Partial.**
+- **[CSS Backgrounds and Borders Level 3](https://www.w3.org/TR/css3-background/) - Supported.**
   - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-clip`~~,
     ~~`background-color`~~, ~~`background-image`~~,
-    `background-origin`, `background-position`, `background-repeat`, `background-size`, ~~`border`~~, ~~`border-bottom`~~,
+    ~~`background-origin`~~, ~~`background-position`~~, ~~`background-repeat`~~, ~~`background-size`~~, ~~`border`~~, ~~`border-bottom`~~,
     ~~`border-bottom-color`~~, ~~`border-bottom-left-radius`~~, ~~`border-bottom-right-radius`~~, ~~`border-bottom-style`~~,
     ~~`border-bottom-width`~~, ~~`border-color`~~, ~~`border-image`~~, ~~`border-image-outset`~~, ~~`border-image-repeat`~~,
     ~~`border-image-slice`~~, ~~`border-image-source`~~, ~~`border-image-width`~~, ~~`border-left`~~, ~~`border-left-color`~~,
@@ -205,9 +205,9 @@
 - **CSS Backgrounds Level 4 - Partial.**
   - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-clip`~~,
     ~~`background-color`~~, ~~`background-image`~~,
-    `background-origin`, `background-position`, `background-position-block`, `background-position-inline`,
-    `background-position-x`, `background-position-y`, `background-repeat`, `background-repeat-block`,
-    `background-repeat-inline`, `background-repeat-x`, `background-repeat-y`, `background-size`, `background-tbd`.
+    ~~`background-origin`~~, ~~`background-position`~~, `background-position-block`, `background-position-inline`,
+    `background-position-x`, `background-position-y`, ~~`background-repeat`~~, `background-repeat-block`,
+    `background-repeat-inline`, `background-repeat-x`, `background-repeat-y`, ~~`background-size`~~, `background-tbd`.
   - Partial because Level 4's position/repeat longhands and `background-tbd` are not implemented, `background-clip` accepts only `border-box`, `padding-box`, and `content-box`, not `text` or `border-area`.
 - **[CSS Borders and Box Decorations Level 4](https://www.w3.org/TR/css-borders-4/) - Partial.**
   - CSS properties: ~~`border`~~, ~~`border-block`~~, ~~`border-block-clip`~~, ~~`border-block-color`~~, ~~`border-block-end`~~,
@@ -421,8 +421,8 @@
 ## Profiles, snapshots, and historical specifications
 
 - **[Preview of CSS 2.2](https://www.w3.org/TR/CSS22/) - Partial.**
-  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, `background-position`,
-    `background-repeat`, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
+  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, ~~`background-position`~~,
+    ~~`background-repeat`~~, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
     ~~`border-collapse`~~, ~~`border-color`~~, ~~`border-left`~~, ~~`border-left-color`~~, ~~`border-left-style`~~, ~~`border-left-width`~~,
     ~~`border-right`~~, ~~`border-right-color`~~, ~~`border-right-style`~~, ~~`border-right-width`~~, ~~`border-spacing`~~, ~~`border-style`~~,
     ~~`border-top`~~, ~~`border-top-color`~~, ~~`border-top-style`~~, ~~`border-top-width`~~, ~~`border-width`~~, `bottom`, `caption-side`,
@@ -469,8 +469,8 @@ These property-bearing specifications also appear in the W3C generated property 
 ### Core CSS, syntax, and cascading
 
 - **Cascading Style Sheets Level 2 Revision 1 (CSS 2.1) Specification - Partial.**
-  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, `background-position`,
-    `background-repeat`, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
+  - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-color`~~, ~~`background-image`~~, ~~`background-position`~~,
+    ~~`background-repeat`~~, ~~`border`~~, ~~`border-bottom`~~, ~~`border-bottom-color`~~, ~~`border-bottom-style`~~, ~~`border-bottom-width`~~,
     ~~`border-collapse`~~, ~~`border-color`~~, ~~`border-left`~~, ~~`border-left-color`~~, ~~`border-left-style`~~, ~~`border-left-width`~~,
     ~~`border-right`~~, ~~`border-right-color`~~, ~~`border-right-style`~~, ~~`border-right-width`~~, ~~`border-spacing`~~, ~~`border-style`~~,
     ~~`border-top`~~, ~~`border-top-color`~~, ~~`border-top-style`~~, ~~`border-top-width`~~, ~~`border-width`~~, `bottom`, `caption-side`,
