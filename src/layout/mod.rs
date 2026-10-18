@@ -1554,49 +1554,124 @@ fn sticky_offset(
     if style.layout.position != Position::Sticky {
         return Vec2::ZERO;
     }
+    let containing_parent = nearest_box_ancestor(parent, frame);
+    let containing = containing_parent
+        .map(|index| frame.nodes[index].used.content())
+        .unwrap_or(frame.viewport);
+    let containing_style = containing_parent.map(|index| &*frame.nodes[index].style);
     let mut scroll_parent = parent;
-    let viewport = loop {
-        let Some(p) = scroll_parent else {
+    let scrollport = loop {
+        let Some(index) = scroll_parent else {
             break frame.viewport;
         };
-        let node = &frame.nodes[p];
-        if node.style.layout.overflow.x.is_scroll_container()
-            || node.style.layout.overflow.y.is_scroll_container()
+        let node = &frame.nodes[index];
+        if !node.style.contents
+            && (node.style.layout.overflow.x.is_scroll_container()
+                || node.style.layout.overflow.y.is_scroll_container())
         {
-            break node.used.border - node.used.stroke;
+            break node.used.border - node.used.stroke - node.used.gutter;
         }
         scroll_parent = node.parent;
     };
-    let containing = parent.map(|p| frame.nodes[p].used.content());
-    let mut origin = geometry.border.min;
-    let insets = style.layout.inset;
+
+    let containing_style = containing_style.unwrap_or(style);
+    let direction = containing_style.layout.direction;
+    let writing = containing_style.format.writing;
+    let orientation = containing_style.format.text_orientation.as_str();
+    let block_axis = usize::from(!writing.vertical());
+    let insets = [
+        style.layout.inset.top,
+        style.layout.inset.right,
+        style.layout.inset.bottom,
+        style.layout.inset.left,
+    ];
+    let margins = geometry.margin;
+    let margin_low = [margins.left, margins.top];
+    let margin_high = [margins.right, margins.bottom];
+    let mut offset = Vec2::ZERO;
+
     for axis in 0..2 {
-        let (start, end) = if axis == 0 {
-            (insets.left, insets.right)
+        let (start_name, end_name) = if axis == block_axis {
+            ("block-start", "block-end")
         } else {
-            (insets.top, insets.bottom)
+            ("inline-start", "inline-end")
         };
-        let basis = containing.map_or(viewport.size()[axis], |rect| rect.size()[axis]);
-        let start = resolve(start.into_raw(), basis);
-        let end = resolve(end.into_raw(), basis);
-        if start.is_none() && end.is_none() {
+        let start_side =
+            crate::layout_style::logical_side(start_name, direction, writing, orientation).unwrap();
+        let end_side =
+            crate::layout_style::logical_side(end_name, direction, writing, orientation).unwrap();
+        let low_side = if axis == 0 { 3 } else { 0 };
+        let high_side = if axis == 0 { 1 } else { 2 };
+        let basis = scrollport.size()[axis];
+        let resolved = insets.map(|inset| resolve(inset.into_raw(), basis));
+        if resolved[low_side].is_none() && resolved[high_side].is_none() {
             continue;
         }
-        let minimum = start.map_or(f32::NEG_INFINITY, |inset| viewport.min[axis] + inset);
-        let maximum = end
-            .map_or(f32::INFINITY, |inset| {
-                viewport.max[axis] - inset - geometry.border.size()[axis]
-            })
-            .max(minimum);
-        origin[axis] = origin[axis].clamp(minimum, maximum);
-        if let Some(containing) = containing {
-            origin[axis] = origin[axis].clamp(
-                containing.min[axis],
-                (containing.max[axis] - geometry.border.size()[axis]).max(containing.min[axis]),
-            );
+
+        let mut used_insets = resolved.map(|inset| inset.unwrap_or(0.0));
+        let start_inset = used_insets[start_side];
+        let end_inset = used_insets[end_side];
+        let border_extent = geometry.border.size()[axis];
+        if basis - start_inset - end_inset < border_extent {
+            used_insets[end_side] = basis - start_inset - border_extent;
         }
+
+        let view_low = scrollport.min[axis] + used_insets[low_side];
+        let view_high = scrollport.max[axis] - used_insets[high_side];
+        let mut sticky_min = f32::NEG_INFINITY;
+        let mut sticky_max = f32::INFINITY;
+        if resolved[low_side].is_some() {
+            sticky_min = view_low - geometry.border.min[axis];
+        }
+        if resolved[high_side].is_some() {
+            sticky_max = view_high - geometry.border.max[axis];
+        }
+
+        let low_margin_edge = geometry.border.min[axis] - margin_low[axis];
+        let high_margin_edge = geometry.border.max[axis] + margin_high[axis];
+        let low_margin =
+            sticky_position_margin(margin_low[axis], low_margin_edge, containing.min[axis]);
+        let high_margin =
+            sticky_position_margin(margin_high[axis], high_margin_edge, containing.max[axis]);
+        let position_low = geometry.border.min[axis] - low_margin;
+        let position_high = geometry.border.max[axis] + high_margin;
+        let containing_min = containing.min[axis] - position_low;
+        let containing_max = containing.max[axis] - position_high;
+        let preferred = if sticky_min <= sticky_max {
+            0.0_f32.clamp(sticky_min, sticky_max)
+        } else if sticky_min > 0.0 {
+            sticky_min
+        } else {
+            sticky_max
+        };
+        offset[axis] = if containing_min <= containing_max {
+            preferred.clamp(containing_min, containing_max)
+        } else if (preferred - containing_min).abs() < (preferred - containing_max).abs() {
+            containing_min
+        } else {
+            containing_max
+        };
     }
-    origin - geometry.border.min
+    offset
+}
+
+fn sticky_position_margin(margin: f32, margin_edge: f32, containing_edge: f32) -> f32 {
+    if margin > 0.0 {
+        margin.min((margin_edge - containing_edge).abs())
+    } else {
+        margin
+    }
+}
+
+fn nearest_box_ancestor(mut ancestor: Option<usize>, frame: &Frame) -> Option<usize> {
+    while let Some(index) = ancestor {
+        let node = &frame.nodes[index];
+        if !node.style.contents {
+            return Some(index);
+        }
+        ancestor = node.parent;
+    }
+    None
 }
 
 fn fixed_containing_block(frame: &Frame, mut ancestor: Option<usize>) -> Option<usize> {

@@ -119,6 +119,115 @@ fn sticky_boxes_remain_at_the_scrollport_edge_while_siblings_scroll() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn sticky_percentage_insets_resolve_against_the_nearest_scrollport() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".scroll { width:100px; height:40px; overflow:auto; scrollbar-width:none; } .flow { height:100px; } .sticky { position:sticky; top:50%; height:10px; } .content { height:100px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let sticky_top = std::cell::Cell::new(0.0);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        sticky_top.set(ui.add(empty_response.selector(".sticky")).rect.top());
+                        ui.add(empty_response.selector(".content"));
+                        ui.response()
+                    })
+                    .selector(".flow"),
+                );
+                ui.response()
+            })
+            .selector(".scroll"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    frame(
+        &context,
+        200.0,
+        0.1,
+        vec![
+            Event::PointerMoved(pos2(20.0, 20.0)),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: vec2(0.0, -20.0),
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &mut build,
+    );
+    for i in 2..8 {
+        frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+    }
+
+    assert!(
+        (sticky_top.get() - 20.0).abs() < 0.05,
+        "sticky top: {}",
+        sticky_top.get()
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn sticky_box_remains_within_its_containing_block() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".scroll { width:100px; height:40px; overflow:auto; scrollbar-width:none; } .flow { height:100px; } .sticky { position:sticky; top:0; height:10px; } .content { height:100px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let sticky_top = std::cell::Cell::new(0.0);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        sticky_top.set(ui.add(empty_response.selector(".sticky")).rect.top());
+                        ui.add(empty_response.selector(".content"));
+                        ui.response()
+                    })
+                    .selector(".flow"),
+                );
+                ui.add(empty_response.selector(".content"));
+                ui.response()
+            })
+            .selector(".scroll"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    frame(
+        &context,
+        200.0,
+        0.1,
+        vec![
+            Event::PointerMoved(pos2(20.0, 20.0)),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: vec2(0.0, -95.0),
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &mut build,
+    );
+    for i in 2..8 {
+        frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+    }
+
+    assert!(
+        (sticky_top.get() + 5.0).abs() < 0.05,
+        "sticky top: {}",
+        sticky_top.get()
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn dragging_a_scrollbar_moves_content_on_the_repaint_frame() {
     let context = Context::default();
     Stylesheet::parse(

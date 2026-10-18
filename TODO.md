@@ -104,10 +104,9 @@
     ~~`column-rule-width`~~, ~~`column-span`~~, ~~`column-width`~~, `column-wrap`, ~~`columns`~~.
 - **[CSS Paged Media](https://www.w3.org/TR/css3-page/) - Unsupported.**
   - CSS properties: `page`.
-- **[CSS Positioned Layout Level 3](https://www.w3.org/TR/css3-positioning/) - Partial.**
+- **[CSS Positioned Layout Level 3](https://www.w3.org/TR/css3-positioning/) - Supported.**
   - CSS properties: ~~`bottom`~~, ~~`inset`~~, ~~`inset-block`~~, ~~`inset-block-end`~~, ~~`inset-block-start`~~, ~~`inset-inline`~~, ~~`inset-inline-end`~~,
     ~~`inset-inline-start`~~, ~~`left`~~, ~~`position`~~, ~~`right`~~, ~~`top`~~.
-  - Partial because sticky positioning is approximated against the nearest scroll container or viewport, rather than implementing all of the specification's scrollport and containing-block rules.
 - **[CSS Positioned Layout Level 4](https://www.w3.org/TR/css-position-4/) - Unsupported.**
   - CSS properties: `overlay`.
 - **[Grid Layout](https://www.w3.org/TR/css-grid-1/) - Partial.**
