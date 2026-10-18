@@ -1,17 +1,5 @@
 #![deny(missing_docs)]
-
-//! Apply CSS to egui widgets.
-//!
-//! ```no_run
-//! use ecss::{SelectorExt as _, Stylesheet};
-//!
-//! # fn ui(ui: &mut egui::Ui, context: &egui::Context) -> Result<(), Box<dyn std::error::Error>> {
-//! let css = Stylesheet::from_file("theme.css")?;
-//! css.install(context);
-//! ui.add(egui::Button::new("Save").selector(".primary"));
-//! # Ok(())
-//! # }
-//! ```
+#![doc = include_str!("../README.md")]
 
 use std::{
     collections::HashMap,
