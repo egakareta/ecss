@@ -281,9 +281,7 @@ fn round_line_width(value: f32, step: f32, pixels_per_point: f32) -> f32 {
         value
     } else if lower == 0.0 {
         upper
-    } else if upper == 0.0 {
-        lower
-    } else if value - lower < upper - value {
+    } else if upper == 0.0 || value - lower < upper - value {
         lower
     } else {
         upper
