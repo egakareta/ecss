@@ -1,0 +1,989 @@
+use super::*;
+
+pub(super) struct BackgroundPaint<'a> {
+    pub(super) color: Color32,
+    pub(super) images: &'a [crate::css::BackgroundImage],
+    pub(super) attachments: &'a [crate::css::BackgroundAttachment],
+    pub(super) clips: &'a [crate::css::BackgroundClip],
+}
+
+pub(super) fn resolved_background<'a>(
+    stylesheet: &'a Stylesheet,
+    class: &'a str,
+    state: u8,
+) -> BackgroundPaint<'a> {
+    let mut background = BackgroundPaint {
+        color: Color32::TRANSPARENT,
+        images: &[],
+        attachments: &[],
+        clips: &[],
+    };
+    for rule in matching_rules(stylesheet, class) {
+        if rule.state != RuleState::Base
+            && !(rule.state == RuleState::Hovered && state & 1 != 0)
+            && !(rule.state == RuleState::Active && state & 2 != 0)
+        {
+            continue;
+        }
+        for declaration in &rule.declarations {
+            match declaration {
+                Declaration::Background(color) => background.color = *color,
+                Declaration::BackgroundShorthand(value) => {
+                    background.color = value.color;
+                    background.images = &value.images;
+                    background.attachments = &value.attachments;
+                    background.clips = &value.clips;
+                }
+                Declaration::BackgroundImage(images) => background.images = images,
+                Declaration::BackgroundAttachment(attachments) => {
+                    background.attachments = attachments;
+                }
+                Declaration::BackgroundClip(clips) => background.clips = clips,
+                _ => {}
+            }
+        }
+    }
+    background
+}
+
+pub(super) fn background_clip_path(
+    geometry: &BoxDecorationGeometry<'_>,
+    clip: crate::css::BackgroundClip,
+    fallback_radius: egui::CornerRadius,
+) -> Option<crate::box_decoration::PathClip> {
+    let BoxDecorationGeometry {
+        border,
+        style,
+        stroke,
+        padding,
+        margin,
+        widths,
+    } = *geometry;
+    if let Some(border_shape) = &style.decorations.border_shape {
+        let (paths, fill_rule) =
+            border_shape.background_paths(border, clip, stroke, padding, margin, widths);
+        return Some(crate::box_decoration::path_clip(paths, fill_rule));
+    }
+
+    let inset = match clip {
+        crate::css::BackgroundClip::Border => egui::epaint::MarginF32::ZERO,
+        crate::css::BackgroundClip::Padding => stroke,
+        crate::css::BackgroundClip::Content => egui::epaint::MarginF32 {
+            top: stroke.top + padding.top,
+            right: stroke.right + padding.right,
+            bottom: stroke.bottom + padding.bottom,
+            left: stroke.left + padding.left,
+        },
+    };
+    let mut radii = crate::box_decoration::resolved_radii(style, border);
+    radii[0] -= vec2(inset.left, inset.top);
+    radii[1] -= vec2(inset.right, inset.top);
+    radii[2] -= vec2(inset.right, inset.bottom);
+    radii[3] -= vec2(inset.left, inset.bottom);
+    radii = radii.map(|radius| radius.max(Vec2::ZERO));
+
+    let shapes = if radii.iter().all(|radius| *radius == Vec2::ZERO) {
+        if fallback_radius == egui::CornerRadius::ZERO {
+            return None;
+        }
+        radii = [
+            fallback_radius.nw,
+            fallback_radius.ne,
+            fallback_radius.se,
+            fallback_radius.sw,
+        ]
+        .map(|radius| vec2(f32::from(radius), f32::from(radius)));
+        [crate::box_decoration::CornerShape::Round; 4]
+    } else {
+        style.decorations.corner_shapes
+    };
+
+    Some(crate::box_decoration::path_clip(
+        vec![crate::box_decoration::rounded_path(
+            border - inset,
+            radii,
+            shapes,
+        )],
+        crate::box_decoration::FillRule::Nonzero,
+    ))
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct BoxDecorationGeometry<'a> {
+    pub(super) border: Rect,
+    pub(super) style: &'a BoxStyle,
+    pub(super) stroke: egui::epaint::MarginF32,
+    pub(super) padding: egui::epaint::MarginF32,
+    pub(super) margin: egui::epaint::MarginF32,
+    pub(super) widths: [f32; 4],
+}
+
+impl<'a> BoxDecorationGeometry<'a> {
+    pub(super) fn new(
+        border: Rect,
+        style: &'a BoxStyle,
+        stroke: egui::epaint::MarginF32,
+        padding: egui::epaint::MarginF32,
+        margin: egui::epaint::MarginF32,
+    ) -> Self {
+        let border_widths = style
+            .layout
+            .border
+            .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
+        Self {
+            border,
+            style,
+            stroke,
+            padding,
+            margin,
+            widths: [
+                border_widths.top,
+                border_widths.right,
+                border_widths.bottom,
+                border_widths.left,
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ImageResources<'a> {
+    pub(super) context: &'a Context,
+    pub(super) images: &'a crate::background::ImageAssets,
+    pub(super) invalid_elements: &'a HashSet<String>,
+}
+
+pub(super) fn fragment_background_shapes(
+    resources: &ImageResources<'_>,
+    background: &BackgroundPaint<'_>,
+    geometry: &BoxDecorationGeometry<'_>,
+    fill: Color32,
+    color_clip: crate::css::BackgroundClip,
+    corner_radius: egui::CornerRadius,
+    scroll: Vec2,
+) -> Vec<egui::Shape> {
+    let context = resources.context;
+    let images = resources.images;
+    let invalid_elements = resources.invalid_elements;
+    let border = geometry.border;
+    let stroke = geometry.stroke;
+    let padding = geometry.padding;
+    let shape_clip_for = |rect, clip| {
+        let geometry = BoxDecorationGeometry {
+            border: rect,
+            ..*geometry
+        };
+        background_clip_path(&geometry, clip, corner_radius)
+    };
+    let color_surface = match color_clip {
+        crate::css::BackgroundClip::Border => border,
+        crate::css::BackgroundClip::Padding => border - stroke,
+        crate::css::BackgroundClip::Content => border - stroke - padding,
+    };
+    let color_shape = box_surface_shape(color_surface, geometry, color_clip, fill, corner_radius);
+    let color_clip_path = shape_clip_for(border, color_clip);
+    let mut shapes = vec![clip_background_shape(color_shape, color_clip_path.as_ref())];
+    let scale = context.pixels_per_point();
+    let clip_count = background.clips.len().max(1);
+    let attachment_count = background.attachments.len().max(1);
+    for layer_index in (0..background.images.len()).rev() {
+        let layer_image = &background.images[layer_index];
+        let layer_clip = background
+            .clips
+            .get(layer_index % clip_count)
+            .copied()
+            .unwrap_or(crate::css::BackgroundClip::Border);
+        let attachment = background
+            .attachments
+            .get(layer_index % attachment_count)
+            .copied()
+            .unwrap_or(crate::css::BackgroundAttachment::Scroll);
+        let background_surface = match layer_clip {
+            crate::css::BackgroundClip::Border => border,
+            crate::css::BackgroundClip::Padding => border - stroke,
+            crate::css::BackgroundClip::Content => border - stroke - padding,
+        };
+        let shape_clip = shape_clip_for(border, layer_clip);
+        let image_resolution = layer_image.resolution_for_scale(scale);
+        let image = layer_image.for_scale(scale);
+        match image {
+            crate::css::BackgroundImage::SolidColor(color) => shapes.push(clip_background_shape(
+                box_surface_shape(
+                    background_surface,
+                    geometry,
+                    layer_clip,
+                    *color,
+                    corner_radius,
+                ),
+                shape_clip.as_ref(),
+            )),
+            crate::css::BackgroundImage::LinearGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Linear(gradient.clone()),
+                    shape_clip.as_ref(),
+                ));
+            }
+            crate::css::BackgroundImage::RadialGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Radial(gradient.clone()),
+                    shape_clip.as_ref(),
+                ));
+            }
+            crate::css::BackgroundImage::ConicGradient(gradient) => {
+                let paint_area = match attachment {
+                    crate::css::BackgroundAttachment::Scroll => background_surface,
+                    crate::css::BackgroundAttachment::Local => {
+                        background_surface.translate(-scroll)
+                    }
+                    crate::css::BackgroundAttachment::Fixed => context.viewport_rect(),
+                };
+                let sample_offset = match attachment {
+                    crate::css::BackgroundAttachment::Local => -scroll,
+                    crate::css::BackgroundAttachment::Scroll
+                    | crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+                };
+                shapes.push(gradient_paint_shape(
+                    context,
+                    background_surface,
+                    paint_area,
+                    sample_offset,
+                    GradientPaint::Conic(gradient.clone()),
+                    shape_clip.as_ref(),
+                ));
+            }
+            _ => {}
+        }
+
+        let image_texture = match image {
+            crate::css::BackgroundImage::Url(url) => {
+                match (images.texture(context, url), images.size(url)) {
+                    (Some(texture), Some(size)) => Some((
+                        texture,
+                        vec2(
+                            size[0].max(1) as f32 / image_resolution,
+                            size[1].max(1) as f32 / image_resolution,
+                        ),
+                    )),
+                    _ => None,
+                }
+            }
+            crate::css::BackgroundImage::CrossFade(_) => cross_fade_texture(
+                context,
+                images,
+                layer_image,
+                background_surface.size(),
+                scale / image_resolution,
+                invalid_elements,
+            )
+            .map(|(texture, size)| (texture, size / image_resolution)),
+            _ => None,
+        };
+        let element_source = match image {
+            crate::css::BackgroundImage::Element(id) if !invalid_elements.contains(id) => {
+                element_image(context, id)
+            }
+            _ => None,
+        };
+        let image_size = image_texture
+            .as_ref()
+            .map(|(_, size)| *size)
+            .or_else(|| element_source.as_ref().map(|image| image.size));
+        let Some(image_size) = image_size.filter(|size| size.is_finite() && size.min_elem() > 0.0)
+        else {
+            continue;
+        };
+        let sample_offset = match attachment {
+            crate::css::BackgroundAttachment::Scroll => Vec2::ZERO,
+            crate::css::BackgroundAttachment::Local => -scroll,
+            crate::css::BackgroundAttachment::Fixed => Vec2::ZERO,
+        };
+        let tile_surface = background_surface.translate(sample_offset);
+        let origin = match attachment {
+            crate::css::BackgroundAttachment::Scroll => background_surface.min,
+            crate::css::BackgroundAttachment::Local => background_surface.min - scroll,
+            crate::css::BackgroundAttachment::Fixed => context.viewport_rect().min,
+        };
+        let min_x = ((tile_surface.left() - origin.x) / image_size.x).floor() as i32;
+        let max_x = ((tile_surface.right() - origin.x) / image_size.x).ceil() as i32;
+        let min_y = ((tile_surface.top() - origin.y) / image_size.y).floor() as i32;
+        let max_y = ((tile_surface.bottom() - origin.y) / image_size.y).ceil() as i32;
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let tile = Rect::from_min_size(
+                    origin + vec2(x as f32 * image_size.x, y as f32 * image_size.y),
+                    image_size,
+                );
+                let visible_virtual = tile.intersect(tile_surface);
+                if !visible_virtual.is_positive() {
+                    continue;
+                }
+                let visible = visible_virtual.translate(-sample_offset);
+                let uv = Rect::from_min_max(
+                    pos2(
+                        (visible_virtual.left() - tile.left()) / tile.width(),
+                        (visible_virtual.top() - tile.top()) / tile.height(),
+                    ),
+                    pos2(
+                        (visible_virtual.right() - tile.left()) / tile.width(),
+                        (visible_virtual.bottom() - tile.top()) / tile.height(),
+                    ),
+                );
+                if let Some((texture, _)) = &image_texture {
+                    shapes.push(clip_background_shape(
+                        egui::Shape::image(texture.id(), visible, uv, Color32::WHITE),
+                        shape_clip.as_ref(),
+                    ));
+                } else if let Some(element) = &element_source {
+                    let source = Rect::from_min_max(
+                        pos2(uv.left() * image_size.x, uv.top() * image_size.y),
+                        pos2(uv.right() * image_size.x, uv.bottom() * image_size.y),
+                    );
+                    for shape in element_slice_shapes(element, source, visible) {
+                        shapes.push(clip_background_shape(shape, shape_clip.as_ref()));
+                    }
+                }
+            }
+        }
+    }
+    shapes
+}
+
+pub(super) fn resolved_element_references(
+    stylesheet: &Stylesheet,
+    class: &str,
+    state: u8,
+) -> HashSet<String> {
+    let mut references = HashSet::new();
+    let mut collect = |image: &crate::css::BackgroundImage| {
+        let mut ids = Vec::new();
+        image.collect_element_ids(&mut ids);
+        references.extend(ids);
+    };
+    for image in resolved_background(stylesheet, class, state).images {
+        collect(image);
+    }
+    collect(&resolved_border_image_source(stylesheet, class, state));
+    for pseudo in [
+        crate::css::PseudoElementKind::FirstLetter,
+        crate::css::PseudoElementKind::FirstLine,
+    ] {
+        collect(&resolved_pseudo_border_image_source(
+            stylesheet, class, pseudo, state,
+        ));
+    }
+    references
+}
+
+pub(super) fn invalid_element_references(
+    context: &Context,
+    stylesheet: &Stylesheet,
+    node_index: usize,
+    frame: &Frame,
+) -> HashSet<String> {
+    if !stylesheet.rule_index.has_element_references {
+        return HashSet::new();
+    }
+    let mut element_ids = HashSet::new();
+    for rule in &stylesheet.rules {
+        if let Some(id) = rule
+            .class
+            .as_deref()
+            .and_then(|class| class.strip_prefix("@id:"))
+        {
+            element_ids.insert(id.to_owned());
+        }
+        collect_rule_element_ids(rule, &mut element_ids);
+    }
+    for node in &frame.nodes {
+        if let Some(id) = &node.element_id {
+            element_ids.insert(id.clone());
+        }
+        element_ids.extend(node.element_references.iter().cloned());
+    }
+
+    let current_dependencies = element_descendant_dependencies(frame);
+    for (id, targets) in &current_dependencies {
+        element_ids.insert(id.clone());
+        element_ids.extend(targets.iter().cloned());
+    }
+
+    let mut dependencies = HashMap::<String, HashSet<String>>::new();
+    for id in &element_ids {
+        let targets = if let Some(targets) = current_dependencies.get(id) {
+            targets.clone()
+        } else if let Some(image) = element_image(context, id) {
+            image.dependencies.clone()
+        } else {
+            resolved_element_references(stylesheet, &format!("@id:{id}"), 0)
+        };
+        dependencies.insert(id.clone(), targets);
+    }
+
+    fn reaches(
+        current: &str,
+        target: &str,
+        dependencies: &HashMap<String, HashSet<String>>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if current == target {
+            return true;
+        }
+        if !visited.insert(current.to_owned()) {
+            return false;
+        }
+        dependencies.get(current).is_some_and(|next| {
+            next.iter()
+                .any(|next| reaches(next, target, dependencies, visited))
+        })
+    }
+
+    let mut source_ancestors = HashSet::new();
+    let mut current = Some(node_index);
+    while let Some(index) = current {
+        let node = &frame.nodes[index];
+        if node.element_first_occurrence
+            && let Some(id) = &node.element_id
+        {
+            source_ancestors.insert(id.clone());
+        }
+        current = node.parent;
+    }
+
+    frame.nodes[node_index]
+        .element_references
+        .iter()
+        .filter(|target| {
+            source_ancestors
+                .iter()
+                .any(|ancestor| reaches(target, ancestor, &dependencies, &mut HashSet::new()))
+        })
+        .cloned()
+        .collect()
+}
+
+pub(super) fn element_descendant_dependencies(frame: &Frame) -> HashMap<String, HashSet<String>> {
+    fn visit(
+        frame: &Frame,
+        node_index: usize,
+        ancestors: &[String],
+        dependencies: &mut HashMap<String, HashSet<String>>,
+    ) {
+        let node = &frame.nodes[node_index];
+        if node.absent {
+            return;
+        }
+        let mut source_ids = ancestors.to_vec();
+        if node.element_first_occurrence
+            && let Some(id) = &node.element_id
+        {
+            for ancestor in ancestors {
+                dependencies
+                    .entry(ancestor.clone())
+                    .or_default()
+                    .insert(id.clone());
+            }
+            dependencies.entry(id.clone()).or_default();
+            source_ids.push(id.clone());
+        }
+        for source_id in &source_ids {
+            dependencies
+                .entry(source_id.clone())
+                .or_default()
+                .extend(node.element_references.iter().cloned());
+        }
+        for child in &node.children {
+            visit(frame, *child, &source_ids, dependencies);
+        }
+    }
+
+    let mut dependencies = HashMap::new();
+    for (index, node) in frame.nodes.iter().enumerate() {
+        if node.parent.is_none() {
+            visit(frame, index, &[], &mut dependencies);
+        }
+    }
+    dependencies
+}
+
+pub(super) fn collect_rule_element_ids(rule: &crate::css::Rule, ids: &mut HashSet<String>) {
+    fn collect(image: &crate::css::BackgroundImage, ids: &mut HashSet<String>) {
+        let mut image_ids = Vec::new();
+        image.collect_element_ids(&mut image_ids);
+        ids.extend(image_ids);
+    }
+
+    for declaration in &rule.declarations {
+        match declaration {
+            Declaration::BackgroundShorthand(background) => {
+                for image in &background.images {
+                    collect(image, ids);
+                }
+            }
+            Declaration::BackgroundImage(images) => {
+                for image in images {
+                    collect(image, ids);
+                }
+            }
+            Declaration::Layout(layout) if layout.name.starts_with("border-image") => {
+                if let Some(image) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                {
+                    collect(&image, ids);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn resolved_border_image_source(
+    stylesheet: &Stylesheet,
+    selector: &str,
+    state: u8,
+) -> crate::css::BackgroundImage {
+    let mut source = crate::css::BackgroundImage::None;
+    for rule in matching_rules(stylesheet, selector) {
+        if rule.state != RuleState::Base
+            && !(rule.state == RuleState::Hovered && state & 1 != 0)
+            && !(rule.state == RuleState::Active && state & 2 != 0)
+        {
+            continue;
+        }
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(layout) = declaration
+                && let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+            {
+                source = value;
+            }
+        }
+    }
+    source
+}
+
+pub(super) fn resolved_pseudo_border_image_source(
+    stylesheet: &Stylesheet,
+    selector: &str,
+    pseudo: crate::css::PseudoElementKind,
+    state: u8,
+) -> crate::css::BackgroundImage {
+    let mut source = crate::css::BackgroundImage::None;
+    for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state) {
+        for declaration in &rule.declarations {
+            if let Declaration::Layout(layout) = declaration
+                && let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+            {
+                source = value;
+            }
+        }
+    }
+    source
+}
+
+pub(super) fn cross_fade_texture(
+    context: &Context,
+    images: &crate::background::ImageAssets,
+    image: &crate::css::BackgroundImage,
+    fallback_size: Vec2,
+    scale: f32,
+    invalid_elements: &HashSet<String>,
+) -> Option<(egui::TextureHandle, Vec2)> {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let logical_size = intrinsic_image_size(image, images, context, scale).unwrap_or(fallback_size);
+    let logical_size = logical_size.max(Vec2::splat(1.0));
+    let width = (logical_size.x * scale).ceil().clamp(1.0, 4096.0) as usize;
+    let height = (logical_size.y * scale).ceil().clamp(1.0, 4096.0) as usize;
+    let source_revision = image_source_revision(image, context, scale, invalid_elements);
+    let key = egui::Id::unique((
+        "ecss.cross-fade",
+        format!("{image:?}:{scale}:{logical_size:?}:{source_revision}"),
+    ));
+    if let Some(texture) = context.data(|data| data.get_temp::<egui::TextureHandle>(key)) {
+        return Some((texture, logical_size));
+    }
+    let area = Rect::from_min_size(Pos2::ZERO, logical_size);
+    let resources = ImageResources {
+        context,
+        images,
+        invalid_elements,
+    };
+    let pixels = (0..height)
+        .flat_map(|y| {
+            (0..width).map(move |x| {
+                sample_image(
+                    &resources,
+                    image,
+                    scale,
+                    (x as f32 + 0.5) / width as f32,
+                    (y as f32 + 0.5) / height as f32,
+                    area,
+                )
+            })
+        })
+        .collect();
+    let pixels = egui::ColorImage::new([width, height], pixels);
+    let texture = context.load_texture(
+        key.value().to_string(),
+        pixels.clone(),
+        egui::TextureOptions::LINEAR,
+    );
+    crate::background::remember_texture_image(context, texture.id(), pixels);
+    context.data_mut(|data| data.insert_temp(key, texture.clone()));
+    Some((texture, logical_size))
+}
+
+pub(super) fn image_source_revision(
+    image: &crate::css::BackgroundImage,
+    context: &Context,
+    scale: f32,
+    invalid_elements: &HashSet<String>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    fn visit(
+        image: &crate::css::BackgroundImage,
+        context: &Context,
+        scale: f32,
+        hasher: &mut impl Hasher,
+    ) {
+        match image.for_scale(scale) {
+            crate::css::BackgroundImage::Element(id) => {
+                id.hash(hasher);
+                if let Some(image) = element_image(context, id) {
+                    image.fingerprint.hash(hasher);
+                }
+            }
+            crate::css::BackgroundImage::CrossFade(cross_fade) => {
+                for item in &cross_fade.items {
+                    item.weight.to_bits().hash(hasher);
+                    visit(&item.image, context, scale, hasher);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    visit(image, context, scale, &mut hasher);
+    let mut invalid_elements = invalid_elements.iter().collect::<Vec<_>>();
+    invalid_elements.sort();
+    invalid_elements.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn intrinsic_image_size(
+    image: &crate::css::BackgroundImage,
+    images: &crate::background::ImageAssets,
+    context: &Context,
+    scale: f32,
+) -> Option<Vec2> {
+    let selected = image.for_scale(scale);
+    let density = image.resolution_for_scale(scale);
+    let size = match selected {
+        crate::css::BackgroundImage::Url(url) => {
+            let size = images.size(url)?;
+            vec2(size[0] as f32, size[1] as f32)
+        }
+        crate::css::BackgroundImage::Element(id) => element_image(context, id)?.size,
+        crate::css::BackgroundImage::CrossFade(cross_fade) => {
+            let mut weighted_size = Vec2::ZERO;
+            let mut total_weight = 0.0;
+            for item in &cross_fade.items {
+                if let Some(size) = intrinsic_image_size(&item.image, images, context, scale) {
+                    weighted_size += size * item.weight;
+                    total_weight += item.weight;
+                }
+            }
+            (total_weight > 0.0).then(|| weighted_size / total_weight)?
+        }
+        crate::css::BackgroundImage::None
+        | crate::css::BackgroundImage::SolidColor(_)
+        | crate::css::BackgroundImage::LinearGradient(_)
+        | crate::css::BackgroundImage::RadialGradient(_)
+        | crate::css::BackgroundImage::ConicGradient(_)
+        | crate::css::BackgroundImage::ImageSet(_) => return None,
+    };
+    Some(size / density.max(f32::MIN_POSITIVE))
+}
+
+pub(super) fn sample_image(
+    resources: &ImageResources<'_>,
+    image: &crate::css::BackgroundImage,
+    scale: f32,
+    u: f32,
+    v: f32,
+    area: Rect,
+) -> Color32 {
+    let ImageResources {
+        context,
+        images,
+        invalid_elements,
+    } = *resources;
+    match image.for_scale(scale) {
+        crate::css::BackgroundImage::None | crate::css::BackgroundImage::ImageSet(_) => {
+            Color32::TRANSPARENT
+        }
+        crate::css::BackgroundImage::Element(id) if invalid_elements.contains(id) => {
+            Color32::TRANSPARENT
+        }
+        crate::css::BackgroundImage::Element(id) => element_image(context, id)
+            .map_or(Color32::TRANSPARENT, |image| {
+                sample_element_image(&image, u, v)
+            }),
+        crate::css::BackgroundImage::SolidColor(color) => *color,
+        crate::css::BackgroundImage::Url(url) => {
+            let Some(image) = images.image(url) else {
+                return Color32::TRANSPARENT;
+            };
+            if image.size[0] == 0 || image.size[1] == 0 {
+                return Color32::TRANSPARENT;
+            }
+            let x = ((u * image.size[0] as f32).floor() as usize).min(image.size[0] - 1);
+            let y = ((v * image.size[1] as f32).floor() as usize).min(image.size[1] - 1);
+            image.pixels[y * image.size[0] + x]
+        }
+        crate::css::BackgroundImage::LinearGradient(gradient) => {
+            let direction = vec2(
+                gradient.angle.to_radians().sin(),
+                -gradient.angle.to_radians().cos(),
+            );
+            let corners = [
+                area.left_top(),
+                area.right_top(),
+                area.right_bottom(),
+                area.left_bottom(),
+            ];
+            let min = corners
+                .iter()
+                .map(|point| point.to_vec2().dot(direction))
+                .fold(f32::INFINITY, f32::min);
+            let max = corners
+                .iter()
+                .map(|point| point.to_vec2().dot(direction))
+                .fold(f32::NEG_INFINITY, f32::max);
+            let point = pos2(
+                area.left() + u * area.width(),
+                area.top() + v * area.height(),
+            );
+            let position = ((point.to_vec2().dot(direction) - min) / (max - min).max(f32::EPSILON))
+                .clamp(0.0, 1.0);
+            gradient_color(
+                &gradient.stops,
+                position,
+                gradient.repeating,
+                gradient.color_space,
+            )
+        }
+        crate::css::BackgroundImage::RadialGradient(gradient) => {
+            let point = pos2(
+                area.left() + u * area.width(),
+                area.top() + v * area.height(),
+            );
+            let (center, radii, corner_extent) = radial_gradient_parameters(area, gradient);
+            gradient_color(
+                &gradient.stops,
+                radial_gradient_position(point, center, radii, corner_extent),
+                gradient.repeating,
+                gradient.color_space,
+            )
+        }
+        crate::css::BackgroundImage::ConicGradient(gradient) => {
+            let point = pos2(
+                area.left() + u * area.width(),
+                area.top() + v * area.height(),
+            );
+            let center = pos2(
+                area.left() + gradient.center[0].resolve(area.width()),
+                area.top() + gradient.center[1].resolve(area.height()),
+            );
+            gradient_color(
+                &gradient.stops,
+                conic_gradient_position(point, center, gradient.from_angle),
+                gradient.repeating,
+                gradient.color_space,
+            )
+        }
+        crate::css::BackgroundImage::CrossFade(cross_fade) => {
+            let total = cross_fade.items.iter().map(|item| item.weight).sum::<f32>();
+            let normalization = total.max(1.0);
+            let mut premultiplied = [0.0; 4];
+            for item in &cross_fade.items {
+                let color = sample_image(resources, &item.image, scale, u, v, area);
+                let color = color.to_array();
+                let weight = item.weight / normalization;
+                for channel in 0..3 {
+                    premultiplied[channel] += f32::from(color[channel]) / 255.0 * weight;
+                }
+                premultiplied[3] += f32::from(color[3]) / 255.0 * weight;
+            }
+            let alpha = premultiplied[3].clamp(0.0, 1.0);
+            let channels: [u8; 3] = std::array::from_fn(|channel| {
+                let value = if alpha > f32::EPSILON {
+                    premultiplied[channel] / alpha
+                } else {
+                    0.0
+                };
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
+            });
+            Color32::from_rgba_premultiplied(
+                channels[0],
+                channels[1],
+                channels[2],
+                (alpha * 255.0).round() as u8,
+            )
+        }
+    }
+}
+
+pub(super) fn sample_element_image(image: &ElementImage, u: f32, v: f32) -> Color32 {
+    let point = pos2(u * image.size.x, v * image.size.y);
+    let mut output = [0.0; 4];
+    for mesh in &image.meshes {
+        let (triangles, _) = mesh.indices.as_chunks::<3>();
+        for triangle in triangles {
+            let vertices = [
+                &mesh.vertices[triangle[0] as usize],
+                &mesh.vertices[triangle[1] as usize],
+                &mesh.vertices[triangle[2] as usize],
+            ];
+            let Some(weights) =
+                barycentric_weights(point, vertices[0].pos, vertices[1].pos, vertices[2].pos)
+            else {
+                continue;
+            };
+            let uv = pos2(
+                vertices
+                    .iter()
+                    .zip(weights)
+                    .map(|(vertex, weight)| vertex.uv.x * weight)
+                    .sum(),
+                vertices
+                    .iter()
+                    .zip(weights)
+                    .map(|(vertex, weight)| vertex.uv.y * weight)
+                    .sum(),
+            );
+            let texture = image
+                .textures
+                .get(&mesh.texture_id)
+                .map_or(Color32::WHITE, |texture| sample_color_image(texture, uv));
+            let texture = texture.to_array();
+            let colors = vertices.map(|vertex| {
+                let color = vertex.color.to_array();
+                std::array::from_fn::<_, 4, _>(|channel| {
+                    (u16::from(color[channel]) * u16::from(texture[channel]) / 255) as u8
+                })
+            });
+            let source = std::array::from_fn::<_, 4, _>(|channel| {
+                colors
+                    .iter()
+                    .zip(weights)
+                    .map(|(color, weight)| f32::from(color[channel]) * weight / 255.0)
+                    .sum::<f32>()
+                    .clamp(0.0, 1.0)
+            });
+            let alpha = source[3];
+            for channel in 0..3 {
+                output[channel] = source[channel] + output[channel] * (1.0 - alpha);
+            }
+            output[3] = alpha + output[3] * (1.0 - alpha);
+        }
+    }
+    let alpha = output[3];
+    let channels = std::array::from_fn::<_, 3, _>(|channel| {
+        let value = if alpha > f32::EPSILON {
+            output[channel] / alpha
+        } else {
+            0.0
+        };
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    });
+    Color32::from_rgba_premultiplied(
+        channels[0],
+        channels[1],
+        channels[2],
+        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+pub(super) fn sample_color_image(image: &egui::ColorImage, uv: Pos2) -> Color32 {
+    if image.size[0] == 0 || image.size[1] == 0 {
+        return Color32::TRANSPARENT;
+    }
+    let x = (uv.x.clamp(0.0, 1.0) * image.size[0] as f32 - 0.5)
+        .clamp(0.0, image.size[0].saturating_sub(1) as f32);
+    let y = (uv.y.clamp(0.0, 1.0) * image.size[1] as f32 - 0.5)
+        .clamp(0.0, image.size[1].saturating_sub(1) as f32);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(image.size[0] - 1);
+    let y1 = (y0 + 1).min(image.size[1] - 1);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+    let colors = [
+        image.pixels[y0 * image.size[0] + x0].to_array(),
+        image.pixels[y0 * image.size[0] + x1].to_array(),
+        image.pixels[y1 * image.size[0] + x0].to_array(),
+        image.pixels[y1 * image.size[0] + x1].to_array(),
+    ];
+    let values = std::array::from_fn::<_, 4, _>(|channel| {
+        let top = egui::emath::lerp(
+            f32::from(colors[0][channel])..=f32::from(colors[1][channel]),
+            tx,
+        );
+        let bottom = egui::emath::lerp(
+            f32::from(colors[2][channel])..=f32::from(colors[3][channel]),
+            tx,
+        );
+        egui::emath::lerp(top..=bottom, ty).round() as u8
+    });
+    Color32::from_rgba_premultiplied(values[0], values[1], values[2], values[3])
+}
+
+pub(super) fn barycentric_weights(point: Pos2, a: Pos2, b: Pos2, c: Pos2) -> Option<[f32; 3]> {
+    let denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+    if denominator.abs() <= f32::EPSILON {
+        return None;
+    }
+    let first = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
+    let second = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
+    let third = 1.0 - first - second;
+    (first >= -1.0e-5 && second >= -1.0e-5 && third >= -1.0e-5).then_some([first, second, third])
+}
