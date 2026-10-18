@@ -669,6 +669,27 @@ async fn overridden_element_image_reference_does_not_create_a_cycle_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn all_reset_element_image_reference_does_not_create_a_cycle_test() {
+    let stylesheet = Stylesheet::parse(
+        "#first { background-image:element(#second); all:initial; position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(empty_response.selector("#first"));
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
+    })
+    .await;
+    let second = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, second.center().x, second.center().y),
+        [255, 0, 0, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn border_shorthand_reset_does_not_create_an_element_image_cycle_test() {
     let stylesheet = Stylesheet::parse(
         "#first { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; border-image-source:element(#second); border:2px solid transparent; }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",

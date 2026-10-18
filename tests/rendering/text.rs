@@ -964,3 +964,46 @@ async fn font_kerning_none_uses_unadjusted_glyph_spacing_and_inherits_test() {
         bounds[0]
     );
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn all_property_inherits_and_resets_text_color_test() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { color:red; } .inherited { all:inherit; } .initial { all:initial; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                let inherited = ui.add(egui::Label::new("inherited").selector(".inherited"));
+                let initial = ui.add(egui::Label::new("initial").selector(".initial"));
+                *capture.lock().unwrap() = vec![inherited.rect, initial.rect];
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let red_pixels = |rect: egui::Rect| {
+        let left = (rect.left().floor() as i32).clamp(0, WIDTH as i32);
+        let right = (rect.right().ceil() as i32).clamp(0, WIDTH as i32);
+        let top = (rect.top().floor() as i32).clamp(0, HEIGHT as i32);
+        let bottom = (rect.bottom().ceil() as i32).clamp(0, HEIGHT as i32);
+        let mut count = 0;
+        for y in top..bottom {
+            for x in left..right {
+                let [red, green, blue, alpha] = pixel(&pixels, x as f32, y as f32);
+                if red > 200 && green < 40 && blue < 40 && alpha == 255 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
+    assert!(red_pixels(bounds[0]) > 0);
+    assert_eq!(red_pixels(bounds[1]), 0);
+}

@@ -277,16 +277,43 @@ pub(super) fn pseudo_decoration_style(
         .iter()
         .flat_map(|rule| &rule.declarations)
         .collect::<Vec<_>>();
-    style.custom_properties =
+    let custom_properties =
         crate::css::variables::compute(&parent.custom_properties, &custom_declarations);
+    style.custom_properties = custom_properties.clone();
     let mut fill = Color32::TRANSPARENT;
     let mut color = current;
-    for rule in rules {
-        for source in &rule.declarations {
-            let Some(declaration) = crate::css::resolve_deferred(source, &style.custom_properties)
-            else {
-                continue;
-            };
+    let resolved = rules
+        .into_iter()
+        .map(|rule| {
+            (
+                rule.state,
+                rule.declarations
+                    .iter()
+                    .filter_map(|source| {
+                        crate::css::resolve_deferred(source, &style.custom_properties)
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    let (rules, all_keyword) = super::apply_all_rules(resolved, &parent.computed_declarations);
+    match all_keyword {
+        Some(crate::css::AllKeyword::Inherit) => {
+            style = parent.clone();
+            style.custom_properties = custom_properties.clone();
+            color = parent.current_color;
+        }
+        Some(crate::css::AllKeyword::Unset) => color = parent.current_color,
+        Some(crate::css::AllKeyword::Initial | crate::css::AllKeyword::Revert) => {
+            style = BoxStyle::default();
+            style.layout.direction = parent.layout.direction;
+            style.custom_properties = custom_properties;
+            color = Color32::BLACK;
+        }
+        None => {}
+    }
+    for (_, declarations) in rules {
+        for declaration in declarations {
             match &declaration {
                 Declaration::Color(value) => color = *value,
                 Declaration::Background(value) => fill = *value,

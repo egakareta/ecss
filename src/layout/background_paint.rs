@@ -52,6 +52,16 @@ fn background_from_declarations<'a>(
     };
     for declaration in declarations {
         match declaration {
+            Declaration::All(_) => {
+                background.color = Color32::TRANSPARENT;
+                background.images = &[];
+                background.attachments = &[];
+                background.clips = &[];
+                background.origins = &[];
+                background.positions = &[];
+                background.repeats = &[];
+                background.sizes = &[];
+            }
             Declaration::Background(color) => background.color = *color,
             Declaration::BackgroundShorthand(value) => {
                 background.color = value.color;
@@ -612,6 +622,49 @@ pub(super) fn resolved_element_references(
     references
 }
 
+pub(super) fn resolved_element_references_from_rules(
+    stylesheet: &Stylesheet,
+    selector: &str,
+    state: u8,
+    rules: &[(RuleState, Vec<Declaration>)],
+) -> HashSet<String> {
+    let mut references = HashSet::new();
+    let mut collect = |image: &crate::css::BackgroundImage| {
+        let mut ids = Vec::new();
+        image.collect_element_ids(&mut ids);
+        references.extend(ids);
+    };
+    for image in resolved_background_from_rules(rules).images {
+        collect(image);
+    }
+    let mut border_image = crate::css::BackgroundImage::None;
+    for (_, declarations) in rules {
+        for declaration in declarations {
+            match declaration {
+                Declaration::All(_) => border_image = crate::css::BackgroundImage::None,
+                Declaration::Layout(layout) => {
+                    if let Some(source) =
+                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                    {
+                        border_image = source;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    collect(&border_image);
+    for pseudo in [
+        crate::css::PseudoElementKind::FirstLetter,
+        crate::css::PseudoElementKind::FirstLine,
+    ] {
+        collect(&resolved_pseudo_border_image_source(
+            stylesheet, selector, pseudo, state,
+        ));
+    }
+    references
+}
+
 pub(super) fn invalid_element_references(
     context: &Context,
     stylesheet: &Stylesheet,
@@ -788,11 +841,16 @@ pub(super) fn resolved_border_image_source(
             continue;
         }
         for declaration in &rule.declarations {
-            if let Declaration::Layout(layout) = declaration
-                && let Some(value) =
-                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
-            {
-                source = value;
+            match declaration {
+                Declaration::All(_) => source = crate::css::BackgroundImage::None,
+                Declaration::Layout(layout) => {
+                    if let Some(value) =
+                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                    {
+                        source = value;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -808,11 +866,16 @@ pub(super) fn resolved_pseudo_border_image_source(
     let mut source = crate::css::BackgroundImage::None;
     for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state) {
         for declaration in &rule.declarations {
-            if let Declaration::Layout(layout) = declaration
-                && let Some(value) =
-                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
-            {
-                source = value;
+            match declaration {
+                Declaration::All(_) => source = crate::css::BackgroundImage::None,
+                Declaration::Layout(layout) => {
+                    if let Some(value) =
+                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                    {
+                        source = value;
+                    }
+                }
+                _ => {}
             }
         }
     }

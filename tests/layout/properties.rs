@@ -34,6 +34,41 @@ fn css_wide_values_copy_parent_properties_and_restore_initial_values() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn all_property_inherits_resets_and_unsets_supported_declarations() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { --size:56px; box-sizing:border-box; width:120px; height:50px; padding:8px; }\
+         .inherited { all:inherit; }\
+         .initial { width:80px; height:30px; padding:6px; all:initial; width:40px; height:20px; }\
+         .unset { all:unset; width:50px; height:15px; }\
+         .custom { all:initial; width:var(--size); height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = [".inherited", ".initial", ".unset", ".custom"]
+                    .into_iter()
+                    .map(|selector| ui.add(empty_response.selector(selector)).rect)
+                    .collect();
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    });
+
+    assert_eq!(rects[0].size(), vec2(120.0, 50.0));
+    assert_eq!(rects[1].size(), vec2(40.0, 20.0));
+    assert_eq!(rects[2].size(), vec2(50.0, 15.0));
+    assert_eq!(rects[3].size(), vec2(56.0, 10.0));
+    assert!(Stylesheet::parse(".invalid { all: red; }").is_err());
+    assert!(Stylesheet::parse(".invalid { all: revert-layer; }").is_err());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn unset_and_inherit_follow_writing_mode_when_mapping_logical_sizes() {
     let context = Context::default();
     Stylesheet::parse(".flow {writing-mode:vertical-rl; inline-size:40px; block-size:70px; white-space:pre;} .unset {writing-mode:unset; inline-size:inherit; block-size:inherit; white-space:unset;} .horizontal {writing-mode:horizontal-tb; inline-size:inherit; block-size:inherit; white-space:initial;}")

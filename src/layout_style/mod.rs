@@ -19,6 +19,7 @@ pub(crate) struct Declaration {
 pub(crate) struct BoxStyle {
     pub layout: Style,
     pub format: crate::formatting::Formatting,
+    pub(crate) computed_declarations: std::sync::Arc<Vec<crate::css::Declaration>>,
     pub(crate) custom_properties: crate::css::variables::CustomProperties,
     template_grid: bool,
     pub display_set: bool,
@@ -143,6 +144,7 @@ impl Default for BoxStyle {
     fn default() -> Self {
         Self {
             format: Default::default(),
+            computed_declarations: Default::default(),
             custom_properties: Default::default(),
             layout: Style {
                 display: Display::Block,

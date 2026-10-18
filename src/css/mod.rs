@@ -73,6 +73,7 @@ pub(crate) enum PseudoElementKind {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Declaration {
+    All(AllKeyword),
     Color(Color32),
     Background(Color32),
     BackgroundShorthand(BackgroundShorthand),
@@ -98,6 +99,14 @@ pub(crate) enum Declaration {
         name: String,
         value: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AllKeyword {
+    Initial,
+    Inherit,
+    Unset,
+    Revert,
 }
 
 #[derive(Clone, Debug)]
@@ -867,6 +876,18 @@ impl Declarations {
             }));
         }
         input.reset(&start);
+        if name.eq_ignore_ascii_case("all") {
+            let keyword = match value.trim().to_ascii_lowercase().as_str() {
+                "initial" => AllKeyword::Initial,
+                "inherit" => AllKeyword::Inherit,
+                "unset" => AllKeyword::Unset,
+                "revert" => AllKeyword::Revert,
+                "revert-layer" => return Err(ParseError::custom("cascade layers are unsupported")),
+                _ => return Err(ParseError::custom("invalid all value")),
+            };
+            while input.next().is_ok() {}
+            return Ok(Some(Declaration::All(keyword)));
+        }
         if crate::animation::is_property(&name) {
             let value = consume_value(input)?;
             return crate::animation::parse_property(&name, &value)

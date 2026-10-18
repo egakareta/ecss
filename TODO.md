@@ -21,8 +21,8 @@
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
     ~~`visibility`~~, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
-- **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
-  - CSS properties: `all`.
+- **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Supported.**
+  - CSS properties: ~~`all`~~.
 - **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 5](https://www.w3.org/TR/css-cascade-5/) - Unsupported.**

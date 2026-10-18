@@ -172,6 +172,86 @@ impl Drop for Scope {
     }
 }
 
+fn survives_all(declaration: &Declaration) -> bool {
+    match declaration {
+        Declaration::CustomProperty { .. } => true,
+        Declaration::Layout(declaration) => {
+            matches!(declaration.name.as_str(), "direction" | "unicode-bidi")
+        }
+        _ => false,
+    }
+}
+
+fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) -> bool {
+    match declaration {
+        Declaration::All(_) | Declaration::CustomProperty { .. } | Declaration::Deferred { .. } => {
+            false
+        }
+        Declaration::Color(_)
+        | Declaration::FontFamily(_)
+        | Declaration::FontWeight(_)
+        | Declaration::FontStyle(_) => matches!(
+            keyword,
+            crate::css::AllKeyword::Inherit | crate::css::AllKeyword::Unset
+        ),
+        Declaration::Layout(declaration) => {
+            keyword == crate::css::AllKeyword::Inherit && declaration.name == "border-radius"
+        }
+        _ => keyword == crate::css::AllKeyword::Inherit,
+    }
+}
+
+fn ordinarily_inherited(declaration: &Declaration) -> bool {
+    matches!(
+        declaration,
+        Declaration::Color(_)
+            | Declaration::FontFamily(_)
+            | Declaration::FontWeight(_)
+            | Declaration::FontStyle(_)
+    )
+}
+
+fn apply_all_rules(
+    rules: Vec<(RuleState, Vec<Declaration>)>,
+    parent_declarations: &[Declaration],
+) -> (
+    Vec<(RuleState, Vec<Declaration>)>,
+    Option<crate::css::AllKeyword>,
+) {
+    let mut effective = Vec::new();
+    let mut all_keyword = None;
+    for (state, declarations) in rules {
+        for declaration in declarations {
+            if let Declaration::All(keyword) = declaration {
+                effective.retain(|(_, declaration)| survives_all(declaration));
+                all_keyword = Some(keyword);
+                effective.push((state, Declaration::All(keyword)));
+                effective.extend(
+                    parent_declarations
+                        .iter()
+                        .filter(|declaration| inherited_by_all(declaration, keyword))
+                        .cloned()
+                        .map(|declaration| (state, declaration)),
+                );
+            } else {
+                effective.push((state, declaration));
+            }
+        }
+    }
+
+    let mut grouped: Vec<(RuleState, Vec<Declaration>)> = Vec::new();
+    for (state, declaration) in effective {
+        if let Some((previous_state, declarations)) = grouped.last_mut()
+            && *previous_state == state
+        {
+            declarations.push(declaration);
+        } else {
+            grouped.push((state, vec![declaration]));
+        }
+    }
+    (grouped, all_keyword)
+}
+
 pub(crate) fn show(
     widget: impl Widget,
     ui: &mut Ui,
@@ -281,6 +361,7 @@ pub(crate) fn show(
     };
     style.format.em = base_font_size;
     style.format.font_size_set = parent_style.format.font_size_set;
+    let inherited_style = style.clone();
     let mut units = Units {
         math: &math,
         font: base_font_size,
@@ -311,13 +392,33 @@ pub(crate) fn show(
                 )
             })
             .collect::<Vec<_>>();
-        (custom_properties, resolved)
+        let (resolved, all_keyword) =
+            apply_all_rules(resolved, &parent_style.computed_declarations);
+        (custom_properties, resolved, all_keyword)
     };
-    let (custom_properties, resolved_rules) = resolve_rules(state);
-    style.custom_properties = custom_properties;
-    let (_, base_visual_rules) = resolve_rules(0);
-    let (_, hovered_visual_rules) = resolve_rules(1);
-    let (_, active_visual_rules) = resolve_rules(2);
+    let (custom_properties, resolved_rules, all_keyword) = resolve_rules(state);
+    style.custom_properties = custom_properties.clone();
+    match all_keyword {
+        Some(crate::css::AllKeyword::Inherit) => {
+            style = (*parent_style).clone();
+            style.custom_properties = custom_properties.clone();
+        }
+        Some(crate::css::AllKeyword::Unset) => {
+            style = inherited_style;
+            style.custom_properties = custom_properties.clone();
+        }
+        Some(crate::css::AllKeyword::Initial | crate::css::AllKeyword::Revert) => {
+            let direction = style.layout.direction;
+            style = BoxStyle::default();
+            style.layout.direction = direction;
+            style.custom_properties = custom_properties.clone();
+        }
+        None => {}
+    }
+    units.font = style.format.em;
+    let (_, base_visual_rules, _) = resolve_rules(0);
+    let (_, hovered_visual_rules, _) = resolve_rules(1);
+    let (_, active_visual_rules, _) = resolve_rules(2);
     let mut background_urls = Vec::new();
     let mut font_families = None;
     let mut font_weight = 400;
@@ -354,7 +455,12 @@ pub(crate) fn show(
             weight: font_weight,
             italic: font_italic,
         })
-        .or_else(|| stylesheet.font_request_for_class(class));
+        .or_else(|| {
+            all_keyword
+                .is_none()
+                .then(|| stylesheet.font_request_for_class(class))
+                .flatten()
+        });
     if let Some(request) = &font_request {
         stylesheet.start_font_load_for_request(request.clone(), ui.ctx());
     }
@@ -471,6 +577,29 @@ pub(crate) fn show(
             _ => {}
         }
     }
+    let mut computed_declarations = if all_keyword.is_none() {
+        parent_style
+            .computed_declarations
+            .iter()
+            .filter(|declaration| ordinarily_inherited(declaration))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    computed_declarations.extend(
+        resolved_rules
+            .iter()
+            .flat_map(|(_, declarations)| declarations.iter())
+            .filter(|declaration| {
+                !matches!(
+                    declaration,
+                    Declaration::All(_) | Declaration::CustomProperty { .. }
+                )
+            })
+            .cloned(),
+    );
+    style.computed_declarations = std::sync::Arc::new(computed_declarations);
     crate::layout_style::resolve_flow(&mut style, &parent_style);
     style.finish();
     let style = Rc::new(style);
@@ -999,8 +1128,14 @@ pub(crate) fn show(
     ui.ctx()
         .data_mut(|d| d.insert_temp(id.with("state"), current_state));
     if stylesheet.rule_index.has_element_references {
+        let (_, current_element_rules, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
-            resolved_element_references(stylesheet, class, current_state);
+            resolved_element_references_from_rules(
+                stylesheet,
+                class,
+                current_state,
+                &current_element_rules,
+            );
     }
     let interaction_layout_changed = [(1, RuleState::Hovered), (2, RuleState::Active)]
         .into_iter()
@@ -1033,7 +1168,7 @@ pub(crate) fn show(
             .visuals
             .widgets
             .state(response.widget_state());
-        let (_, current_state_rules) = resolve_rules(current_state);
+        let (_, current_state_rules, _) = resolve_rules(current_state);
         let background_style = resolved_background_from_rules(&current_state_rules);
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO

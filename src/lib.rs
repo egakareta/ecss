@@ -888,6 +888,10 @@ fn apply_style_declarations(
     declarations: &[Declaration],
 ) {
     for declaration in declarations {
+        if let Declaration::All(keyword) = declaration {
+            reset_all_visuals(style, state, *keyword);
+            continue;
+        }
         if matches!(declaration, Declaration::Color(_)) {
             style.visuals.override_text_color = None;
         }
@@ -904,6 +908,36 @@ fn apply_style_declarations(
             RuleState::Hovered => apply_visual_declaration(&mut visuals.hovered, declaration),
             RuleState::Active => apply_visual_declaration(&mut visuals.active, declaration),
         }
+    }
+}
+
+fn reset_all_visuals(style: &mut egui::Style, state: RuleState, keyword: crate::css::AllKeyword) {
+    let defaults = egui::Style::default().visuals;
+    let widgets = &mut style.visuals.widgets;
+    let preserve_foreground = matches!(
+        keyword,
+        crate::css::AllKeyword::Inherit | crate::css::AllKeyword::Unset
+    );
+    let reset = |current: &mut WidgetVisuals, default: WidgetVisuals| {
+        let foreground = current.fg_stroke;
+        *current = default;
+        if preserve_foreground {
+            current.fg_stroke = foreground;
+        }
+    };
+    match state {
+        RuleState::Base => {
+            reset(&mut widgets.noninteractive, defaults.widgets.noninteractive);
+            reset(&mut widgets.inactive, defaults.widgets.inactive);
+            reset(&mut widgets.hovered, defaults.widgets.hovered);
+            reset(&mut widgets.active, defaults.widgets.active);
+            reset(&mut widgets.open, defaults.widgets.open);
+        }
+        RuleState::Hovered => reset(&mut widgets.hovered, defaults.widgets.hovered),
+        RuleState::Active => reset(&mut widgets.active, defaults.widgets.active),
+    }
+    if !preserve_foreground {
+        style.visuals.override_text_color = defaults.override_text_color;
     }
 }
 
@@ -927,6 +961,7 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
             }
         }
         Declaration::Layout(_)
+        | Declaration::All(_)
         | Declaration::BackgroundImage(_)
         | Declaration::BackgroundAttachment(_)
         | Declaration::BackgroundClip(_)

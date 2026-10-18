@@ -1294,6 +1294,7 @@ fn keyframe_timing(frames: &[Keyframe], offset: f32) -> Option<TimingFunction> {
 
 fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declaration)> {
     match declaration {
+        Declaration::All(_) => None,
         Declaration::Color(_) => Some(("color".to_owned(), declaration.clone())),
         Declaration::Background(_) => Some(("background-color".to_owned(), declaration.clone())),
         Declaration::BackgroundShorthand(background) => Some((
