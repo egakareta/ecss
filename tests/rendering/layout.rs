@@ -46,6 +46,43 @@ async fn nested_selectors_distribute_flex_space_and_gap_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn visibility_collapse_removes_flex_item_but_preserves_its_cross_size_test() {
+    let stylesheet = Stylesheet::parse(
+        ".row { display:flex; width:80px; background:white; }\
+         .collapsed { visibility:collapse; flex:1 1 0%; min-width:0; height:15px; background:red; }\
+         .tail { flex:1 1 0%; min-width:0; height:10px; background:blue; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let mut item = None;
+        let mut tail = None;
+        let row = ui.add(
+            (|ui: &mut egui::Ui| {
+                item = Some(ui.add(empty_response.selector(".collapsed")).rect);
+                tail = Some(ui.add(empty_response.selector(".tail")).rect);
+                ui.response()
+            })
+            .selector(".row"),
+        );
+        *capture.lock().unwrap() = Some((row.rect, item.unwrap(), tail.unwrap()));
+    })
+    .await;
+    let (row, item, tail) = bounds.lock().unwrap().unwrap();
+
+    near(tail.left(), row.left());
+    near(tail.width(), 80.0);
+    near(row.height(), 15.0);
+    assert_eq!(
+        pixel(&pixels, tail.center().x, tail.center().y),
+        [0, 0, 255, 255]
+    );
+    assert!(item.width() < tail.width());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn grid_tracks_spans_and_gaps_control_selector_boxes_test() {
     let stylesheet = Stylesheet::parse(
         ".grid { display: grid; width: 200px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 20px 30px; gap: 5px 10px; }\

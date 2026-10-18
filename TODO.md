@@ -20,7 +20,7 @@
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
-    `visibility`, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
+    ~~`visibility`~~, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Unsupported.**
@@ -167,10 +167,10 @@
   - `text-overflow` supports inline-end ellipsis and string markers; inline-start markers remain incomplete.
 - **[CSS Overflow Module Level 5](https://www.w3.org/TR/css-overflow-5/) - Unsupported.**
   - CSS properties: `scroll-axis-lock`, `scroll-marker-group`, `scroll-target-group`.
-- **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Partial.**
-  - CSS properties: ~~`display`~~, ~~`order`~~, `visibility`.
+- **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Supported.**
+  - CSS properties: ~~`display`~~, ~~`order`~~, ~~`visibility`~~.
 - **[CSS Display Level 4](https://www.w3.org/TR/css-display-4/) - Partial.**
-  - CSS properties: ~~`display`~~, ~~`order`~~, `reading-flow`, `reading-order`, `visibility`.
+  - CSS properties: ~~`display`~~, ~~`order`~~, `reading-flow`, `reading-order`, ~~`visibility`~~.
 - **[CSS Inline Layout Module Level 3](https://www.w3.org/TR/css-inline-3/) - Partial.**
   - CSS properties: `alignment-baseline`, `baseline-shift`, `baseline-source`, `dominant-baseline`, `initial-letter`,
     `initial-letter-align`, `initial-letter-wrap`, `inline-sizing`, `line-fit-edge`, ~~`line-height`~~, `text-box`,
@@ -433,7 +433,7 @@
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
-    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
+    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
     `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **[CSS Snapshot 2007](https://www.w3.org/TR/css-beijing/) - Unsupported.**
 - **[CSS Snapshot 2010](https://www.w3.org/TR/css-2010/) - Unsupported.**
@@ -481,7 +481,7 @@ These property-bearing specifications also appear in the W3C generated property 
     `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
-    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, `visibility`,
+    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
     `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **CSS Form Control Styling Level 1 - Unsupported.**
   - CSS properties: `field-sizing`, `input-security`, `slider-orientation`.
