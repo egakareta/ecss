@@ -40,7 +40,7 @@ enum Value {
     Constant(f32),
     Percentage(f32),
     Binary(char, Box<Expression>, Box<Expression>),
-    Function(String, Vec<Expression>),
+    Function(String, Vec<Expression>, Option<f32>),
     Clamp(Box<Expression>),
 }
 
@@ -66,7 +66,7 @@ impl Expression {
                     _ => a / b,
                 }
             }
-            Value::Function(name, args) => {
+            Value::Function(name, args, pixels_per_point) => {
                 let values: Vec<_> = args.iter().map(|arg| arg.evaluate(basis)).collect();
                 let a = values[0];
                 match name.as_str() {
@@ -102,6 +102,15 @@ impl Expression {
                     "atan2" => a.atan2(values[1]),
                     "mod" => a - values[1] * (a / values[1]).floor(),
                     "rem" => a % values[1],
+                    "round-line-width" => {
+                        let pixels_per_point =
+                            pixels_per_point.expect("line-width rounding has a pixel scale");
+                        if values.len() == 1 {
+                            snap_line_width(a, pixels_per_point)
+                        } else {
+                            round_line_width(a, values[1], pixels_per_point)
+                        }
+                    }
                     name if name.starts_with("round") => {
                         let step = values.get(1).copied().unwrap_or(1.0);
                         let v = a / step;
@@ -122,7 +131,7 @@ impl Expression {
         match &self.value {
             Value::Percentage(_) => true,
             Value::Binary(_, a, b) => a.percentage() || b.percentage(),
-            Value::Function(_, a) => a.iter().any(Self::percentage),
+            Value::Function(_, a, _) => a.iter().any(Self::percentage),
             Value::Clamp(a) => a.percentage(),
             _ => false,
         }
@@ -139,7 +148,7 @@ impl Expression {
                 '/' => left.percentage_only() && right.kind == Kind::Number,
                 _ => false,
             },
-            Value::Function(_, arguments) => arguments.iter().all(Self::percentage_only),
+            Value::Function(_, arguments, _) => arguments.iter().all(Self::percentage_only),
             Value::Clamp(value) => value.percentage_only(),
             _ => false,
         }
@@ -257,6 +266,44 @@ pub(crate) fn resolve(handle: *const (), basis: f32) -> f32 {
             value.clamp(-1.0e12, 1.0e12)
         }
     })
+}
+
+fn round_line_width(value: f32, step: f32, pixels_per_point: f32) -> f32 {
+    let step = step.abs();
+    if step == 0.0 {
+        return f32::NAN;
+    }
+
+    let quotient = value / step;
+    let lower = quotient.floor() * step;
+    let upper = lower + step;
+    let rounded = if value == lower || value == upper {
+        value
+    } else if lower == 0.0 {
+        upper
+    } else if upper == 0.0 || value - lower < upper - value {
+        lower
+    } else {
+        upper
+    };
+
+    snap_line_width(rounded, pixels_per_point)
+}
+
+fn snap_line_width(value: f32, pixels_per_point: f32) -> f32 {
+    if value == 0.0 {
+        return value;
+    }
+
+    let pixels_per_point = pixels_per_point.max(f32::MIN_POSITIVE);
+    let device_pixels = value * pixels_per_point;
+    if device_pixels.fract() == 0.0 {
+        value
+    } else if device_pixels.abs() < 1.0 {
+        device_pixels.signum() / pixels_per_point
+    } else {
+        device_pixels.trunc() / pixels_per_point
+    }
 }
 
 pub(crate) fn length(
@@ -460,16 +507,21 @@ fn atom<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
 }
 fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
     let mut name = name.to_owned();
+    let mut line_width_rounding = false;
     if name == "round"
         && let Ok(strategy) = parser.try_parse(|p| {
-            let value = p.expect_ident_cloned()?;
-            if !matches!(value.as_ref(), "nearest" | "up" | "down" | "to-zero") {
+            let value = p.expect_ident_cloned()?.to_ascii_lowercase();
+            if !matches!(
+                value.as_str(),
+                "nearest" | "up" | "down" | "to-zero" | "line-width"
+            ) {
                 return Err(ParseError::<&'static str>::custom("invalid round strategy"));
             }
             p.expect_comma()?;
-            Ok(value.to_string())
+            Ok(value)
         })
     {
+        line_width_rounding = strategy == "line-width";
         name.push('-');
         name.push_str(&strategy);
     }
@@ -493,6 +545,11 @@ fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> Result
             kind
         }
         "mod" | "rem" if count == 2 => kind,
+        "round-line-width"
+            if line_width_rounding && (1..=2).contains(&count) && kind == Kind::Length =>
+        {
+            kind
+        }
         n if n.starts_with("round")
             && matches!(
                 n,
@@ -516,8 +573,9 @@ fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> Result
     if args.iter().any(|arg| arg.kind != kind) {
         return Err(ParseError::custom("incompatible function dimensions"));
     }
+    let pixels_per_point = line_width_rounding.then_some(units.pixels_per_point);
     Ok(Expression {
         kind: output,
-        value: Value::Function(name, args),
+        value: Value::Function(name, args, pixels_per_point),
     })
 }

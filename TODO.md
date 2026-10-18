@@ -30,7 +30,7 @@
 - **[CSS Cascading and Inheritance Level 6](https://www.w3.org/TR/css-cascade-6/) - Unsupported.**
 - **[CSS Generated and Replaced Content](https://www.w3.org/TR/css3-content/) - Unsupported.**
   - CSS properties: `bookmark-label`, `bookmark-level`, `bookmark-state`, `content`, `quotes`, `string-set`.
-- **CSS Math - Partial.**
+- **CSS Math - Supported.**
 - **[CSS style Attribute Syntax](https://www.w3.org/TR/css-style-attr/) - Unsupported.**
 - **[CSS Syntax](https://www.w3.org/TR/css3-syntax/) - Unsupported.**
 - **[CSS Values and Units Level 3](https://www.w3.org/TR/css3-values/) - Partial.**
