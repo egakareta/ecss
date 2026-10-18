@@ -153,17 +153,16 @@
   - CSS properties: ~~`aspect-ratio`~~, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
     `contain-intrinsic-size`, `contain-intrinsic-width`, `frame-sizing`, `max-size`, `min-intrinsic-sizing`, `min-size`,
     `size`.
-- **[CSS Overflow Module Level 3](https://www.w3.org/TR/css-overflow-3/) - Partial.**
+- **[CSS Overflow Module Level 3](https://www.w3.org/TR/css-overflow-3/) - Supported.**
   - CSS properties: ~~`overflow`~~, ~~`overflow-block`~~, ~~`overflow-clip-margin`~~, ~~`overflow-inline`~~, ~~`overflow-x`~~, ~~`overflow-y`~~,
-    `scroll-behavior`, ~~`scrollbar-gutter`~~, `text-overflow`.
-  - `text-overflow` supports inline-end ellipsis and string markers; inline-start markers remain incomplete.
+    ~~`scroll-behavior`~~, ~~`scrollbar-gutter`~~, ~~`text-overflow`~~.
+  - `scroll-behavior` is accepted but ignored, as the specification permits. The parser's additional string/two-value `text-overflow` syntax is an extension that supports inline-end markers only.
 - **[CSS Overflow Module Level 4](https://www.w3.org/TR/css-overflow-4/) - Unsupported.**
   - CSS properties: `-webkit-line-clamp`, `block-ellipsis`, `continue`, `line-clamp`, `max-lines`,
     ~~`overflow-clip-margin`~~, ~~`overflow-clip-margin-block`~~, ~~`overflow-clip-margin-block-end`~~, ~~`overflow-clip-margin-block-start`~~,
     ~~`overflow-clip-margin-bottom`~~, ~~`overflow-clip-margin-inline`~~, ~~`overflow-clip-margin-inline-end`~~,
     ~~`overflow-clip-margin-inline-start`~~, ~~`overflow-clip-margin-left`~~, ~~`overflow-clip-margin-right`~~,
-    ~~`overflow-clip-margin-top`~~, `text-overflow`.
-  - `text-overflow` supports inline-end ellipsis and string markers; inline-start markers remain incomplete.
+    ~~`overflow-clip-margin-top`~~, ~~`text-overflow`~~.
 - **[CSS Overflow Module Level 5](https://www.w3.org/TR/css-overflow-5/) - Unsupported.**
   - CSS properties: `scroll-axis-lock`, `scroll-marker-group`, `scroll-target-group`.
 - **[CSS Display Module Level 3](https://www.w3.org/TR/css-display-3/) - Supported.**
@@ -240,7 +239,7 @@
   - Partial because: CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are rejected, `border-color` supports colors/currentcolor and `stripes()` but not arbitrary `<image-1D>` values, some painting behavior is approximate (for example, fixed shade factors for 3D border styles).
 - **[CSS Basic User Interface](https://www.w3.org/TR/css3-ui/) - Unsupported.**
   - CSS properties: `box-sizing`, `caret-color`, `cursor`, `outline`, `outline-color`, `outline-offset`, `outline-style`,
-    `outline-width`, `resize`, `text-overflow`.
+    `outline-width`, `resize`, ~~`text-overflow`~~.
 - **[CSS Color](https://www.w3.org/TR/css3-color/) - Unsupported.**
   - CSS properties: ~~`color`~~, `opacity`.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**

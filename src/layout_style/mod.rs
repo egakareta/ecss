@@ -263,6 +263,7 @@ fn supported(name: &str) -> bool {
                 | "aspect-ratio"
                 | "position"
                 | "will-change"
+                | "scroll-behavior"
                 | "top"
                 | "right"
                 | "bottom"
@@ -468,6 +469,13 @@ impl Declaration {
         }
         if crate::formatting::apply(name, value, output, units)? {
             return Ok(());
+        }
+        if name == "scroll-behavior" {
+            return if value.eq_ignore_ascii_case("auto") || value.eq_ignore_ascii_case("smooth") {
+                Ok(())
+            } else {
+                Err("invalid scroll-behavior")
+            };
         }
         if crate::box_decoration::apply(name, value, output, units)? {
             return Ok(());

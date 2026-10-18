@@ -442,6 +442,20 @@ fn scrollbar_properties_validate_their_value_grammars() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn scroll_behavior_accepts_values_the_user_agent_may_ignore() {
+    Stylesheet::parse(".scroll { scroll-behavior: AUTO; }").unwrap();
+    Stylesheet::parse(".scroll { scroll-behavior: smooth; }").unwrap();
+
+    for value in ["instant", "smooth auto", "2"] {
+        assert!(
+            Stylesheet::parse(&format!(".scroll {{ scroll-behavior: {value}; }}")).is_err(),
+            "accepted invalid scroll-behavior: {value}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn overscroll_behavior_properties_validate_their_value_grammars() {
     Stylesheet::parse(
         ".scroll { overscroll-behavior: AUTO contain; overscroll-behavior-x:none; \

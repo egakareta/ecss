@@ -130,6 +130,20 @@ fn vertical_writing_uses_logical_sizes_and_block_progression() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn logical_sizes_use_the_final_writing_mode_regardless_of_declaration_order() {
+    let context = Context::default();
+    Stylesheet::parse(".item { inline-size:30px; block-size:20px; writing-mode:vertical-rl; }")
+        .unwrap()
+        .install(&context);
+    let mut rect = Rect::NOTHING;
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        rect = ui.add(empty_response.selector(".item")).rect;
+    });
+    assert_eq!(rect.size(), vec2(20.0, 30.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn collapsed_flex_item_keeps_its_line_strut_but_not_main_axis_space() {
     let context = Context::default();
     Stylesheet::parse(
