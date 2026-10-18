@@ -401,9 +401,9 @@
   - CSS properties: ~~`scrollbar-color`~~, ~~`scrollbar-width`~~.
 - **[CSS Spatial Navigation Level 1](https://www.w3.org/TR/css-nav-1/) - Unsupported.**
   - CSS properties: `spatial-navigation-action`, `spatial-navigation-contain`, `spatial-navigation-function`.
-- **[CSS Overscroll Behavior Level 1](https://www.w3.org/TR/css-overscroll-1/) - Unsupported.**
-  - CSS properties: `overscroll-behavior`, `overscroll-behavior-block`, `overscroll-behavior-inline`, `overscroll-behavior-x`,
-    `overscroll-behavior-y`.
+- **[CSS Overscroll Behavior Level 1](https://www.w3.org/TR/css-overscroll-1/) - Supported.**
+  - CSS properties: ~~`overscroll-behavior`~~, ~~`overscroll-behavior-block`~~, ~~`overscroll-behavior-inline`~~, ~~`overscroll-behavior-x`~~,
+    ~~`overscroll-behavior-y`~~.
 - **[CSS Scroll Anchoring Level 1](https://www.w3.org/TR/css-scroll-anchoring-1/) - Unsupported.**
   - CSS properties: `overflow-anchor`.
 

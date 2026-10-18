@@ -195,7 +195,10 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
             crate::css::AllKeyword::Inherit | crate::css::AllKeyword::Unset
         ),
         Declaration::Layout(declaration) => {
-            keyword == crate::css::AllKeyword::Inherit && declaration.name == "border-radius"
+            keyword == crate::css::AllKeyword::Inherit
+                && (declaration.name == "border-radius"
+                    || declaration.name == "overscroll-behavior"
+                    || declaration.name.starts_with("overscroll-behavior-"))
         }
         _ => keyword == crate::css::AllKeyword::Inherit,
     }
@@ -1851,16 +1854,29 @@ fn scroll_box(
         style.layout.overflow.x == Overflow::Scroll,
         style.layout.overflow.y == Overflow::Scroll,
     ];
+    let scroll_containers = [
+        style.layout.overflow.x.is_scroll_container(),
+        style.layout.overflow.y.is_scroll_container(),
+    ];
     for axis in 0..2 {
         if !axes[axis] {
             offset[axis] = 0.0;
+            if hovered
+                && scroll_containers[axis]
+                && style.overscroll_behavior[axis] != crate::layout_style::OverscrollBehavior::Auto
+            {
+                ui.input_mut(|input| input.smooth_scroll_delta[axis] = 0.0);
+            }
             continue;
         }
         if hovered {
             ui.input_mut(|input| {
                 let delta = input.smooth_scroll_delta[axis];
                 let next = (offset[axis] - delta).clamp(0.0, maximum[axis]);
-                if next != offset[axis] {
+                if next != offset[axis]
+                    || style.overscroll_behavior[axis]
+                        != crate::layout_style::OverscrollBehavior::Auto
+                {
                     input.smooth_scroll_delta[axis] = 0.0;
                 }
                 offset[axis] = next;

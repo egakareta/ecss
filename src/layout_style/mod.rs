@@ -34,6 +34,7 @@ pub(crate) struct BoxStyle {
     pub(crate) current_color: Color32,
     pub(crate) scrollbar_color: ScrollbarColor,
     pub(crate) scrollbar_width: ScrollbarWidth,
+    pub(crate) overscroll_behavior: [OverscrollBehavior; 2],
     pub intrinsic_min: Size<Option<IntrinsicSizing>>,
     pub intrinsic_max: Size<Option<IntrinsicSizing>>,
     pub scrollbar_gutter: ScrollbarGutter,
@@ -97,6 +98,14 @@ impl ScrollbarWidth {
             Self::None => 0.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OverscrollBehavior {
+    #[default]
+    Auto,
+    Contain,
+    None,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -164,6 +173,7 @@ impl Default for BoxStyle {
             current_color: Color32::BLACK,
             scrollbar_color: ScrollbarColor::Auto,
             scrollbar_width: ScrollbarWidth::Auto,
+            overscroll_behavior: [OverscrollBehavior::Auto; 2],
             intrinsic_min: Size {
                 width: None,
                 height: None,
@@ -350,6 +360,11 @@ fn supported(name: &str) -> bool {
                 | "scrollbar-gutter"
                 | "scrollbar-color"
                 | "scrollbar-width"
+                | "overscroll-behavior"
+                | "overscroll-behavior-x"
+                | "overscroll-behavior-y"
+                | "overscroll-behavior-inline"
+                | "overscroll-behavior-block"
                 | "visibility"
                 | "order"
                 | "z-index"
@@ -690,6 +705,26 @@ impl Declaration {
                 &parts,
                 units,
             )?,
+            "overscroll-behavior" => {
+                if parts.is_empty() || parts.len() > 2 {
+                    return Err("invalid overscroll-behavior");
+                }
+                let x = overscroll_behavior(&parts[0])?;
+                let y = parts
+                    .get(1)
+                    .map_or(Ok(x), |value| overscroll_behavior(value))?;
+                output.overscroll_behavior = [x, y];
+            }
+            "overscroll-behavior-x"
+            | "overscroll-behavior-y"
+            | "overscroll-behavior-inline"
+            | "overscroll-behavior-block" => {
+                if parts.len() != 1 {
+                    return Err("invalid overscroll-behavior");
+                }
+                let axis = overscroll_axis(name, output.format.writing).unwrap();
+                output.overscroll_behavior[axis] = overscroll_behavior(&parts[0])?;
+            }
             "scrollbar-gutter" => {
                 output.scrollbar_gutter = match parts.as_slice() {
                     [value] if value == "auto" => ScrollbarGutter::Auto,
@@ -999,6 +1034,15 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     if name == "overflow-clip-margin" {
         out.overflow_clip_box = source.overflow_clip_box;
         out.overflow_clip_margin = source.overflow_clip_margin;
+        return;
+    }
+    if name == "overscroll-behavior" {
+        out.overscroll_behavior = source.overscroll_behavior;
+        return;
+    }
+    if let Some(target_axis) = overscroll_axis(name, out.format.writing) {
+        let source_axis = overscroll_axis(name, source.format.writing).unwrap();
+        out.overscroll_behavior[target_axis] = source.overscroll_behavior[source_axis];
         return;
     }
     if name == "flow" {
@@ -1608,6 +1652,25 @@ fn overflow(value: &str) -> Result<Overflow, &'static str> {
         "scroll" => Ok(Overflow::Scroll),
         "auto" => Ok(Overflow::Scroll),
         _ => Err("invalid overflow"),
+    }
+}
+
+fn overscroll_behavior(value: &str) -> Result<OverscrollBehavior, &'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "auto" => Ok(OverscrollBehavior::Auto),
+        "contain" => Ok(OverscrollBehavior::Contain),
+        "none" => Ok(OverscrollBehavior::None),
+        _ => Err("invalid overscroll-behavior"),
+    }
+}
+
+fn overscroll_axis(name: &str, writing: crate::formatting::Writing) -> Option<usize> {
+    match name {
+        "overscroll-behavior-x" => Some(0),
+        "overscroll-behavior-y" => Some(1),
+        "overscroll-behavior-inline" => Some(usize::from(writing.vertical())),
+        "overscroll-behavior-block" => Some(usize::from(!writing.vertical())),
+        _ => None,
     }
 }
 

@@ -439,3 +439,132 @@ fn scrollbar_properties_validate_their_value_grammars() {
     )
     .unwrap();
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn overscroll_behavior_properties_validate_their_value_grammars() {
+    Stylesheet::parse(
+        ".scroll { overscroll-behavior: AUTO contain; overscroll-behavior-x:none; \
+         overscroll-behavior-y:CONTAIN; overscroll-behavior-block:auto; \
+         overscroll-behavior-inline:none; }",
+    )
+    .unwrap();
+
+    for (property, value) in [
+        ("overscroll-behavior", "scroll"),
+        ("overscroll-behavior", "auto contain none"),
+        ("overscroll-behavior-x", "auto none"),
+        ("overscroll-behavior-y", "initial auto"),
+        ("overscroll-behavior-block", "overscroll"),
+        ("overscroll-behavior-inline", "contain none"),
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".scroll {{ {property}:{value}; }}")).is_err(),
+            "accepted invalid {property}: {value}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn overscroll_behavior_controls_nested_scroll_chaining() {
+    fn scroll(parent_properties: &str, inner_properties: &str) -> (f32, f32) {
+        let context = Context::default();
+        Stylesheet::parse(&format!(
+            ".outer {{ width:80px; height:40px; overflow:auto; scrollbar-width:none; {parent_properties} }}\
+             .inner {{ width:80px; height:30px; overflow:auto; scrollbar-width:none; {inner_properties} }}\
+             .inner-content {{ width:80px; height:60px; }} .tail {{ width:80px; height:100px; }}"
+        ))
+        .unwrap()
+        .install(&context);
+
+        let inner_top = std::cell::Cell::new(0.0);
+        let inner_content_top = std::cell::Cell::new(0.0);
+        let tail_top = std::cell::Cell::new(0.0);
+        let mut build = |ui: &mut Ui| {
+            ui.add(
+                (|ui: &mut Ui| {
+                    let inner = ui.add(
+                        (|ui: &mut Ui| {
+                            inner_content_top
+                                .set(ui.add(empty_response.selector(".inner-content")).rect.top());
+                            ui.response()
+                        })
+                        .selector(".inner"),
+                    );
+                    inner_top.set(inner.rect.top());
+                    tail_top.set(ui.add(empty_response.selector(".tail")).rect.top());
+                    ui.response()
+                })
+                .selector(".outer"),
+            );
+        };
+
+        frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+        for (time, delta, start) in [(0.1, -1000.0, 2), (0.9, -1000.0, 10)] {
+            frame(
+                &context,
+                200.0,
+                time,
+                vec![
+                    Event::PointerMoved(pos2(10.0, 10.0)),
+                    Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: vec2(0.0, delta),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Modifiers::NONE,
+                        source: egui::MouseWheelSource::Unknown,
+                    },
+                ],
+                &mut build,
+            );
+            for i in start..start + 7 {
+                frame(&context, 200.0, i as f64 * 0.1, Vec::new(), &mut build);
+            }
+        }
+
+        (inner_content_top.get() - inner_top.get(), tail_top.get())
+    }
+
+    let (_, auto_tail) = scroll("", "overscroll-behavior-y:auto");
+    assert!(
+        auto_tail < 0.0,
+        "auto should chain to the outer scroller: {auto_tail}"
+    );
+
+    for (parent, inner) in [
+        ("", "overscroll-behavior:contain"),
+        ("", "overscroll-behavior-y:none"),
+        ("", "overscroll-behavior-block:contain"),
+        (
+            "",
+            "writing-mode:vertical-rl; overscroll-behavior-inline:contain",
+        ),
+        (
+            "overscroll-behavior-y:contain",
+            "overscroll-behavior-y:inherit",
+        ),
+        (
+            "overscroll-behavior-y:contain",
+            "all:inherit; width:80px; height:30px; overflow:auto; scrollbar-width:none",
+        ),
+    ] {
+        let (inner_offset, chained_tail) = scroll(parent, inner);
+        assert!(
+            (inner_offset + 30.0).abs() < 0.05,
+            "inner scroll should reach its boundary: {inner_offset} ({inner})"
+        );
+        assert!(
+            (chained_tail - 30.0).abs() < 0.05,
+            "nested scroll should not chain: {chained_tail} ({inner})"
+        );
+    }
+
+    let (inner_offset, chained_tail) =
+        scroll("", "overflow-y:hidden; overscroll-behavior-y:contain");
+    assert!(inner_offset.abs() < 0.05, "hidden overflow must not scroll");
+    assert!(
+        (chained_tail - 30.0).abs() < 0.05,
+        "a contained hidden scroll axis must not chain: {chained_tail}"
+    );
+}
