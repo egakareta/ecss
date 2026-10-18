@@ -186,6 +186,86 @@ async fn flow_root_keeps_visible_overflow_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn scrollbar_styles_paint_colors_and_apply_width_inheritance_test() {
+    let stylesheet = Stylesheet::parse(
+        ".row { display:flex; width:236px; height:40px; gap:4px; } \
+         .custom { width:56px; height:40px; flex:0 0 56px; overflow-y:scroll; color:red; scrollbar-color:currentcolor blue; } \
+         .thin { width:56px; height:40px; flex:0 0 56px; overflow-y:scroll; scrollbar-color:lime blue; scrollbar-width:thin; } \
+         .none { width:56px; height:40px; flex:0 0 56px; overflow-y:scroll; scrollbar-color:orange blue; scrollbar-width:none; } \
+         .inherit-parent { width:56px; height:40px; flex:0 0 56px; color:purple; scrollbar-color:currentcolor blue; scrollbar-width:none; } \
+         .inner-scroll { width:56px; height:40px; overflow-y:scroll; color:lime; } \
+         .child { width:56px; height:100px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                let custom = ui
+                    .add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(empty_response.selector(".child"));
+                            ui.response()
+                        })
+                        .selector(".custom"),
+                    )
+                    .rect;
+                let thin = ui
+                    .add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(empty_response.selector(".child"));
+                            ui.response()
+                        })
+                        .selector(".thin"),
+                    )
+                    .rect;
+                let none = ui
+                    .add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(empty_response.selector(".child"));
+                            ui.response()
+                        })
+                        .selector(".none"),
+                    )
+                    .rect;
+                let inherited = ui
+                    .add(
+                        (|ui: &mut egui::Ui| {
+                            ui.add(
+                                (|ui: &mut egui::Ui| {
+                                    ui.add(empty_response.selector(".child"));
+                                    ui.response()
+                                })
+                                .selector(".inner-scroll"),
+                            );
+                            ui.response()
+                        })
+                        .selector(".inherit-parent"),
+                    )
+                    .rect;
+                *capture.lock().unwrap() = Some([custom, thin, none, inherited]);
+                ui.response()
+            })
+            .selector(".row"),
+        );
+    })
+    .await;
+    let [custom, thin, none, inherited] = bounds.lock().unwrap().unwrap();
+    let pixel_at = |rect: egui::Rect, right: f32, top: f32| {
+        pixel(&pixels, rect.right() - right, rect.top() + top)
+    };
+    assert_eq!(pixel_at(custom, 3.0, 5.0), [255, 0, 0, 255]);
+    assert_eq!(pixel_at(custom, 3.0, 25.0), [0, 0, 255, 255]);
+    assert_eq!(pixel_at(thin, 2.0, 5.0), [0, 255, 0, 255]);
+    assert_eq!(pixel_at(thin, 5.0, 5.0), [255; 4]);
+    assert_eq!(pixel_at(none, 3.0, 5.0), [255; 4]);
+    assert_eq!(pixel_at(inherited, 3.0, 5.0), [128, 0, 128, 255]);
+    assert_eq!(pixel_at(inherited, 3.0, 25.0), [0, 0, 255, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn named_grid_areas_position_children_independently_of_source_order_test() {
     let stylesheet=Stylesheet::parse(
         ".grid { display: grid; width: 150px; grid-template-columns: 50px 100px; grid-template-rows: 20px 30px; grid-template-areas: 'head head' 'nav main'; }\

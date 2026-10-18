@@ -30,6 +30,9 @@ pub(crate) struct BoxStyle {
     pub hidden: bool,
     pub collapsed: bool,
     pub margin_trim: [bool; 4],
+    pub(crate) current_color: Color32,
+    pub(crate) scrollbar_color: ScrollbarColor,
+    pub(crate) scrollbar_width: ScrollbarWidth,
     pub intrinsic_min: Size<Option<IntrinsicSizing>>,
     pub intrinsic_max: Size<Option<IntrinsicSizing>>,
     pub scrollbar_gutter: ScrollbarGutter,
@@ -77,6 +80,59 @@ pub(crate) enum ScrollbarGutter {
     StableBothEdges,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScrollbarWidth {
+    #[default]
+    Auto,
+    Thin,
+    None,
+}
+
+impl ScrollbarWidth {
+    pub(crate) fn thickness(self) -> f32 {
+        match self {
+            Self::Auto => 6.0,
+            Self::Thin => 4.0,
+            Self::None => 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScrollbarColor {
+    #[default]
+    Auto,
+    Colors([ScrollbarColorValue; 2]),
+}
+
+impl ScrollbarColor {
+    pub(crate) fn inherited(self, current_color: Color32) -> Self {
+        match self {
+            Self::Auto => Self::Auto,
+            Self::Colors(colors) => Self::Colors(colors.map(|color| match color {
+                ScrollbarColorValue::CurrentColor => ScrollbarColorValue::Color(current_color),
+                color => color,
+            })),
+        }
+    }
+
+    pub(crate) fn resolve(self, current_color: Color32) -> Option<[Color32; 2]> {
+        match self {
+            Self::Auto => None,
+            Self::Colors(colors) => Some(colors.map(|color| match color {
+                ScrollbarColorValue::CurrentColor => current_color,
+                ScrollbarColorValue::Color(color) => color,
+            })),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollbarColorValue {
+    CurrentColor,
+    Color(Color32),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IntrinsicSizing {
     MinContent,
@@ -103,6 +159,9 @@ impl Default for BoxStyle {
             hidden: false,
             collapsed: false,
             margin_trim: [false; 4],
+            current_color: Color32::BLACK,
+            scrollbar_color: ScrollbarColor::Auto,
+            scrollbar_width: ScrollbarWidth::Auto,
             intrinsic_min: Size {
                 width: None,
                 height: None,
@@ -287,6 +346,8 @@ fn supported(name: &str) -> bool {
                 | "overflow-clip-margin-inline-start"
                 | "overflow-clip-margin-inline-end"
                 | "scrollbar-gutter"
+                | "scrollbar-color"
+                | "scrollbar-width"
                 | "visibility"
                 | "order"
                 | "z-index"
@@ -637,6 +698,25 @@ impl Declaration {
                     _ => return Err("invalid scrollbar-gutter"),
                 };
             }
+            "scrollbar-color" => {
+                output.scrollbar_color =
+                    if parts.len() == 1 && parts[0].eq_ignore_ascii_case("auto") {
+                        ScrollbarColor::Auto
+                    } else {
+                        let [thumb, track] = parts.as_slice() else {
+                            return Err("invalid scrollbar-color");
+                        };
+                        ScrollbarColor::Colors([scrollbar_color(thumb)?, scrollbar_color(track)?])
+                    };
+            }
+            "scrollbar-width" => {
+                output.scrollbar_width = match value.to_ascii_lowercase().as_str() {
+                    "auto" => ScrollbarWidth::Auto,
+                    "thin" => ScrollbarWidth::Thin,
+                    "none" => ScrollbarWidth::None,
+                    _ => return Err("invalid scrollbar-width"),
+                };
+            }
             "overflow-clip-margin-block" | "overflow-clip-margin-inline" => {
                 if parts.is_empty() || parts.len() > 2 {
                     return Err("invalid overflow-clip-margin");
@@ -902,6 +982,7 @@ fn inherited(name: &str) -> bool {
             | "empty-cells"
             | "orphans"
             | "widows"
+            | "scrollbar-color"
     )
 }
 
@@ -932,6 +1013,14 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     }
     if name == "scrollbar-gutter" {
         out.scrollbar_gutter = source.scrollbar_gutter;
+        return;
+    }
+    if name == "scrollbar-color" {
+        out.scrollbar_color = source.scrollbar_color.inherited(source.current_color);
+        return;
+    }
+    if name == "scrollbar-width" {
+        out.scrollbar_width = source.scrollbar_width;
         return;
     }
     if name == "will-change" {
@@ -1519,6 +1608,16 @@ fn overflow(value: &str) -> Result<Overflow, &'static str> {
         _ => Err("invalid overflow"),
     }
 }
+
+fn scrollbar_color(value: &str) -> Result<ScrollbarColorValue, &'static str> {
+    if value.eq_ignore_ascii_case("currentcolor") {
+        return Ok(ScrollbarColorValue::CurrentColor);
+    }
+    crate::css::parse_color(&mut Parser::new(value))
+        .map(ScrollbarColorValue::Color)
+        .map_err(|_| "invalid scrollbar-color")
+}
+
 fn direction(value: &str) -> Result<FlexDirection, &'static str> {
     match value {
         "row" => Ok(FlexDirection::Row),

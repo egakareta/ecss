@@ -398,8 +398,8 @@
   - CSS properties: `scroll-initial-target`, `scroll-start-target`.
 - **[CSS Round Display Level 1](https://www.w3.org/TR/css-round-display-1/) - Unsupported.**
   - CSS properties: `border-boundary`, `shape-inside`.
-- **[CSS Scrollbars Styling Level 1](https://www.w3.org/TR/css-scrollbars-1/) - Unsupported.**
-  - CSS properties: `scrollbar-color`, `scrollbar-width`.
+- **[CSS Scrollbars Styling Level 1](https://www.w3.org/TR/css-scrollbars-1/) - Supported.**
+  - CSS properties: ~~`scrollbar-color`~~, ~~`scrollbar-width`~~.
 - **[CSS Spatial Navigation Level 1](https://www.w3.org/TR/css-nav-1/) - Unsupported.**
   - CSS properties: `spatial-navigation-action`, `spatial-navigation-contain`, `spatial-navigation-function`.
 - **[CSS Overscroll Behavior Level 1](https://www.w3.org/TR/css-overscroll-1/) - Unsupported.**

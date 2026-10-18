@@ -5,7 +5,7 @@ use super::*;
 fn wheel_scroll_moves_descendants_and_clamps_at_both_extents() {
     let context = Context::default();
     Stylesheet::parse(
-        ".scroll { width:80px; height:40px; overflow:auto; } .child { width:20px; height:100px; }",
+        ".scroll { width:80px; height:40px; overflow:auto; scrollbar-width:none; } .child { width:20px; height:100px; }",
     )
     .unwrap()
     .install(&context);
@@ -256,7 +256,7 @@ fn overflow_clip_margin_expands_only_clip_overflow_edges() {
 fn scrollbar_gutter_stable_reserves_scrollport_space() {
     let context = Context::default();
     Stylesheet::parse(
-        ".auto { width:100px; height:40px; overflow:auto; } .stable { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable; } .both { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable both-edges; } .hidden { width:100px; height:40px; overflow:hidden; scrollbar-gutter:stable; } .clip { width:100px; height:40px; overflow:clip; scrollbar-gutter:stable; } .child { width:100%; height:10px; }",
+        ".auto { width:100px; height:40px; overflow:auto; } .stable { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable; } .both { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable both-edges; } .hidden { width:100px; height:40px; overflow:hidden; scrollbar-gutter:stable; } .clip { width:100px; height:40px; overflow:clip; scrollbar-gutter:stable; } .thin { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable; scrollbar-width:thin; } .none { width:100px; height:40px; overflow:auto; scrollbar-gutter:stable; scrollbar-width:none; } .child { width:100%; height:10px; }",
     )
     .unwrap()
     .install(&context);
@@ -265,7 +265,9 @@ fn scrollbar_gutter_stable_reserves_scrollport_space() {
     frame(&context, 600.0, 0.0, Vec::new(), |ui| {
         parents.clear();
         children.clear();
-        for class in [".auto", ".stable", ".both", ".hidden", ".clip"] {
+        for class in [
+            ".auto", ".stable", ".both", ".hidden", ".clip", ".thin", ".none",
+        ] {
             let response = ui.add(
                 (|ui: &mut Ui| {
                     children.push(ui.add(empty_response.selector(".child")).rect);
@@ -288,6 +290,8 @@ fn scrollbar_gutter_stable_reserves_scrollport_space() {
     assert!((children[2].left() - children[1].left() - 6.0).abs() < 0.05);
     assert!((children[3].width() - 94.0).abs() < 0.05, "{children:?}");
     assert!((children[4].width() - 100.0).abs() < 0.05, "{children:?}");
+    assert!((children[5].width() - 96.0).abs() < 0.05, "{children:?}");
+    assert!((children[6].width() - 100.0).abs() < 0.05, "{children:?}");
     for value in [
         "both-edges",
         "auto both-edges",
@@ -299,4 +303,30 @@ fn scrollbar_gutter_stable_reserves_scrollport_space() {
             "accepted invalid value: {value}"
         );
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn scrollbar_properties_validate_their_value_grammars() {
+    for value in [
+        "red",
+        "auto blue",
+        "red blue green",
+        "red currentcolor green",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".scroll {{ scrollbar-color:{value}; }}")).is_err(),
+            "accepted invalid scrollbar-color: {value}"
+        );
+    }
+    for value in ["normal", "medium", "4px"] {
+        assert!(
+            Stylesheet::parse(&format!(".scroll {{ scrollbar-width:{value}; }}")).is_err(),
+            "accepted invalid scrollbar-width: {value}"
+        );
+    }
+    Stylesheet::parse(
+        ".scroll { scrollbar-color:currentColor transparent; scrollbar-width:THIN; }",
+    )
+    .unwrap();
 }

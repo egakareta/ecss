@@ -233,6 +233,14 @@ pub(crate) fn show(
             .unwrap_or_else(|| Rc::new(BoxStyle::default()))
     };
     let mut style = BoxStyle::default();
+    style.current_color = if root {
+        ui.visuals().widgets.noninteractive.fg_stroke.color
+    } else {
+        parent_style.current_color
+    };
+    style.scrollbar_color = parent_style
+        .scrollbar_color
+        .inherited(parent_style.current_color);
     style.layout.direction = parent_style.layout.direction;
     style.custom_properties = parent_style.custom_properties.clone();
     style.hidden = parent_style.hidden;
@@ -398,13 +406,17 @@ pub(crate) fn show(
     }
     for (_, declarations) in &resolved_rules {
         for declaration in declarations {
-            if let Declaration::Layout(declaration) = declaration {
-                if declaration.name == "font-size" {
-                    continue;
+            match declaration {
+                Declaration::Color(color) => style.current_color = *color,
+                Declaration::Layout(declaration) => {
+                    if declaration.name == "font-size" {
+                        continue;
+                    }
+                    declaration
+                        .apply_with_parent(&mut style, &parent_style, units)
+                        .expect("validated CSS layout declaration");
                 }
-                declaration
-                    .apply_with_parent(&mut style, &parent_style, units)
-                    .expect("validated CSS layout declaration");
+                _ => {}
             }
         }
     }
@@ -446,13 +458,17 @@ pub(crate) fn show(
     }
     let animated_declarations = animation.declarations;
     for declaration in &animated_declarations {
-        if let Declaration::Layout(declaration) = declaration {
-            declaration
-                .apply_with_parent(&mut style, &parent_style, units)
-                .expect("validated animated CSS declaration");
-            if declaration.name == "font-size" {
-                units.font = style.format.em;
+        match declaration {
+            Declaration::Color(color) => style.current_color = *color,
+            Declaration::Layout(declaration) => {
+                declaration
+                    .apply_with_parent(&mut style, &parent_style, units)
+                    .expect("validated animated CSS declaration");
+                if declaration.name == "font-size" {
+                    units.font = style.format.em;
+                }
             }
+            _ => {}
         }
     }
     crate::layout_style::resolve_flow(&mut style, &parent_style);
@@ -1620,6 +1636,7 @@ fn scroll_box(
     let maximum = (extent - viewport.size()).max(Vec2::ZERO);
     let previous = offset;
     let hovered = ui.rect_contains_pointer(border_box);
+    let scrollbar_width = style.scrollbar_width.thickness();
     let axes = [
         style.layout.overflow.x == Overflow::Scroll,
         style.layout.overflow.y == Overflow::Scroll,
@@ -1640,17 +1657,17 @@ fn scroll_box(
             });
         }
         offset[axis] = offset[axis].clamp(0.0, maximum[axis]);
-        if maximum[axis] <= 0.0 {
+        if maximum[axis] <= 0.0 || scrollbar_width == 0.0 {
             continue;
         }
         let track = if axis == 0 {
             Rect::from_min_max(
-                pos2(border_box.left(), border_box.bottom() - 6.0),
+                pos2(border_box.left(), border_box.bottom() - scrollbar_width),
                 border_box.right_bottom(),
             )
         } else {
             Rect::from_min_max(
-                pos2(border_box.right() - 6.0, border_box.top()),
+                pos2(border_box.right() - scrollbar_width, border_box.top()),
                 border_box.right_bottom(),
             )
         };
@@ -1687,11 +1704,24 @@ fn scroll_box(
                 * maximum[axis])
                 .clamp(0.0, maximum[axis]);
         }
-        ui.painter().rect_filled(
-            thumb,
-            3.0,
-            Color32::from_gray(if response.hovered() { 100 } else { 150 }),
-        );
+        let (thumb_color, track_color) = style
+            .scrollbar_color
+            .resolve(style.current_color)
+            .map_or_else(
+                || {
+                    (
+                        Color32::from_gray(if response.hovered() { 100 } else { 150 }),
+                        Color32::TRANSPARENT,
+                    )
+                },
+                |[thumb, track]| (thumb, track),
+            );
+        if track_color != Color32::TRANSPARENT {
+            ui.painter()
+                .rect_filled(track, scrollbar_width * 0.5, track_color);
+        }
+        ui.painter()
+            .rect_filled(thumb, scrollbar_width * 0.5, thumb_color);
         responses.push(response);
     }
     if offset != previous {

@@ -63,10 +63,12 @@ pub(super) fn margin(rect: taffy::Rect<f32>) -> egui::epaint::MarginF32 {
     }
 }
 
-const SCROLLBAR_GUTTER_WIDTH: f32 = 6.0;
-
 pub(super) fn scrollbar_gutter(style: &BoxStyle) -> egui::epaint::MarginF32 {
     if style.scrollbar_gutter == crate::layout_style::ScrollbarGutter::Auto {
+        return egui::epaint::MarginF32::ZERO;
+    }
+    let width = style.scrollbar_width.thickness();
+    if width == 0.0 {
         return egui::epaint::MarginF32::ZERO;
     }
     let vertical = matches!(style.layout.overflow.y, Overflow::Hidden | Overflow::Scroll);
@@ -74,26 +76,10 @@ pub(super) fn scrollbar_gutter(style: &BoxStyle) -> egui::epaint::MarginF32 {
     let both_edges =
         style.scrollbar_gutter == crate::layout_style::ScrollbarGutter::StableBothEdges;
     egui::epaint::MarginF32 {
-        top: if horizontal && both_edges {
-            SCROLLBAR_GUTTER_WIDTH
-        } else {
-            0.0
-        },
-        right: if vertical {
-            SCROLLBAR_GUTTER_WIDTH
-        } else {
-            0.0
-        },
-        bottom: if horizontal {
-            SCROLLBAR_GUTTER_WIDTH
-        } else {
-            0.0
-        },
-        left: if vertical && both_edges {
-            SCROLLBAR_GUTTER_WIDTH
-        } else {
-            0.0
-        },
+        top: if horizontal && both_edges { width } else { 0.0 },
+        right: if vertical { width } else { 0.0 },
+        bottom: if horizontal { width } else { 0.0 },
+        left: if vertical && both_edges { width } else { 0.0 },
     }
 }
 
