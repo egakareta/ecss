@@ -192,7 +192,9 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_) => matches!(
             keyword,
-            crate::css::AllKeyword::Inherit | crate::css::AllKeyword::Unset
+            crate::css::AllKeyword::Inherit
+                | crate::css::AllKeyword::Unset
+                | crate::css::AllKeyword::Revert
         ),
         Declaration::Layout(declaration) => {
             keyword == crate::css::AllKeyword::Inherit
@@ -406,11 +408,11 @@ pub(crate) fn show(
             style = (*parent_style).clone();
             style.custom_properties = custom_properties.clone();
         }
-        Some(crate::css::AllKeyword::Unset) => {
+        Some(crate::css::AllKeyword::Unset | crate::css::AllKeyword::Revert) => {
             style = inherited_style;
             style.custom_properties = custom_properties.clone();
         }
-        Some(crate::css::AllKeyword::Initial | crate::css::AllKeyword::Revert) => {
+        Some(crate::css::AllKeyword::Initial) => {
             let direction = style.layout.direction;
             style = BoxStyle::default();
             style.layout.direction = direction;

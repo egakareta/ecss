@@ -916,7 +916,9 @@ fn reset_all_visuals(style: &mut egui::Style, state: RuleState, keyword: crate::
     let widgets = &mut style.visuals.widgets;
     let preserve_foreground = matches!(
         keyword,
-        crate::css::AllKeyword::Inherit | crate::css::AllKeyword::Unset
+        crate::css::AllKeyword::Inherit
+            | crate::css::AllKeyword::Unset
+            | crate::css::AllKeyword::Revert
     );
     let reset = |current: &mut WidgetVisuals, default: WidgetVisuals| {
         let foreground = current.fg_stroke;

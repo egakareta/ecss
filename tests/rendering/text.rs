@@ -969,7 +969,8 @@ async fn font_kerning_none_uses_unadjusted_glyph_spacing_and_inherits_test() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn all_property_inherits_and_resets_text_color_test() {
     let stylesheet = Stylesheet::parse(
-        ".parent { color:red; } .inherited { all:inherit; } .initial { all:initial; }",
+        ".parent { color:red; } .inherited { all:inherit; }\
+         .reverted { color:blue; all:revert; } .initial { all:initial; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -978,8 +979,9 @@ async fn all_property_inherits_and_resets_text_color_test() {
         ui.add(
             (|ui: &mut egui::Ui| {
                 let inherited = ui.add(egui::Label::new("inherited").selector(".inherited"));
+                let reverted = ui.add(egui::Label::new("reverted").selector(".reverted"));
                 let initial = ui.add(egui::Label::new("initial").selector(".initial"));
-                *capture.lock().unwrap() = vec![inherited.rect, initial.rect];
+                *capture.lock().unwrap() = vec![inherited.rect, reverted.rect, initial.rect];
                 ui.response()
             })
             .selector(".parent"),
@@ -1005,5 +1007,6 @@ async fn all_property_inherits_and_resets_text_color_test() {
     };
 
     assert!(red_pixels(bounds[0]) > 0);
-    assert_eq!(red_pixels(bounds[1]), 0);
+    assert!(red_pixels(bounds[1]) > 0);
+    assert_eq!(red_pixels(bounds[2]), 0);
 }

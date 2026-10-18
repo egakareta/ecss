@@ -69,6 +69,42 @@ fn all_property_inherits_resets_and_unsets_supported_declarations() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn all_revert_restores_inherited_values_and_discards_author_overrides() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { color:red; font-size:32px; width:260px; }\
+         .reverted { color:blue; font-size:12px; width:90px; all:revert; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut observed = None;
+    let mut width = None;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                let reverted = ui.add(
+                    (|ui: &mut Ui| {
+                        observed = Some((
+                            ui.visuals().widgets.inactive.fg_stroke.color,
+                            ui.style().text_styles[&egui::TextStyle::Body].size,
+                        ));
+                        ui.label("reverted")
+                    })
+                    .selector(".reverted"),
+                );
+                width = Some(reverted.rect.width());
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    });
+
+    assert_eq!(observed, Some((egui::Color32::RED, 32.0)));
+    assert_eq!(width, Some(260.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn unset_and_inherit_follow_writing_mode_when_mapping_logical_sizes() {
     let context = Context::default();
     Stylesheet::parse(".flow {writing-mode:vertical-rl; inline-size:40px; block-size:70px; white-space:pre;} .unset {writing-mode:unset; inline-size:inherit; block-size:inherit; white-space:unset;} .horizontal {writing-mode:horizontal-tb; inline-size:inherit; block-size:inherit; white-space:initial;}")
