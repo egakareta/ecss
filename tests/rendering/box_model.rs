@@ -59,6 +59,38 @@ async fn content_and_border_box_sizes_include_the_correct_edges_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inline_style_attribute_overrides_the_matching_stylesheet_rule_test() {
+    let stylesheet = Stylesheet::parse(
+        ".inline { box-sizing:border-box; width:48px; height:24px; background-color:red; }",
+    )
+    .unwrap();
+    let inline = ecss::InlineStyle::parse(
+        "/* declaration list */ width:24px !important; background-color:blue",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = Some(
+            ui.add(
+                empty_response
+                    .selector(".inline")
+                    .inline_style(inline.clone()),
+            )
+            .rect,
+        );
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(rect.size(), egui::vec2(24.0, 24.0));
+    assert_eq!(
+        pixel(&pixels, rect.center().x, rect.center().y),
+        [0, 0, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn svg_url_paints_as_a_border_image_test() {
     let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"><rect width="9" height="9" fill="#ff0000"/></svg>"##;
     let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg);

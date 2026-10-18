@@ -190,6 +190,20 @@ impl FontAssets {
         None
     }
 
+    pub(crate) fn merge(&mut self, other: Self) {
+        for font in other.variants {
+            if let Some(existing) = self.variants.iter_mut().find(|existing| {
+                normalize_family(&existing.family) == normalize_family(&font.family)
+                    && existing.weight == font.weight
+                    && existing.italic == font.italic
+            }) {
+                *existing = font;
+            } else {
+                self.variants.push(font);
+            }
+        }
+    }
+
     pub(crate) fn family_for_kerning(
         context: &egui::Context,
         family: &FontFamily,

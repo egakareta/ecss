@@ -63,6 +63,25 @@ pub struct Stylesheet {
     background_images: background::ImageAssets,
 }
 
+/// A parsed CSS declaration list for one widget's inline style.
+#[derive(Clone, Debug)]
+pub struct InlineStyle {
+    declarations: Vec<Declaration>,
+    assets: Stylesheet,
+    load_id: Arc<()>,
+}
+
+impl InlineStyle {
+    /// Parses the contents of a CSS `style` attribute.
+    pub fn parse(source: &str) -> Result<Self, CssError> {
+        Ok(Self {
+            declarations: css::parse_style_attribute(source)?,
+            assets: Stylesheet::default(),
+            load_id: Arc::default(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct RuleIndex {
     universal_base: Vec<usize>,
@@ -248,10 +267,8 @@ impl Stylesheet {
 
     fn start_background_image_load(&self, context: &egui::Context) {
         let urls = self.background_image_urls();
-        if urls.is_empty()
-            || self.background_images.contains_all(&urls)
-            || !self.background_images.mark_load_started(context)
-        {
+        let urls = self.background_images.mark_load_started(context, &urls);
+        if urls.is_empty() {
             return;
         }
         let images = self.background_images.clone();
@@ -275,7 +292,7 @@ impl Stylesheet {
             if let Ok(loaded_fonts) = FontAssets::load(&imports, &requests).await
                 && let Ok(mut fonts) = fonts.write()
             {
-                *fonts = loaded_fonts;
+                fonts.merge(loaded_fonts);
                 font_revision.fetch_add(1, Ordering::Release);
             }
         });
@@ -418,6 +435,15 @@ pub trait SelectorExt: Widget + Sized {
             selector: selector.into(),
         }
     }
+
+    /// Applies a parsed CSS `style` attribute to this widget.
+    fn inline_style(self, style: InlineStyle) -> InlineStyledWidget<Self> {
+        InlineStyledWidget {
+            widget: self,
+            style,
+            selector: None,
+        }
+    }
 }
 
 impl<W: Widget> SelectorExt for W {}
@@ -427,6 +453,17 @@ impl<W: Widget> SelectorExt for W {}
 pub struct StyledWidget<W> {
     widget: W,
     selector: String,
+}
+
+impl<W: Widget> StyledWidget<W> {
+    /// Applies a parsed CSS `style` attribute after this widget's stylesheet rules.
+    pub fn inline_style(self, style: InlineStyle) -> InlineStyledWidget<W> {
+        InlineStyledWidget {
+            widget: self.widget,
+            style,
+            selector: Some(self.selector),
+        }
+    }
 }
 
 impl<W: Widget> Widget for StyledWidget<W> {
@@ -444,6 +481,66 @@ impl<W: Widget> Widget for StyledWidget<W> {
         };
 
         layout::show(widget, ui, &stylesheet, &class)
+    }
+}
+
+/// A widget decorated with a parsed CSS `style` attribute.
+#[must_use = "add the inline-styled widget to an egui Ui with `ui.add(widget)`"]
+pub struct InlineStyledWidget<W> {
+    widget: W,
+    style: InlineStyle,
+    selector: Option<String>,
+}
+
+impl<W: Widget> Widget for InlineStyledWidget<W> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let InlineStyledWidget {
+            widget,
+            style,
+            selector,
+        } = self;
+        let class = selector.as_deref().and_then(css::selector_class);
+        let mut stylesheet = ui
+            .ctx()
+            .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::unique(STYLESHEET_ID)))
+            .map_or_else(|| style.assets.clone(), |stylesheet| (*stylesheet).clone());
+        let load_fonts = style.declarations.iter().any(|declaration| {
+            matches!(
+                declaration,
+                Declaration::FontFamily(_) | Declaration::FontWeight(_) | Declaration::FontStyle(_)
+            )
+        });
+        stylesheet.rules.push(Rule {
+            class: class.clone(),
+            state: RuleState::Base,
+            pseudo: None,
+            declarations: style.declarations,
+        });
+        stylesheet.rule_index = RuleIndex::new(&stylesheet.rules);
+        stylesheet.start_background_image_load(ui.ctx());
+        if load_fonts {
+            let font_load_id = Id::unique((
+                "ecss.inline-font-load",
+                Arc::as_ptr(&style.load_id) as usize,
+                Arc::as_ptr(&stylesheet.fonts) as usize,
+                class.as_deref().unwrap_or(""),
+            ));
+            let started = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(font_load_id))
+                .unwrap_or(false);
+            if !started {
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(font_load_id, true));
+                stylesheet.start_font_load();
+            }
+        }
+        ui.ctx().options_mut(|options| {
+            options.max_passes = options
+                .max_passes
+                .max(std::num::NonZeroUsize::new(8).unwrap())
+        });
+        layout::show(widget, ui, &stylesheet, class.as_deref().unwrap_or(""))
     }
 }
 
@@ -943,6 +1040,12 @@ mod tests {
     #[test]
     fn malformed_supported_declarations_report_their_source_line() {
         let error = Stylesheet::parse(".primary {\n  color: not-a-color;\n}").unwrap_err();
+        assert_eq!(error.line(), 2);
+    }
+
+    #[test]
+    fn malformed_inline_style_declarations_report_their_source_line() {
+        let error = InlineStyle::parse("width: 12px;\nheight: invalid").unwrap_err();
         assert_eq!(error.line(), 2);
     }
 

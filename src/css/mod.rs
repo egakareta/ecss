@@ -472,6 +472,12 @@ pub(crate) fn parse(source: &str) -> Result<ParsedStylesheet, CssError> {
     })
 }
 
+pub(crate) fn parse_style_attribute(source: &str) -> Result<Vec<Declaration>, CssError> {
+    let mut parser = CssParser::new(source);
+    parse_declarations(&mut parser, true)
+        .map_err(|issue| CssError::at_line(issue.line.unwrap_or(0), issue.message))
+}
+
 pub(crate) fn selector_class(selector: &str) -> Option<String> {
     if let Some(class) = selector.strip_prefix('.')
         && is_simple_class_name(class)
@@ -527,7 +533,7 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
         _start: &ParserState,
         input: &mut CssParser<'i>,
     ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
-        let declarations = parse_declarations(input).map_err(ParseError::custom)?;
+        let declarations = parse_declarations(input, false).map_err(ParseError::custom)?;
         Ok(ParsedRule::Style(
             selectors
                 .into_iter()
@@ -650,7 +656,7 @@ impl<'i> QualifiedRuleParser<'i> for KeyframeRuleParser {
         _start: &ParserState,
         input: &mut CssParser<'i>,
     ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
-        let declarations = parse_declarations(input).map_err(ParseError::custom)?;
+        let declarations = parse_declarations(input, false).map_err(ParseError::custom)?;
         let timing_function = declarations.iter().rev().find_map(|declaration| {
             let Declaration::Animation(property) = declaration else {
                 return None;
@@ -797,7 +803,9 @@ fn parse_selectors<'i>(
     Ok(result)
 }
 
-struct Declarations;
+struct Declarations {
+    allow_important: bool,
+}
 
 impl<'i> DeclarationParser<'i> for Declarations {
     type Declaration = Option<Declaration>;
@@ -809,6 +817,24 @@ impl<'i> DeclarationParser<'i> for Declarations {
         input: &mut CssParser<'i>,
         _declaration_start: &ParserState,
     ) -> Result<Self::Declaration, ParseError<Self::Error>> {
+        if self.allow_important {
+            let start = input.state();
+            while input.next().is_ok() {}
+            let source = input.slice_from(start.position()).trim();
+            let source = strip_important(source).unwrap_or(source).trim();
+            let mut input = CssParser::new(source);
+            return self.parse_value_content(name, &mut input);
+        }
+        self.parse_value_content(name, input)
+    }
+}
+
+impl Declarations {
+    fn parse_value_content<'i>(
+        &mut self,
+        name: CowRcStr<'i>,
+        input: &mut CssParser<'i>,
+    ) -> Result<Option<Declaration>, ParseError<&'static str>> {
         if crate::animation::is_property(&name) {
             let value = consume_value(input)?;
             return crate::animation::parse_property(&name, &value)
@@ -1080,8 +1106,11 @@ impl<'i> RuleBodyItemParser<'i, Option<Declaration>, &'static str> for Declarati
     }
 }
 
-fn parse_declarations<'i>(input: &mut CssParser<'i>) -> Result<Vec<Declaration>, ParseIssue> {
-    let mut parser = Declarations;
+fn parse_declarations<'i>(
+    input: &mut CssParser<'i>,
+    allow_important: bool,
+) -> Result<Vec<Declaration>, ParseIssue> {
+    let mut parser = Declarations { allow_important };
     let mut declarations = Vec::new();
     for item in RuleBodyParser::new(input, &mut parser) {
         match item {
@@ -1100,6 +1129,42 @@ fn parse_declarations<'i>(input: &mut CssParser<'i>) -> Result<Vec<Declaration>,
         }
     }
     Ok(declarations)
+}
+
+fn strip_important(source: &str) -> Option<&str> {
+    let mut input = CssParser::new(source);
+    while !input.is_exhausted() {
+        input.skip_whitespace();
+        if input.is_exhausted() {
+            break;
+        }
+        let state = input.state();
+        let token = input.next_including_whitespace_and_comments().ok()?.clone();
+        match token {
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => {
+                input
+                    .parse_nested_block(|nested| {
+                        while nested.next().is_ok() {}
+                        Ok::<_, ParseError<()>>(())
+                    })
+                    .ok()?;
+            }
+            Token::Delim('!') => {
+                input.reset(&state);
+                if input.try_parse(cssparser::parse_important).is_ok() {
+                    input.skip_whitespace();
+                    if input.is_exhausted() {
+                        return Some(&source[..state.position().byte_index()]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_length<'i>(

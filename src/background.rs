@@ -141,23 +141,24 @@ impl ImageAssets {
         self.0.images.read().ok()?.get(url).cloned()
     }
 
-    pub(crate) fn contains_all(&self, urls: &[String]) -> bool {
-        self.0
+    pub(crate) fn mark_load_started(&self, context: &Context, urls: &[String]) -> Vec<String> {
+        let id = Id::unique(("ecss.background-load", Arc::as_ptr(&self.0) as usize));
+        let loaded = self
+            .0
             .images
             .read()
-            .is_ok_and(|images| urls.iter().all(|url| images.contains_key(url)))
-    }
-
-    pub(crate) fn mark_load_started(&self, context: &Context) -> bool {
-        let id = Id::unique(("ecss.background-load", Arc::as_ptr(&self.0) as usize));
-        if context
-            .data(|data| data.get_temp::<bool>(id))
-            .unwrap_or(false)
-        {
-            return false;
-        }
-        context.data_mut(|data| data.insert_temp(id, true));
-        true
+            .map(|images| images.keys().cloned().collect::<HashSet<_>>())
+            .unwrap_or_default();
+        context.data_mut(|data| {
+            let mut started = data.get_temp::<HashSet<String>>(id).unwrap_or_default();
+            let urls = urls
+                .iter()
+                .filter(|url| !loaded.contains(*url) && started.insert((*url).clone()))
+                .cloned()
+                .collect();
+            data.insert_temp(id, started);
+            urls
+        })
     }
 
     fn insert(

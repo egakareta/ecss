@@ -31,7 +31,7 @@
 - **[CSS Generated and Replaced Content](https://www.w3.org/TR/css3-content/) - Unsupported.**
   - CSS properties: `bookmark-label`, `bookmark-level`, `bookmark-state`, `content`, `quotes`, `string-set`.
 - **CSS Math - Supported.**
-- **[CSS style Attribute Syntax](https://www.w3.org/TR/css-style-attr/) - Unsupported.**
+- **[CSS style Attribute Syntax](https://www.w3.org/TR/css-style-attr/) - Supported.**
 - **[CSS Syntax](https://www.w3.org/TR/css3-syntax/) - Unsupported.**
 - **[CSS Values and Units Level 3](https://www.w3.org/TR/css3-values/) - Partial.**
 - **[CSS Values and Units Level 4](https://www.w3.org/TR/css-values-4/) - Partial.**
