@@ -18,6 +18,7 @@ pub(crate) struct BoxStyle {
     pub contents: bool,
     pub positioned: bool,
     pub fixed: bool,
+    pub(crate) will_change: Vec<String>,
     pub hidden: bool,
     pub collapsed: bool,
     pub margin_trim: [bool; 4],
@@ -89,6 +90,7 @@ impl Default for BoxStyle {
             contents: false,
             positioned: false,
             fixed: false,
+            will_change: Vec::new(),
             hidden: false,
             collapsed: false,
             margin_trim: [false; 4],
@@ -138,10 +140,10 @@ pub(crate) fn parse(
     let value = input.slice_from(start).trim().to_owned();
     let declaration = Declaration { name, value };
     let arena = crate::math::Arena::default();
-    if declaration.value.eq_ignore_ascii_case("revert-layer") {
+    if declaration.value.eq_ignore_ascii_case("revert-layer") && declaration.name != "will-change" {
         return Err("cascade layers are unsupported");
     }
-    if !["inherit", "initial", "unset", "revert"]
+    if !["inherit", "initial", "unset", "revert", "revert-layer"]
         .iter()
         .any(|keyword| declaration.value.eq_ignore_ascii_case(keyword))
     {
@@ -180,6 +182,7 @@ fn supported(name: &str) -> bool {
                 | "max-block-size"
                 | "aspect-ratio"
                 | "position"
+                | "will-change"
                 | "top"
                 | "right"
                 | "bottom"
@@ -358,6 +361,10 @@ impl Declaration {
             return Ok(());
         }
         if keyword.eq_ignore_ascii_case("revert-layer") {
+            if self.name == "will-change" {
+                copy_property(&self.name, output, &BoxStyle::default());
+                return Ok(());
+            }
             return Err("cascade layers are unsupported");
         }
         self.apply(output, units)
@@ -473,6 +480,7 @@ impl Declaration {
                     _ => return Err("unsupported position value"),
                 };
             }
+            "will-change" => output.will_change = parse_will_change(value)?,
             "margin" | "padding" | "inset" => {
                 let edges = quad(&parts)?;
                 for (index, value) in edges.iter().enumerate() {
@@ -917,6 +925,10 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
         out.scrollbar_gutter = source.scrollbar_gutter;
         return;
     }
+    if name == "will-change" {
+        out.will_change.clone_from(&source.will_change);
+        return;
+    }
     if let Some(side_name) = name.strip_prefix("overflow-clip-margin-") {
         let copy_side = |side_name: &str, out: &mut BoxStyle, source: &BoxStyle| {
             let target = logical_side(
@@ -1263,6 +1275,9 @@ impl BoxStyle {
         if self.template_grid && !self.display_set {
             self.layout.display = Display::Grid;
         }
+        if self.will_change("position") && !self.positioned {
+            self.layout.position = Position::Relative;
+        }
         let widths = std::array::from_fn::<_, 4, _>(|i| {
             if matches!(
                 self.border_styles[i],
@@ -1297,6 +1312,61 @@ impl BoxStyle {
             self.layout.overflow.y = computed(y);
         }
     }
+
+    pub(crate) fn will_change(&self, property: &str) -> bool {
+        self.will_change
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(property))
+    }
+}
+
+fn parse_will_change(value: &str) -> Result<Vec<String>, &'static str> {
+    let mut input = Parser::new(value);
+    let first = input
+        .expect_ident_cloned()
+        .map_err(|_| "invalid will-change")?;
+    if first.eq_ignore_ascii_case("auto") {
+        return if input.is_exhausted() {
+            Ok(Vec::new())
+        } else {
+            Err("invalid will-change")
+        };
+    }
+
+    let mut properties = Vec::new();
+    let mut current = Some(first);
+    loop {
+        let Some(value) = current.take() else {
+            break;
+        };
+        if ["will-change", "none", "all", "auto"]
+            .iter()
+            .any(|keyword| value.eq_ignore_ascii_case(keyword))
+        {
+            return Err("invalid will-change feature");
+        }
+        if !["scroll-position", "contents"]
+            .iter()
+            .any(|keyword| value.eq_ignore_ascii_case(keyword))
+            && ["inherit", "initial", "unset", "revert", "revert-layer"]
+                .iter()
+                .any(|keyword| value.eq_ignore_ascii_case(keyword))
+        {
+            return Err("invalid will-change feature");
+        }
+        properties.push(value.to_string());
+
+        if input.is_exhausted() {
+            break;
+        }
+        input.expect_comma().map_err(|_| "invalid will-change")?;
+        current = Some(
+            input
+                .expect_ident_cloned()
+                .map_err(|_| "invalid will-change")?,
+        );
+    }
+    Ok(properties)
 }
 
 pub(crate) fn components(value: &str) -> Result<Vec<String>, &'static str> {

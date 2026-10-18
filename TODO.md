@@ -40,8 +40,9 @@
 - **[CSS Counter Styles Level 3](https://www.w3.org/TR/css-counter-styles-3/) - Unsupported.**
 - **[CSS Custom Properties for Cascading Variables Level 1](https://www.w3.org/TR/css-variables/) - Unsupported.**
   - CSS properties: `--*`.
-- **[CSS Will Change Module Level 1](https://www.w3.org/TR/css-will-change-1/) - Unsupported.**
+- **[CSS Will Change Module Level 1](https://www.w3.org/TR/css-will-change-1/) - Supported.**
   - CSS properties: `will-change`.
+  - Optimization hints are ignored. `position` hints establish containing blocks and stacking contexts, while `z-index` hints establish stacking contexts where that property applies.
 - **[CSS Pseudo-Elements Module Level 4](https://www.w3.org/TR/css-pseudo-4/) - Unsupported.**
 - **[CSS Logical Properties and Values Level 1](https://www.w3.org/TR/css-logical-1/) - Partial.**
   - CSS properties: ~~`block-size`~~, ~~`border-block`~~, ~~`border-block-color`~~, ~~`border-block-end`~~, ~~`border-block-end-color`~~,

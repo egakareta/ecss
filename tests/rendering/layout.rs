@@ -344,16 +344,23 @@ async fn visible_descendants_override_hidden_ancestors_without_removing_layout_t
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn stacking_contexts_contain_descendant_z_indices_test() {
     let stylesheet=Stylesheet::parse(
-        ".root { position:relative; width:80px; height:40px; }\
+        ".root { position:relative; width:80px; height:24px; }\
          .wrapper { position:relative; } .context { position:relative; z-index:0; }\
-         .child { position:absolute; left:0; top:0; width:40px; height:40px; z-index:2; background-color:green; }\
-         .sibling { position:absolute; left:0; top:0; width:40px; height:40px; z-index:1; background-color:red; }",
+         .will-context { position:relative; will-change:z-index; }\
+         .will-position-context { will-change:position; }\
+         .child { position:absolute; left:0; top:0; width:40px; height:24px; z-index:2; background-color:green; }\
+         .sibling { position:absolute; left:0; top:0; width:40px; height:24px; z-index:1; background-color:red; }",
     ).unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         let mut rects = Vec::new();
-        for parent in [".wrapper", ".context"] {
+        for parent in [
+            ".wrapper",
+            ".context",
+            ".will-context",
+            ".will-position-context",
+        ] {
             let root = ui.add(
                 (|ui: &mut egui::Ui| {
                     ui.add(
@@ -381,6 +388,61 @@ async fn stacking_contexts_contain_descendant_z_indices_test() {
     assert_eq!(
         pixel(&pixels, rects[1].left() + 10.0, rects[1].top() + 10.0),
         [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rects[2].left() + 10.0, rects[2].top() + 10.0),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rects[3].left() + 10.0, rects[3].top() + 10.0),
+        [255, 0, 0, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn will_change_position_establishes_absolute_and_fixed_containing_blocks_test() {
+    let stylesheet = Stylesheet::parse(
+        ".root { position:relative; width:120px; height:80px; }\
+         .anchor { will-change:position; margin-left:20px; margin-top:10px; width:60px; height:50px; background-color:blue; }\
+         .absolute { position:absolute; left:0; top:0; width:10px; height:10px; background-color:red; }\
+         .fixed { position:fixed; left:10px; top:10px; width:10px; height:10px; background-color:green; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let capture = capture.clone();
+        ui.add(
+            (move |ui: &mut egui::Ui| {
+                let mut child_rects = Vec::new();
+                let anchor = ui.add(
+                    (|ui: &mut egui::Ui| {
+                        child_rects.push(ui.add(empty_response.selector(".absolute")).rect);
+                        child_rects.push(ui.add(empty_response.selector(".fixed")).rect);
+                        ui.response()
+                    })
+                    .selector(".anchor"),
+                );
+                *capture.lock().unwrap() = Some((anchor.rect, child_rects));
+                ui.response()
+            })
+            .selector(".root"),
+        );
+    })
+    .await;
+    let (anchor, children) = bounds.lock().unwrap().clone().unwrap();
+    assert_eq!(children[0].left(), anchor.left());
+    assert_eq!(children[0].top(), anchor.top());
+    assert_eq!(children[1].left(), anchor.left() + 10.0);
+    assert_eq!(children[1].top(), anchor.top() + 10.0);
+    assert_eq!(
+        pixel(&pixels, children[0].center().x, children[0].center().y),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, children[1].center().x, children[1].center().y),
+        [0, 128, 0, 255]
     );
 }
 

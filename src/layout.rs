@@ -352,7 +352,8 @@ pub(crate) fn show(
         let parent = frame.stack.last().copied();
         let absent =
             style.layout.display == Display::None || parent.is_some_and(|p| frame.nodes[p].absent);
-        let ancestor_scroll = if style.fixed {
+        let viewport_fixed = style.fixed && fixed_containing_block(&frame, parent).is_none();
+        let ancestor_scroll = if viewport_fixed {
             Vec2::ZERO
         } else {
             parent.map_or(Vec2::ZERO, |p| {
@@ -2019,8 +2020,12 @@ fn reorder_paint(frame: &Frame, context: &Context) {
                 Display::Flex | Display::Grid
             )
         });
+        let will_change_z_index =
+            node.style.will_change("z-index") && (node.style.positioned || item);
         let real = i == 0
             || node.style.z_index.is_some() && (node.style.positioned || item)
+            || node.style.will_change("position")
+            || will_change_z_index
             || node.style.fixed
             || node.style.layout.position == Position::Sticky;
         let pseudo = node.style.positioned
@@ -2394,6 +2399,29 @@ fn sticky_offset(
         }
     }
     origin - geometry.border.min
+}
+
+fn fixed_containing_block(frame: &Frame, mut ancestor: Option<usize>) -> Option<usize> {
+    while let Some(index) = ancestor {
+        let node = &frame.nodes[index];
+        if !node.style.contents && (node.style.fixed || node.style.will_change("position")) {
+            return Some(index);
+        }
+        ancestor = node.parent;
+    }
+    None
+}
+
+fn viewport_fixed(frame: &Frame, index: usize) -> bool {
+    let mut current = Some(index);
+    while let Some(index) = current {
+        let node = &frame.nodes[index];
+        if node.style.fixed {
+            return fixed_containing_block(frame, node.parent).is_none();
+        }
+        current = node.parent;
+    }
+    false
 }
 
 fn scroll_box(
@@ -5455,7 +5483,11 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
             continue;
         }
         if node.style.fixed {
-            fixed.push(i);
+            if let Some(containing) = fixed_containing_block(frame, node.parent) {
+                children[containing].push(ids[i]);
+            } else {
+                fixed.push(i);
+            }
             continue;
         }
         let mut parent = node.parent;
@@ -5611,16 +5643,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 .flow_clip
                 .map(|(clip, region_index)| {
                     let region = &frame.nodes[region_index];
-                    let mut ancestor = Some(region_index);
-                    let mut fixed = false;
-                    while let Some(parent) = ancestor {
-                        if frame.nodes[parent].style.fixed {
-                            fixed = true;
-                            break;
-                        }
-                        ancestor = frame.nodes[parent].parent;
-                    }
-                    let offset = if fixed {
+                    let offset = if viewport_fixed(frame, region_index) {
                         frame.viewport.min.to_vec2()
                     } else {
                         frame.origin.to_vec2() - region.ancestor_scroll
@@ -5631,16 +5654,7 @@ fn solve(frame: &mut Frame, context: &Context) -> Cache {
     let absolute_layouts = tree.absolute_layouts();
     for (i, node) in frame.nodes.iter().enumerate() {
         let layout = absolute_layouts[usize::from(ids[i])].expect("layout was resolved");
-        let mut ancestor = Some(i);
-        let mut fixed = false;
-        while let Some(p) = ancestor {
-            if frame.nodes[p].style.fixed {
-                fixed = true;
-                break;
-            }
-            ancestor = frame.nodes[p].parent;
-        }
-        let offset = if fixed {
+        let offset = if viewport_fixed(frame, i) {
             frame.viewport.min - frame.origin
         } else {
             Vec2::ZERO

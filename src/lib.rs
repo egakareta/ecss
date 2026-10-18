@@ -955,6 +955,39 @@ mod tests {
     }
 
     #[test]
+    fn will_change_accepts_its_value_grammar_and_rejects_invalid_lists() {
+        for value in [
+            "auto",
+            "scroll-position",
+            "contents",
+            "transform, opacity",
+            "scroll-position, contents, --custom",
+            "initial",
+            "revert-layer",
+        ] {
+            assert!(
+                Stylesheet::parse(&format!(".primary {{ will-change: {value}; }}")).is_ok(),
+                "rejected valid will-change value: {value}"
+            );
+        }
+
+        for value in [
+            "none",
+            "all",
+            "will-change",
+            "auto, opacity",
+            "transform opacity",
+            "transform,",
+            "none, transform",
+        ] {
+            assert!(
+                Stylesheet::parse(&format!(".primary {{ will-change: {value}; }}")).is_err(),
+                "accepted invalid will-change value: {value}"
+            );
+        }
+    }
+
+    #[test]
     fn border_shape_rejects_duplicate_geometry_boxes() {
         assert!(
             Stylesheet::parse(".shape { border-shape: circle(50%) border-box padding-box; }")
