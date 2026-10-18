@@ -2,7 +2,7 @@
 name = "ecss"
 version = "0.1.0"
 edition = "2024"
-description = "CSS class styling for egui widgets."
+description = "Cascading style sheet (CSS) support for egui"
 documentation = "https://docs.rs/ecss"
 repository = "https://github.com/egakareta/ecss"
 license = "MIT"
