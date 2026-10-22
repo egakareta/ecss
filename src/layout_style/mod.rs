@@ -3,6 +3,7 @@ use egui::{Color32, Vec2};
 use taffy::{Overflow, prelude::*};
 
 mod grid;
+mod outline;
 mod values;
 
 use grid::*;
@@ -48,6 +49,7 @@ pub(crate) struct BoxStyle {
     pub border_stripes: [Option<Vec<crate::box_decoration::BorderStripe>>; 4],
     pub border_styles: [BorderStyle; 4],
     pub border_widths: [f32; 4],
+    pub(crate) outline: outline::Outline,
     pub decorations: crate::box_decoration::DecorationStyle,
 }
 
@@ -193,6 +195,7 @@ impl Default for BoxStyle {
             border_stripes: std::array::from_fn(|_| None),
             border_styles: [BorderStyle::None; 4],
             border_widths: [3.0; 4],
+            outline: outline::Outline::default(),
             decorations: crate::box_decoration::DecorationStyle::default(),
         }
     }
@@ -243,6 +246,7 @@ pub(crate) fn parse(
 
 fn supported(name: &str) -> bool {
     crate::formatting::supported(name)
+        || outline::supported(name)
         || crate::box_decoration::supported(name)
         || matches!(
             name,
@@ -445,7 +449,15 @@ impl Declaration {
             .iter()
             .any(|value| keyword.eq_ignore_ascii_case(value))
         {
-            copy_property(&self.name, output, &BoxStyle::default());
+            if outline::supported(&self.name) {
+                outline::copy_property(
+                    &self.name,
+                    &mut output.outline,
+                    outline::Outline::default(),
+                );
+            } else {
+                copy_property(&self.name, output, &BoxStyle::default());
+            }
             return Ok(());
         }
         if keyword.eq_ignore_ascii_case("revert-layer") {
@@ -479,6 +491,9 @@ impl Declaration {
         }
         if crate::box_decoration::apply(name, value, output, units)? {
             return Ok(());
+        }
+        if outline::supported(name) {
+            return outline::apply(name, value, &mut output.outline, units);
         }
         let parts = components(value)?;
         let s = &mut output.layout;
@@ -1032,6 +1047,14 @@ fn inherited(name: &str) -> bool {
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if outline::supported(name) {
+        outline::copy_property(
+            name,
+            &mut out.outline,
+            source.outline.inherited(source.current_color),
+        );
+        return;
+    }
     if crate::box_decoration::copy_property(name, out, source) {
         return;
     }

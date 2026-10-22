@@ -22,6 +22,7 @@ mod engine;
 mod gradient;
 mod paint;
 mod pseudo;
+mod states;
 mod text;
 
 use background_paint::*;
@@ -29,6 +30,7 @@ use elements::*;
 use engine::*;
 use paint::*;
 use pseudo::*;
+pub(crate) use states::keyboard_modality;
 
 use gradient::{
     GradientPaint, conic_gradient_position, conic_gradient_slice_mesh, gradient_color,
@@ -114,6 +116,7 @@ struct PaintRecord {
     start: egui::layers::ShapeIdx,
     end: egui::layers::ShapeIdx,
     overlay: egui::layers::ShapeIdx,
+    outline: Option<egui::layers::ShapeIdx>,
     scrollbars: Vec<Response>,
     geometry: Geometry,
     clip: Rect,
@@ -261,9 +264,9 @@ pub(crate) fn show(
     widget: impl Widget,
     ui: &mut Ui,
     stylesheet: &Stylesheet,
-    class: &str,
+    target: &crate::css::SelectorTarget,
 ) -> Response {
-    let element_id = class.strip_prefix("@id:").map(str::to_owned);
+    let element_id = target.id.clone();
     let first_element_occurrence = element_id
         .as_deref()
         .is_none_or(|element_id| first_element_occurrence(ui.ctx(), element_id));
@@ -305,10 +308,6 @@ pub(crate) fn show(
             .data_mut(|d| d.insert_temp(Id::unique(ACTIVE), active.1));
         active
     });
-    let state = ui
-        .ctx()
-        .data(|d| d.get_temp::<u8>(id.with("state")))
-        .unwrap_or(0);
     let parent_style = {
         let frame = active.0.borrow();
         frame
@@ -317,6 +316,9 @@ pub(crate) fn show(
             .map(|parent| frame.nodes[*parent].style.clone())
             .unwrap_or_else(|| Rc::new(BoxStyle::default()))
     };
+    // egui disables invisible Uis; CSS visibility does not change enabled state.
+    let ui_enabled = ui.is_enabled() || parent_style.hidden && active.0.borrow().enabled;
+    let state = states::initial_state(ui, id, ui_enabled);
     let mut style = BoxStyle::default();
     style.current_color = if root {
         ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -376,7 +378,7 @@ pub(crate) fn show(
     };
     let resolve_rules = |state: u8| {
         let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
-            applicable_rules(stylesheet, class, state).collect();
+            applicable_rules(stylesheet, target, state).collect();
         let custom_declarations = rules
             .iter()
             .flat_map(|rule| &rule.declarations)
@@ -421,9 +423,15 @@ pub(crate) fn show(
         None => {}
     }
     units.font = style.format.em;
-    let (_, base_visual_rules, _) = resolve_rules(0);
-    let (_, hovered_visual_rules, _) = resolve_rules(1);
-    let (_, active_visual_rules, _) = resolve_rules(2);
+    let non_pointer_state = state & !(RuleState::HOVERED.bits() | RuleState::ACTIVE.bits());
+    let (_, base_visual_rules, _) = resolve_rules(non_pointer_state);
+    let (_, hovered_visual_rules, _) = resolve_rules(non_pointer_state | RuleState::HOVERED.bits());
+    let active_state = if state & (RuleState::FOCUS.bits() | RuleState::ACTIVE.bits()) != 0 {
+        state
+    } else {
+        non_pointer_state | RuleState::HOVERED.bits() | RuleState::ACTIVE.bits()
+    };
+    let (_, active_visual_rules, _) = resolve_rules(active_state);
     let mut background_urls = Vec::new();
     let mut font_families = None;
     let mut font_weight = 400;
@@ -463,7 +471,7 @@ pub(crate) fn show(
         .or_else(|| {
             all_keyword
                 .is_none()
-                .then(|| stylesheet.font_request_for_class(class))
+                .then(|| stylesheet.font_request_for_target(target))
                 .flatten()
         });
     if let Some(request) = &font_request {
@@ -702,30 +710,19 @@ pub(crate) fn show(
     widgets.open.fg_stroke = inherited_visuals.open.fg_stroke;
     content_ui.spacing_mut().item_spacing = Vec2::ZERO;
     for (visual_state, rules) in [
-        (RuleState::Base, &base_visual_rules),
-        (RuleState::Hovered, &hovered_visual_rules),
-        (RuleState::Active, &active_visual_rules),
+        (crate::VisualState::Base, &base_visual_rules),
+        (crate::VisualState::Hovered, &hovered_visual_rules),
+        (crate::VisualState::Active, &active_visual_rules),
     ] {
         for (_, declarations) in rules {
             crate::apply_declarations(&mut content_ui, visual_state, declarations);
         }
     }
-    if state != 0 {
-        let effective_state = if state & 2 != 0 {
-            RuleState::Active
-        } else {
-            RuleState::Hovered
-        };
-        for (rule_state, declarations) in &resolved_rules {
-            if *rule_state == RuleState::Base
-                || *rule_state == RuleState::Hovered && state & 1 != 0
-                || *rule_state == RuleState::Active && state & 2 != 0
-            {
-                crate::apply_declarations(&mut content_ui, effective_state, declarations);
-            }
-        }
-    }
-    crate::apply_declarations(&mut content_ui, RuleState::Base, &animated_declarations);
+    crate::apply_declarations(
+        &mut content_ui,
+        crate::VisualState::Base,
+        &animated_declarations,
+    );
     if style.padding_set {
         content_ui.spacing_mut().button_padding = Vec2::ZERO;
     }
@@ -834,7 +831,7 @@ pub(crate) fn show(
             if let Some(text) = &mut text
                 && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
                     stylesheet,
-                    class,
+                    target,
                     crate::css::PseudoElementKind::FirstLetter,
                     state,
                     &style,
@@ -882,7 +879,7 @@ pub(crate) fn show(
     if let Some(color) = descendant_text_color
         && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
             stylesheet,
-            class,
+            target,
             crate::css::PseudoElementKind::FirstLetter,
             state,
             &style,
@@ -1117,41 +1114,50 @@ pub(crate) fn show(
     };
     let mut response = if absent {
         response.with_new_rect(Rect::from_min_size(border.min, Vec2::ZERO))
-    } else {
+    } else if response.enabled() {
         let interaction = without_id_clash_warning(ui.ctx(), || {
             content_ui.interact(visual, response.id, response.sense)
         });
         response.union(interaction).with_new_rect(visual)
+    } else {
+        response.with_new_rect(visual)
     };
     response.interact_rect = if absent || style.hidden {
         Rect::NOTHING
     } else {
         visual.intersect(ui.clip_rect())
     };
-    let current_state =
-        u8::from(response.hovered()) | (u8::from(response.is_pointer_button_down_on()) << 1);
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(id.with("state"), current_state));
+    let enabled = if absent || style.hidden {
+        ui_enabled
+    } else {
+        response.enabled()
+    };
+    let current_state = states::response_state(&response, id, enabled);
     if stylesheet.rule_index.has_element_references {
         let (_, current_element_rules, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
             resolved_element_references_from_rules(
                 stylesheet,
-                class,
+                target,
                 current_state,
                 &current_element_rules,
             );
     }
-    let interaction_layout_changed = [(1, RuleState::Hovered), (2, RuleState::Active)]
-        .into_iter()
-        .any(|(mask, rule_state)| {
-            state & mask != current_state & mask
-                && matching_rules(stylesheet, class).any(|rule| {
-                    rule.state == rule_state
-                        && rule
-                            .declarations
-                            .iter()
-                            .any(|declaration| matches!(declaration, Declaration::Layout(_)))
+    let interaction_layout_changed = state != current_state
+        && matching_rules(stylesheet, target).any(|rule| {
+            rule.state.matches(state) != rule.state.matches(current_state)
+                && rule.declarations.iter().any(|declaration| {
+                    matches!(
+                        declaration,
+                        Declaration::Layout(_)
+                            | Declaration::Color(_)
+                            | Declaration::All(_)
+                            | Declaration::FontFamily(_)
+                            | Declaration::FontWeight(_)
+                            | Declaration::FontStyle(_)
+                            | Declaration::CustomProperty { .. }
+                            | Declaration::Deferred { .. }
+                    )
                 })
         });
     if interaction_layout_changed {
@@ -1159,6 +1165,7 @@ pub(crate) fn show(
             .request_discard("CSS selector interaction state changed");
     }
     let overlay = shape_index(ui.ctx(), layer);
+    let mut outline = None;
     let mut scrollbars = Vec::new();
     let mut fragment_border_images = Vec::new();
     let mut fragment_backgrounds = Vec::new();
@@ -1178,10 +1185,8 @@ pub(crate) fn show(
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO
         } else if frame_stroke.is_some()
-            || matching_rules(stylesheet, class).any(|r| {
-                (r.state == RuleState::Base
-                    || r.state == RuleState::Hovered && current_state & 1 != 0
-                    || r.state == RuleState::Active && current_state & 2 != 0)
+            || matching_rules(stylesheet, target).any(|r| {
+                r.state.matches(current_state)
                     && r.declarations.iter().any(|declaration| {
                         matches!(declaration, Declaration::BorderRadius(_))
                             || matches!(declaration, Declaration::Layout(layout) if layout.name == "border-radius")
@@ -1559,7 +1564,7 @@ pub(crate) fn show(
             ] {
                 let Some((pseudo_style, fill, color)) = pseudo_decoration_style(
                     stylesheet,
-                    class,
+                    target,
                     pseudo,
                     state,
                     &style,
@@ -1596,6 +1601,24 @@ pub(crate) fn show(
 
         painter.set(background, egui::Shape::Vec(shapes));
         scrollbars = scroll_box(&mut content_ui, id, &final_geometry, &style, scroll);
+        let outline_surfaces = if final_geometry.slices.is_empty() {
+            surfaces
+        } else {
+            final_geometry
+                .slices
+                .iter()
+                .map(|slice| slice.source.translate(border.min.to_vec2() + slice.offset))
+                .collect()
+        };
+        let outlines = outline_surfaces
+            .into_iter()
+            .flat_map(|surface| outline_shapes(surface, decoration_style, style.current_color))
+            .collect::<Vec<_>>();
+        if !outlines.is_empty() {
+            let mut outline_painter = painter.clone();
+            outline_painter.set_clip_rect(ui.clip_rect());
+            outline = Some(outline_painter.add(egui::Shape::Vec(outlines)));
+        }
     }
     if root && !absent && style.layout.position != Position::Absolute {
         let spacing = ui.spacing().item_spacing;
@@ -1613,6 +1636,7 @@ pub(crate) fn show(
         start: background,
         end: paint_end,
         overlay,
+        outline,
         scrollbars,
         geometry: final_geometry.clone(),
         clip: ui.clip_rect(),

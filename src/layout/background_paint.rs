@@ -23,16 +23,12 @@ pub(super) fn resolved_background_from_rules<'a>(
 
 pub(super) fn resolved_background<'a>(
     stylesheet: &'a Stylesheet,
-    class: &'a str,
+    target: &'a crate::css::SelectorTarget,
     state: u8,
 ) -> BackgroundPaint<'a> {
     background_from_declarations(
-        matching_rules(stylesheet, class)
-            .filter(move |rule| {
-                rule.state == RuleState::Base
-                    || rule.state == RuleState::Hovered && state & 1 != 0
-                    || rule.state == RuleState::Active && state & 2 != 0
-            })
+        matching_rules(stylesheet, target)
+            .filter(move |rule| rule.state.matches(state))
             .flat_map(|rule| rule.declarations.iter()),
     )
 }
@@ -598,7 +594,7 @@ fn background_tiles(
 
 pub(super) fn resolved_element_references(
     stylesheet: &Stylesheet,
-    class: &str,
+    target: &crate::css::SelectorTarget,
     state: u8,
 ) -> HashSet<String> {
     let mut references = HashSet::new();
@@ -607,16 +603,16 @@ pub(super) fn resolved_element_references(
         image.collect_element_ids(&mut ids);
         references.extend(ids);
     };
-    for image in resolved_background(stylesheet, class, state).images {
+    for image in resolved_background(stylesheet, target, state).images {
         collect(image);
     }
-    collect(&resolved_border_image_source(stylesheet, class, state));
+    collect(&resolved_border_image_source(stylesheet, target, state));
     for pseudo in [
         crate::css::PseudoElementKind::FirstLetter,
         crate::css::PseudoElementKind::FirstLine,
     ] {
         collect(&resolved_pseudo_border_image_source(
-            stylesheet, class, pseudo, state,
+            stylesheet, target, pseudo, state,
         ));
     }
     references
@@ -624,7 +620,7 @@ pub(super) fn resolved_element_references(
 
 pub(super) fn resolved_element_references_from_rules(
     stylesheet: &Stylesheet,
-    selector: &str,
+    selector: &crate::css::SelectorTarget,
     state: u8,
     rules: &[(RuleState, Vec<Declaration>)],
 ) -> HashSet<String> {
@@ -676,11 +672,7 @@ pub(super) fn invalid_element_references(
     }
     let mut element_ids = HashSet::new();
     for rule in &stylesheet.rules {
-        if let Some(id) = rule
-            .class
-            .as_deref()
-            .and_then(|class| class.strip_prefix("@id:"))
-        {
+        if let Some(id) = &rule.target.id {
             element_ids.insert(id.to_owned());
         }
         collect_rule_element_ids(rule, &mut element_ids);
@@ -705,7 +697,14 @@ pub(super) fn invalid_element_references(
         } else if let Some(image) = element_image(context, id) {
             image.dependencies.clone()
         } else {
-            resolved_element_references(stylesheet, &format!("@id:{id}"), 0)
+            resolved_element_references(
+                stylesheet,
+                &crate::css::SelectorTarget {
+                    id: Some(id.clone()),
+                    ..Default::default()
+                },
+                RuleState::ENABLED.bits(),
+            )
         };
         dependencies.insert(id.clone(), targets);
     }
@@ -829,15 +828,12 @@ pub(super) fn collect_rule_element_ids(rule: &crate::css::Rule, ids: &mut HashSe
 
 pub(super) fn resolved_border_image_source(
     stylesheet: &Stylesheet,
-    selector: &str,
+    selector: &crate::css::SelectorTarget,
     state: u8,
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
     for rule in matching_rules(stylesheet, selector) {
-        if rule.state != RuleState::Base
-            && !(rule.state == RuleState::Hovered && state & 1 != 0)
-            && !(rule.state == RuleState::Active && state & 2 != 0)
-        {
+        if !rule.state.matches(state) {
             continue;
         }
         for declaration in &rule.declarations {
@@ -859,7 +855,7 @@ pub(super) fn resolved_border_image_source(
 
 pub(super) fn resolved_pseudo_border_image_source(
     stylesheet: &Stylesheet,
-    selector: &str,
+    selector: &crate::css::SelectorTarget,
     pseudo: crate::css::PseudoElementKind,
     state: u8,
 ) -> crate::css::BackgroundImage {

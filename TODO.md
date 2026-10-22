@@ -14,8 +14,8 @@
     `cursor`, ~~`direction`~~, `display`, _~~`elevation`~~_, `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~,
     ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~, `left`, `letter-spacing`, `line-height`, `list-style`,
     `list-style-image`, `list-style-position`, `list-style-type`, ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~,
-    ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, `outline`,
-    `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
+    ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`, `min-width`, `orphans`, ~~`outline`~~,
+    ~~`outline-color`~~, ~~`outline-style`~~, ~~`outline-width`~~, `overflow`, ~~`padding`~~, ~~`padding-bottom`~~, ~~`padding-left`~~,
     ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
@@ -65,8 +65,8 @@
 
 - **[Media Queries Level 3](https://www.w3.org/TR/mediaqueries-3/) - Unsupported.**
 - **[Media Queries Level 4](https://www.w3.org/TR/mediaqueries-4/) - Unsupported.**
-- **[Selectors Level 3](https://www.w3.org/TR/css3-selectors/) - Unsupported.**
-- **[Selectors Level 4](https://www.w3.org/TR/selectors4/) - Unsupported.**
+- **[Selectors Level 3](https://www.w3.org/TR/css3-selectors/) - Partial.**
+- **[Selectors Level 4](https://www.w3.org/TR/selectors4/) - Partial.**
 - **[Selectors Level 5](https://www.w3.org/TR/selectors-5/) - Unsupported.**
 - **[CSS Namespaces](https://www.w3.org/TR/css3-namespace/) - Unsupported.**
 - **[CSS Scoping](https://www.w3.org/TR/css-scoping-1/) - Unsupported.**
@@ -237,9 +237,9 @@
     ~~`corner-top-left`~~, ~~`corner-top-left-shape`~~, ~~`corner-top-right`~~, ~~`corner-top-right-shape`~~,
     ~~`corner-top-shape`~~.
   - Partial because: CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are rejected, `border-color` supports colors/currentcolor and `stripes()` but not arbitrary `<image-1D>` values, some painting behavior is approximate (for example, fixed shade factors for 3D border styles).
-- **[CSS Basic User Interface](https://www.w3.org/TR/css3-ui/) - Unsupported.**
-  - CSS properties: `box-sizing`, `caret-color`, `cursor`, `outline`, `outline-color`, `outline-offset`, `outline-style`,
-    `outline-width`, `resize`, ~~`text-overflow`~~.
+- **[CSS Basic User Interface](https://www.w3.org/TR/css3-ui/) - Partial.**
+  - CSS properties: `box-sizing`, `caret-color`, `cursor`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-offset`~~, ~~`outline-style`~~,
+    ~~`outline-width`~~, `resize`, ~~`text-overflow`~~.
 - **[CSS Color](https://www.w3.org/TR/css3-color/) - Unsupported.**
   - CSS properties: ~~`color`~~, `opacity`.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**
@@ -257,10 +257,10 @@
     `mask-border-repeat`, `mask-border-slice`, `mask-border-source`, `mask-border-width`, `mask-clip`, `mask-composite`,
     `mask-image`, `mask-mode`, `mask-origin`, `mask-position`, `mask-repeat`, `mask-size`, `mask-type`.
 - **[Geometry Interfaces Module Level 1](https://www.w3.org/TR/geometry-1/) - Unsupported.**
-- **[CSS Basic User Interface Module Level 4](https://www.w3.org/TR/css-ui-4/) - Unsupported.**
+- **[CSS Basic User Interface Module Level 4](https://www.w3.org/TR/css-ui-4/) - Partial.**
   - CSS properties: `accent-color`, `appearance`, `caret`, `caret-animation`, `caret-color`, `caret-shape`, `cursor`, `interactivity`,
     `interest-delay`, `interest-delay-end`, `interest-delay-start`, `nav-down`, `nav-left`, `nav-right`, `nav-up`,
-    `outline`, `outline-color`, `outline-offset`, `outline-style`, `outline-width`, `pointer-events`, `resize`,
+    ~~`outline`~~, ~~`outline-color`~~, ~~`outline-offset`~~, ~~`outline-style`~~, ~~`outline-width`~~, `pointer-events`, `resize`,
     `user-select`, `window-drag`.
 - **[CSS Fill and Stroke Module Level 3](https://www.w3.org/TR/fill-stroke-3/) - Unsupported.**
   - CSS properties: `fill`, `fill-break`, `fill-color`, `fill-image`, `fill-opacity`, `fill-origin`, `fill-position`, `fill-repeat`,
@@ -428,7 +428,7 @@
     `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
-    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
+    `min-width`, `orphans`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-style`~~, ~~`outline-width`~~, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
@@ -476,7 +476,7 @@ These property-bearing specifications also appear in the W3C generated property 
     `empty-cells`, `float`, `font`, ~~`font-family`~~, ~~`font-size`~~, ~~`font-style`~~, `font-variant`, ~~`font-weight`~~, ~~`height`~~,
     `left`, `letter-spacing`, `line-height`, `list-style`, `list-style-image`, `list-style-position`, `list-style-type`,
     ~~`margin`~~, ~~`margin-bottom`~~, ~~`margin-left`~~, ~~`margin-right`~~, ~~`margin-top`~~, `max-height`, `max-width`, `min-height`,
-    `min-width`, `orphans`, `outline`, `outline-color`, `outline-style`, `outline-width`, `overflow`, ~~`padding`~~,
+    `min-width`, `orphans`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-style`~~, ~~`outline-width`~~, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
     `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,

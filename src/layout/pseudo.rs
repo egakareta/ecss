@@ -2,68 +2,35 @@ use super::*;
 
 pub(super) fn matching_rules<'a>(
     stylesheet: &'a Stylesheet,
-    class: &'a str,
+    target: &'a crate::css::SelectorTarget,
 ) -> impl Iterator<Item = &'a crate::css::Rule> {
-    let rules = &stylesheet.rules;
     stylesheet
         .rule_index
-        .matching(class)
-        .map(move |index| &rules[index])
+        .matching(&stylesheet.rules, target)
+        .filter(|rule| rule.pseudo.is_none())
 }
 
 pub(super) fn applicable_rules<'a>(
     stylesheet: &'a Stylesheet,
-    class: &'a str,
+    target: &'a crate::css::SelectorTarget,
     state: u8,
 ) -> impl Iterator<Item = &'a crate::css::Rule> + 'a {
-    matching_rules(stylesheet, class).filter(move |rule| {
-        rule.state == RuleState::Base
-            || rule.state == RuleState::Hovered && state & 1 != 0
-            || rule.state == RuleState::Active && state & 2 != 0
-    })
+    matching_rules(stylesheet, target).filter(move |rule| rule.state.matches(state))
 }
 
 pub(super) fn matching_pseudo_rules<'a>(
     stylesheet: &'a Stylesheet,
-    class: &'a str,
+    target: &'a crate::css::SelectorTarget,
     pseudo: crate::css::PseudoElementKind,
     state: u8,
 ) -> Vec<&'a crate::css::Rule> {
     if !stylesheet.rule_index.has_pseudo_rules {
         return Vec::new();
     }
-    let applicable = |rule: &&crate::css::Rule| {
-        rule.pseudo == Some(pseudo)
-            && (rule.state == RuleState::Base
-                || rule.state == RuleState::Hovered && state & 1 != 0
-                || rule.state == RuleState::Active && state & 2 != 0)
-    };
-    let rules = &stylesheet.rules;
-    rules
-        .iter()
-        .filter(|rule| rule.class.is_none() && rule.state == RuleState::Base)
-        .filter(applicable)
-        .chain(
-            rules
-                .iter()
-                .filter(|rule| {
-                    (rule.class.is_some()
-                        && rule.class.as_deref() == Some(class)
-                        && rule.state == RuleState::Base)
-                        || (rule.class.is_none() && rule.state != RuleState::Base)
-                })
-                .filter(applicable),
-        )
-        .chain(
-            rules
-                .iter()
-                .filter(|rule| {
-                    rule.class.is_some()
-                        && rule.class.as_deref() == Some(class)
-                        && rule.state != RuleState::Base
-                })
-                .filter(applicable),
-        )
+    stylesheet
+        .rule_index
+        .matching(&stylesheet.rules, target)
+        .filter(|rule| rule.pseudo == Some(pseudo) && rule.state.matches(state))
         .collect()
 }
 
@@ -259,14 +226,14 @@ pub(super) fn is_combining_mark(character: char) -> bool {
 
 pub(super) fn pseudo_decoration_style(
     stylesheet: &Stylesheet,
-    class: &str,
+    target: &crate::css::SelectorTarget,
     pseudo: crate::css::PseudoElementKind,
     state: u8,
     parent: &BoxStyle,
     units: Units,
     current: Color32,
 ) -> Option<(BoxStyle, Color32, Color32)> {
-    let rules = matching_pseudo_rules(stylesheet, class, pseudo, state);
+    let rules = matching_pseudo_rules(stylesheet, target, pseudo, state);
     if rules.is_empty() {
         return None;
     }

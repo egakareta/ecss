@@ -32,10 +32,33 @@ pub(crate) use color::parse_color;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Rule {
-    pub(crate) class: Option<String>,
+    pub(crate) target: SelectorTarget,
     pub(crate) state: RuleState,
     pub(crate) pseudo: Option<PseudoElementKind>,
+    pub(crate) specificity: u32,
     pub(crate) declarations: Vec<Declaration>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SelectorTarget {
+    pub(crate) classes: Vec<String>,
+    pub(crate) id: Option<String>,
+}
+
+impl SelectorTarget {
+    pub(crate) fn is_universal(&self) -> bool {
+        self.classes.is_empty() && self.id.is_none()
+    }
+
+    pub(crate) fn matches(&self, target: &Self) -> bool {
+        self.id
+            .as_ref()
+            .is_none_or(|id| target.id.as_ref() == Some(id))
+            && self
+                .classes
+                .iter()
+                .all(|class| target.classes.contains(class))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,11 +81,29 @@ pub(crate) struct ParsedStylesheet {
     pub(crate) keyframes: HashMap<String, Vec<Keyframe>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RuleState {
-    Base,
-    Hovered,
-    Active,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RuleState(u8);
+
+impl RuleState {
+    pub(crate) const BASE: Self = Self(0);
+    pub(crate) const HOVERED: Self = Self(1);
+    pub(crate) const ACTIVE: Self = Self(2);
+    pub(crate) const FOCUS: Self = Self(4);
+    pub(crate) const FOCUS_VISIBLE: Self = Self(8);
+    pub(crate) const ENABLED: Self = Self(16);
+    pub(crate) const DISABLED: Self = Self(32);
+
+    pub(crate) fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) fn matches(self, state: u8) -> bool {
+        state & self.0 == self.0
+    }
+
+    fn insert(&mut self, state: Self) {
+        self.0 |= state.0;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -497,21 +538,27 @@ pub(crate) fn parse_style_attribute(source: &str) -> Result<Vec<Declaration>, Cs
         .map_err(|issue| CssError::at_line(issue.line.unwrap_or(0), issue.message))
 }
 
-pub(crate) fn selector_class(selector: &str) -> Option<String> {
+pub(crate) fn selector_target(selector: &str) -> Option<SelectorTarget> {
     if let Some(class) = selector.strip_prefix('.')
         && is_simple_class_name(class)
     {
-        return Some(class.to_owned());
+        return Some(SelectorTarget {
+            classes: vec![class.to_owned()],
+            id: None,
+        });
     }
     let mut parser = CssParser::new(selector);
     parse_selectors(&mut parser)
         .ok()
         .filter(|selectors| selectors.len() == 1)
         .and_then(|mut selectors| {
-            let (class, state, pseudo) = selectors.pop()?;
-            (state == RuleState::Base && pseudo.is_none())
-                .then_some(class)
-                .flatten()
+            let (target, state, pseudo, _) = selectors.pop()?;
+            (state == RuleState::BASE && pseudo.is_none() && !target.is_universal()).then(|| {
+                let mut target = target;
+                target.classes.sort();
+                target.classes.dedup();
+                target
+            })
         })
 }
 
@@ -535,7 +582,7 @@ fn is_simple_class_name(class: &str) -> bool {
 struct StylesheetRuleParser;
 
 impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
-    type Prelude = Vec<(Option<String>, RuleState, Option<PseudoElementKind>)>;
+    type Prelude = Vec<ParsedSelector>;
     type QualifiedRule = ParsedRule;
     type Error = ParseIssue;
 
@@ -556,10 +603,11 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
         Ok(ParsedRule::Style(
             selectors
                 .into_iter()
-                .map(|(class, state, pseudo)| Rule {
-                    class,
+                .map(|(target, state, pseudo, specificity)| Rule {
+                    target,
                     state,
                     pseudo,
+                    specificity,
                     declarations: declarations.clone(),
                 })
                 .collect(),
@@ -749,7 +797,7 @@ fn parse_import<'i>(input: &mut CssParser<'i>) -> Result<String, ParseError<Pars
     Ok(url)
 }
 
-type ParsedSelector = (Option<String>, RuleState, Option<PseudoElementKind>);
+type ParsedSelector = (SelectorTarget, RuleState, Option<PseudoElementKind>, u32);
 
 fn parse_selectors<'i>(
     input: &mut CssParser<'i>,
@@ -760,32 +808,41 @@ fn parse_selectors<'i>(
 
     let mut result = Vec::with_capacity(selectors.len());
     for selector in selectors.slice() {
-        let mut class = None;
+        let mut target = SelectorTarget::default();
         let mut universal = false;
-        let mut state = RuleState::Base;
+        let mut state = RuleState::BASE;
         let mut pseudo = None;
         for component in selector.iter_raw_parse_order_from(0) {
             match component {
-                Component::Class(identifier) if class.is_none() && !universal => {
-                    class = Some(identifier.0.clone());
+                Component::Class(identifier) => {
+                    target.classes.push(identifier.0.clone());
                 }
-                Component::ID(identifier) if class.is_none() && !universal => {
-                    class = Some(format!("@id:{}", identifier.0));
+                Component::ID(identifier) if target.id.is_none() => {
+                    target.id = Some(identifier.0.clone());
                 }
-                Component::ExplicitUniversalType if class.is_none() && !universal => {
+                Component::ExplicitUniversalType if !universal => {
                     universal = true;
-                }
-                Component::NonTSPseudoClass(StatePseudo::Hover) if state == RuleState::Base => {
-                    state = RuleState::Hovered;
-                }
-                Component::NonTSPseudoClass(StatePseudo::Active) if state == RuleState::Base => {
-                    state = RuleState::Active;
                 }
                 Component::NonTSPseudoClass(StatePseudo::FirstLetter) if pseudo.is_none() => {
                     pseudo = Some(PseudoElementKind::FirstLetter);
                 }
                 Component::NonTSPseudoClass(StatePseudo::FirstLine) if pseudo.is_none() => {
                     pseudo = Some(PseudoElementKind::FirstLine);
+                }
+                Component::NonTSPseudoClass(value) => {
+                    state.insert(match value {
+                        StatePseudo::Hover => RuleState::HOVERED,
+                        StatePseudo::Active => RuleState::ACTIVE,
+                        StatePseudo::Focus => RuleState::FOCUS,
+                        StatePseudo::FocusVisible => RuleState::FOCUS_VISIBLE,
+                        StatePseudo::Enabled => RuleState::ENABLED,
+                        StatePseudo::Disabled => RuleState::DISABLED,
+                        StatePseudo::FirstLetter | StatePseudo::FirstLine => {
+                            return Err(ParseError::custom(ParseIssue::new(
+                                "unsupported class selector",
+                            )));
+                        }
+                    });
                 }
                 Component::PseudoElement(value) if pseudo.is_none() => pseudo = Some(*value),
                 Component::Combinator(combinator) if combinator.is_pseudo_element() => {}
@@ -796,23 +853,12 @@ fn parse_selectors<'i>(
                 }
             }
         }
-        if universal && class.is_some() {
+        if !universal && target.is_universal() && state == RuleState::BASE && pseudo.is_none() {
             return Err(ParseError::custom(ParseIssue::new(
                 "unsupported class selector",
             )));
         }
-        let selector = if universal {
-            None
-        } else if let Some(class) = class {
-            Some(class)
-        } else if pseudo.is_some() {
-            None
-        } else {
-            return Err(ParseError::custom(ParseIssue::new(
-                "unsupported class selector",
-            )));
-        };
-        result.push((selector, state, pseudo));
+        result.push((target, state, pseudo, selector.specificity()));
     }
     if result.is_empty() {
         return Err(ParseError::custom(ParseIssue::new(
@@ -1371,6 +1417,10 @@ impl PrecomputedHash for Atom {
 enum StatePseudo {
     Hover,
     Active,
+    Focus,
+    FocusVisible,
+    Enabled,
+    Disabled,
     FirstLetter,
     FirstLine,
 }
@@ -1381,7 +1431,10 @@ impl parser::NonTSPseudoClass for StatePseudo {
     }
 
     fn is_user_action_state(&self) -> bool {
-        matches!(self, Self::Hover | Self::Active)
+        matches!(
+            self,
+            Self::Hover | Self::Active | Self::Focus | Self::FocusVisible
+        )
     }
 }
 
@@ -1393,6 +1446,10 @@ impl ToCss for StatePseudo {
         dest.write_str(match self {
             Self::Hover => ":hover",
             Self::Active => ":active",
+            Self::Focus => ":focus",
+            Self::FocusVisible => ":focus-visible",
+            Self::Enabled => ":enabled",
+            Self::Disabled => ":disabled",
             Self::FirstLetter => ":first-letter",
             Self::FirstLine => ":first-line",
         })
@@ -1443,6 +1500,14 @@ impl<'i> parser::Parser<'i> for SimpleSelectorParser {
             Ok(StatePseudo::Hover)
         } else if name.eq_ignore_ascii_case("active") {
             Ok(StatePseudo::Active)
+        } else if name.eq_ignore_ascii_case("focus") {
+            Ok(StatePseudo::Focus)
+        } else if name.eq_ignore_ascii_case("focus-visible") {
+            Ok(StatePseudo::FocusVisible)
+        } else if name.eq_ignore_ascii_case("enabled") {
+            Ok(StatePseudo::Enabled)
+        } else if name.eq_ignore_ascii_case("disabled") {
+            Ok(StatePseudo::Disabled)
         } else if name.eq_ignore_ascii_case("first-letter") {
             Ok(StatePseudo::FirstLetter)
         } else if name.eq_ignore_ascii_case("first-line") {

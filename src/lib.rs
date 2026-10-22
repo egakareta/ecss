@@ -13,7 +13,7 @@ use std::{
     },
 };
 
-use css::{Declaration, Rule, RuleState};
+use css::{Declaration, Rule, RuleState, SelectorTarget};
 use egui::{Color32, CornerRadius, Id, Response, Ui, Widget, style::WidgetVisuals};
 use fonts::{FontAssets, FontRequest};
 
@@ -84,9 +84,9 @@ impl InlineStyle {
 
 #[derive(Clone, Debug, Default)]
 struct RuleIndex {
-    universal_base: Vec<usize>,
-    universal_state: Vec<usize>,
-    classes: HashMap<String, Vec<usize>>,
+    universal: Vec<(u32, usize)>,
+    classes: HashMap<String, Vec<(u32, usize)>>,
+    ids: HashMap<String, Vec<(u32, usize)>>,
     has_pseudo_rules: bool,
     has_element_references: bool,
 }
@@ -98,54 +98,45 @@ impl RuleIndex {
         for (rule_index, rule) in rules.iter().enumerate() {
             if rule.pseudo.is_some() {
                 index.has_pseudo_rules = true;
-                continue;
             }
-            match &rule.class {
-                None if rule.state == RuleState::Base => {
-                    index.universal_base.push(rule_index);
-                }
-                None => index.universal_state.push(rule_index),
-                Some(class) => {
-                    index.classes.entry(class.clone()).or_default();
-                }
-            }
+            let entries = if let Some(id) = &rule.target.id {
+                index.ids.entry(id.clone()).or_default()
+            } else if let Some(class) = rule.target.classes.first() {
+                index.classes.entry(class.clone()).or_default()
+            } else {
+                &mut index.universal
+            };
+            entries.push((rule.specificity, rule_index));
         }
         index.has_element_references = rules
             .iter()
             .flat_map(|rule| &rule.declarations)
             .any(declaration_has_element_references);
 
-        for (class, matching) in &mut index.classes {
-            for (rule_index, rule) in rules.iter().enumerate() {
-                if rule.pseudo.is_none()
-                    && ((rule.class.as_deref() == Some(class.as_str())
-                        && rule.state == RuleState::Base)
-                        || (rule.class.is_none() && rule.state != RuleState::Base))
-                {
-                    matching.push(rule_index);
-                }
-            }
-            for (rule_index, rule) in rules.iter().enumerate() {
-                if rule.pseudo.is_none()
-                    && rule.class.as_deref() == Some(class.as_str())
-                    && rule.state != RuleState::Base
-                {
-                    matching.push(rule_index);
-                }
-            }
-        }
-
         index
     }
 
-    fn matching(&self, class: &str) -> impl Iterator<Item = usize> + '_ {
-        self.universal_base.iter().copied().chain(
-            self.classes
-                .get(class)
-                .map_or(self.universal_state.as_slice(), Vec::as_slice)
-                .iter()
-                .copied(),
-        )
+    fn matching<'a>(
+        &self,
+        rules: &'a [Rule],
+        target: &'a SelectorTarget,
+    ) -> impl Iterator<Item = &'a Rule> {
+        let mut candidates: smallvec::SmallVec<[(u32, usize); 8]> =
+            self.universal.iter().copied().collect();
+        for class in &target.classes {
+            if let Some(entries) = self.classes.get(class) {
+                candidates.extend_from_slice(entries);
+            }
+        }
+        if let Some(entries) = target.id.as_ref().and_then(|id| self.ids.get(id)) {
+            candidates.extend_from_slice(entries);
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+            .into_iter()
+            .map(|(_, index)| &rules[index])
+            .filter(|rule| rule.target.matches(target))
     }
 }
 
@@ -211,7 +202,8 @@ impl Stylesheet {
 
     /// Parses universal and class rules from CSS text and starts remote font loading.
     ///
-    /// Supported selectors are `*`, `.class`, `.class:hover`, and `.class:active`.
+    /// Supports universal, ID, and compound class selectors with `:hover`,
+    /// `:active`, `:focus`, `:focus-visible`, `:enabled`, and `:disabled` states.
     /// Nested selector-wrapped widgets form a CSS layout tree, supporting block,
     /// flex, grid, floats, positioning, sizing, margins, padding, and borders.
     /// CSS pixels map to egui points. Percentages resolve against the containing
@@ -358,43 +350,33 @@ impl Stylesheet {
     }
 
     fn font_requests(&self) -> Vec<FontRequest> {
-        let mut classes = Vec::new();
+        let mut targets = Vec::new();
         for rule in self
             .rules
             .iter()
-            .filter(|rule| rule.pseudo.is_none() && rule.state == RuleState::Base)
+            .filter(|rule| rule.pseudo.is_none() && rule.state == RuleState::BASE)
         {
-            if let Some(class) = &rule.class
-                && !classes.contains(class)
-            {
-                classes.push(class.clone());
+            if !rule.target.is_universal() && !targets.contains(&rule.target) {
+                targets.push(rule.target.clone());
             }
         }
 
-        self.font_request_for_target(None)
+        self.font_request_for_target(&SelectorTarget::default())
             .into_iter()
             .chain(
-                classes
+                targets
                     .into_iter()
-                    .filter_map(|class| self.font_request_for_class(&class)),
+                    .filter_map(|target| self.font_request_for_target(&target)),
             )
             .collect()
     }
 
-    fn font_request_for_class(&self, class: &str) -> Option<FontRequest> {
-        self.font_request_for_target(Some(class))
-    }
-
-    fn font_request_for_target(&self, class: Option<&str>) -> Option<FontRequest> {
+    fn font_request_for_target(&self, target: &SelectorTarget) -> Option<FontRequest> {
         let mut families = None;
         let mut weight = 400;
         let mut italic = false;
-        let class_rules = class
-            .and_then(|class| self.rule_index.classes.get(class))
-            .map_or(&[][..], Vec::as_slice);
-        for rule_index in self.rule_index.universal_base.iter().chain(class_rules) {
-            let rule = &self.rules[*rule_index];
-            if rule.state != RuleState::Base {
+        for rule in self.rule_index.matching(&self.rules, target) {
+            if rule.pseudo.is_some() || rule.state != RuleState::BASE {
                 continue;
             }
             for declaration in &rule.declarations {
@@ -416,11 +398,15 @@ impl Stylesheet {
     fn apply_w3c_defaults(&self, context: &egui::Context) {
         context.all_styles_mut(|style| {
             apply_w3c_defaults(style);
-            for state in [RuleState::Base, RuleState::Hovered, RuleState::Active] {
+            for (state, visual_state) in [
+                (RuleState::BASE, VisualState::Base),
+                (RuleState::HOVERED, VisualState::Hovered),
+                (RuleState::ACTIVE, VisualState::Active),
+            ] {
                 for rule in self.rules.iter().filter(|rule| {
-                    rule.pseudo.is_none() && rule.class.is_none() && rule.state == state
+                    rule.pseudo.is_none() && rule.target.is_universal() && rule.state == state
                 }) {
-                    apply_style_declarations(style, state, &rule.declarations);
+                    apply_style_declarations(style, visual_state, &rule.declarations);
                 }
             }
         });
@@ -432,6 +418,7 @@ impl Stylesheet {
             context.on_begin_pass(
                 BACKGROUND_ID,
                 Arc::new(|ui| {
+                    layout::keyboard_modality(ui.ctx());
                     ui.painter().rect_filled(
                         ui.max_rect(),
                         CornerRadius::same(0),
@@ -461,7 +448,7 @@ impl Stylesheet {
         FontAssets::install_shared(
             self.fonts.clone(),
             self.font_revision.clone(),
-            self.font_request_for_target(None),
+            self.font_request_for_target(&SelectorTarget::default()),
             context,
         );
     }
@@ -472,7 +459,7 @@ pub trait SelectorExt: Widget + Sized {
     /// Wraps this widget and applies the installed stylesheet rule for `selector`.
     ///
     /// The selector should be a supported class or ID selector, such as
-    /// `.primary` or `#preview`.
+    /// `.button.primary` or `#preview`.
     /// If no stylesheet is installed on the widget's context, the widget is
     /// passed through unchanged.
     /// Styled widgets are rendered in a child `Ui`; their autogenerated IDs are
@@ -521,7 +508,7 @@ impl<W: Widget> StyledWidget<W> {
 impl<W: Widget> Widget for StyledWidget<W> {
     fn ui(self, ui: &mut Ui) -> Response {
         let Self { widget, selector } = self;
-        let Some(class) = css::selector_class(&selector) else {
+        let Some(target) = css::selector_target(&selector) else {
             return widget.ui(ui);
         };
 
@@ -532,7 +519,7 @@ impl<W: Widget> Widget for StyledWidget<W> {
             return widget.ui(ui);
         };
 
-        layout::show(widget, ui, &stylesheet, &class)
+        layout::show(widget, ui, &stylesheet, &target)
     }
 }
 
@@ -551,7 +538,10 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
             style,
             selector,
         } = self;
-        let class = selector.as_deref().and_then(css::selector_class);
+        let target = selector
+            .as_deref()
+            .and_then(css::selector_target)
+            .unwrap_or_default();
         let mut stylesheet = ui
             .ctx()
             .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::unique(STYLESHEET_ID)))
@@ -563,9 +553,10 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
             )
         });
         stylesheet.rules.push(Rule {
-            class: class.clone(),
-            state: RuleState::Base,
+            target: target.clone(),
+            state: RuleState::BASE,
             pseudo: None,
+            specificity: u32::MAX,
             declarations: style.declarations,
         });
         stylesheet.rule_index = RuleIndex::new(&stylesheet.rules);
@@ -575,7 +566,7 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
                 "ecss.inline-font-load",
                 Arc::as_ptr(&style.load_id) as usize,
                 Arc::as_ptr(&stylesheet.fonts) as usize,
-                class.as_deref().unwrap_or(""),
+                selector.as_deref().unwrap_or(""),
             ));
             let started = ui
                 .ctx()
@@ -592,7 +583,7 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
                 .max_passes
                 .max(std::num::NonZeroUsize::new(8).unwrap())
         });
-        layout::show(widget, ui, &stylesheet, class.as_deref().unwrap_or(""))
+        layout::show(widget, ui, &stylesheet, &target)
     }
 }
 
@@ -810,7 +801,14 @@ fn set_widget_visuals(
     visuals.expansion = 0.0;
 }
 
-fn apply_declarations(ui: &mut Ui, state: RuleState, declarations: &[Declaration]) {
+#[derive(Clone, Copy)]
+enum VisualState {
+    Base,
+    Hovered,
+    Active,
+}
+
+fn apply_declarations(ui: &mut Ui, state: VisualState, declarations: &[Declaration]) {
     apply_style_declarations(ui.style_mut(), state, declarations);
 }
 
@@ -884,7 +882,7 @@ fn clear_matching_rect_stroke(shape: &mut egui::Shape, rect: egui::Rect) {
 
 fn apply_style_declarations(
     style: &mut egui::Style,
-    state: RuleState,
+    state: VisualState,
     declarations: &[Declaration],
 ) {
     for declaration in declarations {
@@ -898,20 +896,20 @@ fn apply_style_declarations(
 
         let visuals = &mut style.visuals.widgets;
         match state {
-            RuleState::Base => {
+            VisualState::Base => {
                 apply_visual_declaration(&mut visuals.noninteractive, declaration);
                 apply_visual_declaration(&mut visuals.inactive, declaration);
                 apply_visual_declaration(&mut visuals.hovered, declaration);
                 apply_visual_declaration(&mut visuals.active, declaration);
                 apply_visual_declaration(&mut visuals.open, declaration);
             }
-            RuleState::Hovered => apply_visual_declaration(&mut visuals.hovered, declaration),
-            RuleState::Active => apply_visual_declaration(&mut visuals.active, declaration),
+            VisualState::Hovered => apply_visual_declaration(&mut visuals.hovered, declaration),
+            VisualState::Active => apply_visual_declaration(&mut visuals.active, declaration),
         }
     }
 }
 
-fn reset_all_visuals(style: &mut egui::Style, state: RuleState, keyword: crate::css::AllKeyword) {
+fn reset_all_visuals(style: &mut egui::Style, state: VisualState, keyword: crate::css::AllKeyword) {
     let defaults = egui::Style::default().visuals;
     let widgets = &mut style.visuals.widgets;
     let preserve_foreground = matches!(
@@ -928,15 +926,15 @@ fn reset_all_visuals(style: &mut egui::Style, state: RuleState, keyword: crate::
         }
     };
     match state {
-        RuleState::Base => {
+        VisualState::Base => {
             reset(&mut widgets.noninteractive, defaults.widgets.noninteractive);
             reset(&mut widgets.inactive, defaults.widgets.inactive);
             reset(&mut widgets.hovered, defaults.widgets.hovered);
             reset(&mut widgets.active, defaults.widgets.active);
             reset(&mut widgets.open, defaults.widgets.open);
         }
-        RuleState::Hovered => reset(&mut widgets.hovered, defaults.widgets.hovered),
-        RuleState::Active => reset(&mut widgets.active, defaults.widgets.active),
+        VisualState::Hovered => reset(&mut widgets.hovered, defaults.widgets.hovered),
+        VisualState::Active => reset(&mut widgets.active, defaults.widgets.active),
     }
     if !preserve_foreground {
         style.visuals.override_text_color = defaults.override_text_color;
@@ -994,7 +992,8 @@ mod tests {
                 "https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=SUSE+Mono:ital,wght@0,100..800;1,100..800&display=swap"
             ]
         );
-        let request = stylesheet.font_request_for_class("outfit-text").unwrap();
+        let target = css::selector_target(".outfit-text").unwrap();
+        let request = stylesheet.font_request_for_target(&target).unwrap();
         assert_eq!(request.families, ["Outfit", "sans-serif"]);
         assert_eq!(request.weight, 500);
         assert!(!request.italic);

@@ -912,6 +912,40 @@ pub(super) fn collapsed_border_shapes(
     border_shapes(surface, &paint_style, current)
 }
 
+pub(super) fn outline_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Shape> {
+    let outline = style.outline;
+    if outline.width <= 0.0 || outline.style == BorderStyle::None {
+        return Vec::new();
+    }
+    let offset = vec2(
+        outline.offset.max(-rect.width() * 0.5),
+        outline.offset.max(-rect.height() * 0.5),
+    );
+    let outer = rect.expand2(offset).expand(outline.width);
+    let mut stroke = BoxStyle::default();
+    stroke.layout.border = taffy::Rect::length(outline.width);
+    stroke.border_styles = [outline.style; 4];
+    stroke.border_colors = [outline.color; 4];
+    let radii = crate::box_decoration::resolved_radii(style, rect);
+    stroke.decorations.radii = radii.map(|radius| {
+        let expanded = radius + offset + Vec2::splat(outline.width);
+        crate::box_decoration::CornerRadius {
+            x: crate::box_decoration::LengthPercentage::Length(if radius.x > 0.0 {
+                expanded.x.max(0.0)
+            } else {
+                0.0
+            }),
+            y: crate::box_decoration::LengthPercentage::Length(if radius.y > 0.0 {
+                expanded.y.max(0.0)
+            } else {
+                0.0
+            }),
+        }
+    });
+    stroke.decorations.corner_shapes = style.decorations.corner_shapes;
+    border_shapes(outer, &stroke, current)
+}
+
 pub(super) fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> Vec<egui::Shape> {
     let widths = style
         .layout
@@ -1605,7 +1639,11 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
             .iter()
             .filter_map(|ancestor| border_clips[*ancestor].as_ref())
             .collect::<smallvec::SmallVec<[&crate::box_decoration::PathClip; 4]>>();
-        if !decoration {
+        if !decoration
+            && paint
+                .outline
+                .is_none_or(|outline| outline.0 != index + root.start.0)
+        {
             clips.extend(border_clips[owner].as_ref());
         }
         let is_overlay = index + root.start.0 >= paint.overlay.0;
@@ -1747,6 +1785,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
             && !node.style.hidden
             && !node.style.contents
             && let Some(paint) = &node.paint
+            && paint.response.enabled()
         {
             without_id_clash_warning(context, || {
                 paint.ui.interact_opt(
