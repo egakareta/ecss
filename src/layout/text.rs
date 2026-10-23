@@ -678,6 +678,7 @@ pub(super) struct FragmentedTextInput<'a> {
     pub(super) job: &'a egui::text::LayoutJob,
     pub(super) format: &'a crate::formatting::Formatting,
     pub(super) selection_visuals: &'a egui::Visuals,
+    pub(super) decorations: &'a [crate::text_decoration::Decoration],
 }
 
 pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Context) {
@@ -704,6 +705,7 @@ pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Con
             job: &text.job,
             format: &node.style.format,
             selection_visuals: &selection_visuals,
+            decorations: &node.text_decorations,
         });
     }
 }
@@ -718,6 +720,7 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
         job,
         format,
         selection_visuals,
+        decorations,
     } = input;
     let original = context.graphics(|layers| {
         layers
@@ -758,7 +761,7 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
     for rect in &selection_rects {
         painter.rect_filled(*rect, 0.0, selection_color);
     }
-    for fragment in &geometry.fragments {
+    for (index, fragment) in geometry.fragments.iter().enumerate() {
         if let Some(range) = &fragment.range {
             let fragment_clip = fragment.clip.map_or(clip, |fragment_clip| {
                 clip.intersect(fragment_clip.translate(geometry.border.min.to_vec2()))
@@ -830,11 +833,81 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
                     selection_visuals.selection.stroke.color,
                 );
             }
+            let trailing_space = geometry
+                .fragments
+                .get(index + 1)
+                .filter(|next| {
+                    fragment.marker.is_none()
+                        && next.range.is_some()
+                        && (next.text_rect.top() - fragment.text_rect.top()).abs() < 0.05
+                })
+                .map_or(0.0, |next| {
+                    (next.text_rect.left() - fragment.text_rect.right()).max(0.0)
+                });
+            crate::text_decoration::decorate_galley(
+                context,
+                &mut text.galley,
+                decorations,
+                trailing_space,
+            );
             if format.writing.vertical() {
                 vertical_text(&mut text, fragment.text_rect.size(), format);
             }
             fragment_painter.add(egui::Shape::Text(text));
         }
+    }
+}
+
+pub(super) fn decorate_texts(context: &Context, frame: &Frame, index: usize, range: ShapeRange) {
+    let node = &frame.nodes[index];
+    if node.text_decorations.is_empty() {
+        return;
+    }
+    let mut shapes = context.graphics(|layers| {
+        layers.get(range.layer).map_or_else(Vec::new, |list| {
+            list.all_entries()
+                .enumerate()
+                .take(range.end.0)
+                .skip(range.start.0)
+                .filter(|(shape, entry)| {
+                    matches!(entry.shape, egui::Shape::Text(_) | egui::Shape::Vec(_))
+                        && !node.children.iter().any(|child| {
+                            frame.nodes[*child].paint.as_ref().is_some_and(|paint| {
+                                paint.ui.layer_id() == range.layer
+                                    && (paint.start.0..paint.end.0).contains(shape)
+                            })
+                        })
+                })
+                .map(|(index, entry)| (egui::layers::ShapeIdx(index), entry.shape.clone()))
+                .collect()
+        })
+    });
+    for (_, shape) in &mut shapes {
+        decorate_text_shape(context, shape, &node.text_decorations);
+    }
+    context.graphics_mut(|layers| {
+        let list = layers.entry(range.layer);
+        for (index, shape) in shapes {
+            list.mutate_shape(index, |entry| entry.shape = shape);
+        }
+    });
+}
+
+fn decorate_text_shape(
+    context: &Context,
+    shape: &mut egui::Shape,
+    decorations: &[crate::text_decoration::Decoration],
+) {
+    match shape {
+        egui::Shape::Text(text) => {
+            crate::text_decoration::decorate_galley(context, &mut text.galley, decorations, 0.0);
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                decorate_text_shape(context, shape, decorations);
+            }
+        }
+        _ => {}
     }
 }
 

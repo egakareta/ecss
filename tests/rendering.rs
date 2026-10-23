@@ -21,5 +21,6 @@ mod rendering {
     mod selectors;
     mod tables;
     mod text;
+    mod text_decoration;
     mod transitions;
 }

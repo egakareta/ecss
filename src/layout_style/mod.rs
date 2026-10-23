@@ -54,6 +54,7 @@ pub(crate) struct BoxStyle {
     pub border_styles: [BorderStyle; 4],
     pub border_widths: [f32; 4],
     pub(crate) outline: outline::Outline,
+    pub(crate) text_decoration: crate::text_decoration::TextDecoration,
     pub decorations: crate::box_decoration::DecorationStyle,
 }
 
@@ -204,6 +205,7 @@ impl Default for BoxStyle {
             border_styles: [BorderStyle::None; 4],
             border_widths: [3.0; 4],
             outline: outline::Outline::default(),
+            text_decoration: Default::default(),
             decorations: crate::box_decoration::DecorationStyle::default(),
         }
     }
@@ -255,6 +257,7 @@ pub(crate) fn parse(
 fn supported(name: &str) -> bool {
     crate::formatting::supported(name)
         || outline::supported(name)
+        || crate::text_decoration::supported(name)
         || crate::box_decoration::supported(name)
         || matches!(
             name,
@@ -474,6 +477,12 @@ impl Declaration {
                     &mut output.outline,
                     outline::Outline::default(),
                 );
+            } else if crate::text_decoration::supported(&self.name) {
+                crate::text_decoration::copy_property(
+                    &self.name,
+                    &mut output.text_decoration,
+                    Default::default(),
+                );
             } else {
                 copy_property(&self.name, output, &BoxStyle::default());
             }
@@ -513,6 +522,9 @@ impl Declaration {
         }
         if outline::supported(name) {
             return outline::apply(name, value, &mut output.outline, units);
+        }
+        if crate::text_decoration::supported(name) {
+            return crate::text_decoration::apply(name, value, &mut output.text_decoration, units);
         }
         let parts = components(value)?;
         let s = &mut output.layout;
@@ -1067,6 +1079,12 @@ fn inherited(name: &str) -> bool {
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if crate::text_decoration::supported(name) {
+        let mut decoration = source.text_decoration.clone();
+        decoration.color = Some(decoration.color.unwrap_or(source.current_color));
+        crate::text_decoration::copy_property(name, &mut out.text_decoration, decoration);
+        return;
+    }
     if name == "color" {
         out.current_color = source.current_color;
         return;

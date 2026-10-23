@@ -19,7 +19,7 @@
     ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`, `page-break-inside`, _~~`pause`~~_,
     _~~`pause-after`~~_, _~~`pause-before`~~_, _~~`pitch`~~_, _~~`pitch-range`~~_, _~~`play-during`~~_, `position`, `quotes`, _~~`richness`~~_, `right`,
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
-    `text-align`, `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
+    `text-align`, ~~`text-decoration`~~, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
     ~~`visibility`~~, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
 - **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Supported.**
   - CSS properties: ~~`all`~~.
@@ -315,13 +315,13 @@
     ~~`writing-mode`~~.
 - **[CSS Line Grid](https://www.w3.org/TR/css-line-grid-1/) - Unsupported.**
   - CSS properties: `box-snap`, `line-grid`, `line-snap`.
-- **[CSS Text Decoration Module Level 3](https://www.w3.org/TR/css-text-decor-3/) - Unsupported.**
-  - CSS properties: `text-decoration`, `text-decoration-color`, `text-decoration-line`, `text-decoration-style`, `text-emphasis`,
+- **[CSS Text Decoration Module Level 3](https://www.w3.org/TR/css-text-decor-3/) - Partial.**
+  - CSS properties: ~~`text-decoration`~~, ~~`text-decoration-color`~~, ~~`text-decoration-line`~~, ~~`text-decoration-style`~~, `text-emphasis`,
     `text-emphasis-color`, `text-emphasis-position`, `text-emphasis-style`, `text-shadow`, `text-underline-position`.
-- **[CSS Text Decoration Level 4](https://www.w3.org/TR/css-text-decor-4/) - Unsupported.**
-  - CSS properties: `text-decoration`, `text-decoration-color`, `text-decoration-inset`, `text-decoration-line`, `text-decoration-skip`,
+- **[CSS Text Decoration Level 4](https://www.w3.org/TR/css-text-decor-4/) - Partial.**
+  - CSS properties: ~~`text-decoration`~~, ~~`text-decoration-color`~~, `text-decoration-inset`, ~~`text-decoration-line`~~, `text-decoration-skip`,
     `text-decoration-skip-box`, `text-decoration-skip-ink`, `text-decoration-skip-inset`, `text-decoration-skip-self`,
-    `text-decoration-skip-spaces`, `text-decoration-style`, `text-decoration-thickness`, `text-emphasis`,
+    `text-decoration-skip-spaces`, ~~`text-decoration-style`~~, ~~`text-decoration-thickness`~~, `text-emphasis`,
     `text-emphasis-color`, `text-emphasis-position`, `text-emphasis-skip`, `text-emphasis-style`, `text-shadow`,
     `text-underline-offset`, `text-underline-position`.
 - **[CSS Font Loading Level 3](https://www.w3.org/TR/css-font-loading-3/) - Unsupported.**
@@ -431,7 +431,7 @@
     `min-width`, `orphans`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-style`~~, ~~`outline-width`~~, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
-    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
+    ~~`text-decoration`~~, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
     `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **[CSS Snapshot 2007](https://www.w3.org/TR/css-beijing/) - Unsupported.**
 - **[CSS Snapshot 2010](https://www.w3.org/TR/css-2010/) - Unsupported.**
@@ -479,7 +479,7 @@ These property-bearing specifications also appear in the W3C generated property 
     `min-width`, `orphans`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-style`~~, ~~`outline-width`~~, `overflow`, ~~`padding`~~,
     ~~`padding-bottom`~~, ~~`padding-left`~~, ~~`padding-right`~~, ~~`padding-top`~~, `page-break-after`, `page-break-before`,
     `page-break-inside`, `position`, `property-name`, `quotes`, `right`, `table-layout`, `text-align`,
-    `text-decoration`, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
+    ~~`text-decoration`~~, `text-indent`, `text-transform`, `top`, `unicode-bidi`, `vertical-align`, ~~`visibility`~~,
     `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`.
 - **CSS Form Control Styling Level 1 - Unsupported.**
   - CSS properties: `field-sizing`, `input-security`, `slider-orientation`.

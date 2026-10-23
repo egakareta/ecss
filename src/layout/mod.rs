@@ -108,6 +108,7 @@ struct Node {
     absent: bool,
     paint: Option<PaintRecord>,
     color: Color32,
+    text_decorations: Vec<crate::text_decoration::Decoration>,
 }
 
 struct PaintRecord {
@@ -667,6 +668,23 @@ pub(crate) fn show(
         let mut frame = active.0.borrow_mut();
         let index = frame.nodes.len();
         let parent = frame.stack.last().copied();
+        let mut text_decorations = if style.layout.position.is_out_of_flow()
+            || style.layout.float.is_floated()
+            || style.inline && style.format.display != crate::formatting::DisplayKind::Inline
+        {
+            Vec::new()
+        } else {
+            parent.map_or_else(Vec::new, |parent| {
+                frame.nodes[parent].text_decorations.clone()
+            })
+        };
+        if !style.contents
+            && let Some(decoration) = style
+                .text_decoration
+                .resolve(style.current_color, style.format.em)
+        {
+            text_decorations.push(decoration);
+        }
         let absent =
             style.layout.display == Display::None || parent.is_some_and(|p| frame.nodes[p].absent);
         let viewport_fixed = style.fixed && fixed_containing_block(&frame, parent).is_none();
@@ -721,6 +739,7 @@ pub(crate) fn show(
             absent,
             paint: None,
             color: Color32::BLACK,
+            text_decorations,
         });
         frame.stack.push(index);
         (index, geometry, absent)
@@ -1029,7 +1048,12 @@ pub(crate) fn show(
                 });
             }
         });
-    } else if !geometry.flow_source && !geometry.fragments.is_empty() {
+    } else if !geometry.flow_source
+        && geometry
+            .fragments
+            .iter()
+            .any(|fragment| fragment.range.is_some())
+    {
         if let Some(text) = active.0.borrow().nodes[index].text.as_ref() {
             replace_fragmented_text(FragmentedTextInput {
                 context: ui.ctx(),
@@ -1040,10 +1064,19 @@ pub(crate) fn show(
                 job: &text.job,
                 format: &style.format,
                 selection_visuals: content_ui.visuals(),
+                decorations: &active.0.borrow().nodes[index].text_decorations,
             });
         }
-    } else if text_vertical {
-        rotate_text(ui.ctx(), layer, start, end, &geometry, &style.format);
+    } else {
+        text::decorate_texts(
+            ui.ctx(),
+            &active.0.borrow(),
+            index,
+            ShapeRange { layer, start, end },
+        );
+        if text_vertical {
+            rotate_text(ui.ctx(), layer, start, end, &geometry, &style.format);
+        }
     }
     if style.format.display == crate::formatting::DisplayKind::Cell
         && active.0.borrow().nodes[index].children.is_empty()
