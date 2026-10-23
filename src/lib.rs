@@ -57,7 +57,7 @@ where
 pub struct Stylesheet {
     rules: Vec<Rule>,
     rule_index: RuleIndex,
-    pub(crate) keyframes: HashMap<String, Vec<css::Keyframe>>,
+    pub(crate) keyframes: Vec<css::Keyframes>,
     imports: Vec<String>,
     fonts: Arc<RwLock<FontAssets>>,
     font_revision: Arc<AtomicU64>,
@@ -215,6 +215,8 @@ impl Stylesheet {
     /// CSS pixels map to egui points. Percentages resolve against the containing
     /// block. Unspecified leaf display preserves intrinsic egui widget sizing.
     /// Unknown declarations are ignored; malformed supported values return an error.
+    /// `@media` supports viewport width, height, aspect ratio, and orientation,
+    /// including ranges, logical conditions, query lists, and nested rules.
     pub fn parse(source: &str) -> Result<Self, CssError> {
         let stylesheet = Self::parse_unloaded(source)?;
         stylesheet.start_font_load();
@@ -382,7 +384,7 @@ impl Stylesheet {
         let mut weight = 400;
         let mut italic = false;
         for rule in self.rule_index.matching(&self.rules, target) {
-            if rule.pseudo.is_some() || rule.state != RuleState::BASE {
+            if rule.pseudo.is_some() || rule.state != RuleState::BASE || !rule.media.is_empty() {
                 continue;
             }
             for declaration in &rule.declarations {
@@ -410,7 +412,10 @@ impl Stylesheet {
                 (RuleState::ACTIVE, VisualState::Active),
             ] {
                 for rule in self.rules.iter().filter(|rule| {
-                    rule.pseudo.is_none() && rule.target.is_universal() && rule.state == state
+                    rule.pseudo.is_none()
+                        && rule.target.is_universal()
+                        && rule.state == state
+                        && rule.media.is_empty()
                 }) {
                     apply_style_declarations(style, visual_state, &rule.declarations);
                 }
@@ -425,6 +430,31 @@ impl Stylesheet {
                 BACKGROUND_ID,
                 Arc::new(|ui| {
                     layout::keyboard_modality(ui.ctx());
+                    let stylesheet = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::unique(STYLESHEET_ID)));
+                    if let Some(stylesheet) = stylesheet
+                        && stylesheet
+                            .rules
+                            .iter()
+                            .any(|rule| rule.target.is_universal() && !rule.media.is_empty())
+                    {
+                        let viewport = ui.ctx().viewport_rect().size();
+                        for (state, visual_state) in [
+                            (RuleState::BASE, VisualState::Base),
+                            (RuleState::HOVERED, VisualState::Hovered),
+                            (RuleState::ACTIVE, VisualState::Active),
+                        ] {
+                            for rule in stylesheet.rules.iter().filter(|rule| {
+                                rule.pseudo.is_none()
+                                    && rule.target.is_universal()
+                                    && rule.state == state
+                                    && rule.matches_media(viewport)
+                            }) {
+                                apply_declarations(ui, visual_state, &rule.declarations);
+                            }
+                        }
+                    }
                     ui.painter().rect_filled(
                         ui.max_rect(),
                         CornerRadius::same(0),
@@ -564,6 +594,7 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
             pseudo: None,
             specificity: u32::MAX,
             declarations: style.declarations,
+            media: Vec::new(),
         });
         stylesheet.rule_index = RuleIndex::new(&stylesheet.rules);
         stylesheet.start_background_image_load(ui.ctx());

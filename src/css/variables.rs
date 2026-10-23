@@ -208,8 +208,7 @@ fn substitute_inner(
         let name = call.name.as_deref()?;
         let replacement = resolve(name).or_else(|| {
             call.fallback
-                .map(|fallback| substitute_inner(fallback, depth + 1, resolve))
-                .flatten()
+                .and_then(|fallback| substitute_inner(fallback, depth + 1, resolve))
         })?;
         let left = output.chars().next_back();
         let first = replacement.chars().next();
@@ -251,10 +250,8 @@ fn top_level_comma(source: &str) -> Option<usize> {
             b'[' => stack.push(b']'),
             b'{' => stack.push(b'}'),
             b',' if stack.is_empty() => return Some(cursor),
-            close if matches!(close, b')' | b']' | b'}') => {
-                if stack.last() == Some(&close) {
-                    stack.pop();
-                }
+            close if matches!(close, b')' | b']' | b'}') && stack.last() == Some(&close) => {
+                stack.pop();
             }
             _ => {}
         }
@@ -284,12 +281,10 @@ fn matching_close(source: &str, open: usize) -> Option<usize> {
             b'(' => stack.push(b')'),
             b'[' => stack.push(b']'),
             b'{' => stack.push(b'}'),
-            close if matches!(close, b')' | b']' | b'}') => {
-                if stack.last() == Some(&close) {
-                    stack.pop();
-                    if stack.is_empty() {
-                        return Some(cursor);
-                    }
+            close if matches!(close, b')' | b']' | b'}') && stack.last() == Some(&close) => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(cursor);
                 }
             }
             _ => {}

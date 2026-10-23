@@ -378,7 +378,7 @@ pub(crate) fn show(
     };
     let resolve_rules = |state: u8| {
         let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
-            applicable_rules(stylesheet, target, state).collect();
+            applicable_rules(stylesheet, target, state, units.viewport).collect();
         let custom_declarations = rules
             .iter()
             .flat_map(|rule| &rule.declarations)
@@ -558,10 +558,17 @@ pub(crate) fn show(
     let keyframes = stylesheet
         .keyframes
         .iter()
-        .map(|(name, frames)| {
+        .filter(|keyframes| {
+            keyframes
+                .media
+                .iter()
+                .all(|query| query.matches(units.viewport))
+        })
+        .map(|keyframes| {
             (
-                name.clone(),
-                frames
+                keyframes.name.clone(),
+                keyframes
+                    .frames
                     .iter()
                     .map(|frame| crate::css::Keyframe {
                         offset: frame.offset,
@@ -1195,10 +1202,11 @@ pub(crate) fn show(
                 target,
                 current_state,
                 &current_element_rules,
+                units.viewport,
             );
     }
     let interaction_layout_changed = state != current_state
-        && matching_rules(stylesheet, target).any(|rule| {
+        && matching_rules(stylesheet, target, units.viewport).any(|rule| {
             rule.state.matches(state) != rule.state.matches(current_state)
                 && (style.transitions.enabled()
                     || rule.declarations.iter().any(|declaration| {
@@ -1244,7 +1252,7 @@ pub(crate) fn show(
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO
         } else if frame_stroke.is_some()
-            || matching_rules(stylesheet, target).any(|r| {
+            || matching_rules(stylesheet, target, units.viewport).any(|r| {
                 r.state.matches(current_state)
                     && r.declarations.iter().any(|declaration| {
                         matches!(declaration, Declaration::BorderRadius(_))
@@ -1255,20 +1263,8 @@ pub(crate) fn show(
         } else {
             egui::CornerRadius::ZERO
         };
-        let fill = background_style.color;
-        let last_background_layer = background_style.images.len().saturating_sub(1);
         let blocked_element_ids =
             invalid_element_references(ui.ctx(), stylesheet, index, &active.0.borrow());
-        let color_clip = if background_style.clips.is_empty() {
-            crate::css::BackgroundClip::Border
-        } else {
-            let clip_index = if last_background_layer < background_style.clips.len() {
-                last_background_layer
-            } else {
-                last_background_layer % background_style.clips.len()
-            };
-            background_style.clips[clip_index]
-        };
         let frame_stroke = if style.border_set || final_geometry.collapsed.is_some() {
             egui::Stroke::NONE
         } else {
@@ -1391,8 +1387,6 @@ pub(crate) fn show(
                         &resources,
                         &background_style,
                         &geometry,
-                        fill,
-                        color_clip,
                         corner_radius,
                         scroll,
                         Vec2::ZERO,
@@ -1458,8 +1452,6 @@ pub(crate) fn show(
                 &resources,
                 &background_style,
                 &geometry,
-                fill,
-                color_clip,
                 corner_radius,
                 scroll,
                 background_offset,

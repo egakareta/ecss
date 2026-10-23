@@ -1,6 +1,5 @@
 use std::{
     borrow::Borrow,
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
 };
@@ -18,6 +17,7 @@ use crate::CssError;
 
 mod background;
 mod color;
+mod media;
 pub(crate) mod variables;
 
 pub(crate) use background::parse_background_image;
@@ -29,6 +29,7 @@ use background::{
     split_top_level_commas,
 };
 pub(crate) use color::parse_color;
+use media::MediaQueryList;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Rule {
@@ -37,6 +38,13 @@ pub(crate) struct Rule {
     pub(crate) pseudo: Option<PseudoElementKind>,
     pub(crate) specificity: u32,
     pub(crate) declarations: Vec<Declaration>,
+    pub(crate) media: Vec<MediaQueryList>,
+}
+
+impl Rule {
+    pub(crate) fn matches_media(&self, viewport: egui::Vec2) -> bool {
+        self.media.iter().all(|query| query.matches(viewport))
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -72,13 +80,14 @@ pub(crate) struct Keyframe {
 pub(crate) struct Keyframes {
     pub(crate) name: String,
     pub(crate) frames: Vec<Keyframe>,
+    pub(crate) media: Vec<MediaQueryList>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ParsedStylesheet {
     pub(crate) rules: Vec<Rule>,
     pub(crate) imports: Vec<String>,
-    pub(crate) keyframes: HashMap<String, Vec<Keyframe>>,
+    pub(crate) keyframes: Vec<Keyframes>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -486,11 +495,13 @@ enum ParsedRule {
     Import(String),
     Style(Vec<Rule>),
     Keyframes(Keyframes),
+    Media(ParsedStylesheet),
 }
 
 enum AtRulePrelude {
     Import(String),
     Keyframes(String),
+    Media(MediaQueryList),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -510,19 +521,34 @@ impl ParseIssue {
 
 pub(crate) fn parse(source: &str) -> Result<ParsedStylesheet, CssError> {
     let mut parser = CssParser::new(source);
+    parse_rules(&mut parser).map_err(|error| to_css_error(error, parser.current_source_location()))
+}
+
+fn parse_rules(input: &mut CssParser<'_>) -> Result<ParsedStylesheet, ParseError<ParseIssue>> {
     let mut rule_parser = StylesheetRuleParser;
     let mut rules = Vec::new();
     let mut imports = Vec::new();
-    let mut keyframes = HashMap::new();
+    let mut keyframes = Vec::new();
 
-    for parsed in StyleSheetParser::new(&mut parser, &mut rule_parser) {
+    for parsed in StyleSheetParser::new(input, &mut rule_parser) {
         match parsed {
             Ok(ParsedRule::Import(import)) => imports.push(import),
             Ok(ParsedRule::Style(mut parsed_rules)) => rules.append(&mut parsed_rules),
             Ok(ParsedRule::Keyframes(parsed)) => {
-                keyframes.insert(parsed.name, parsed.frames);
+                keyframes.push(parsed);
             }
-            Err((error, _, location)) => return Err(to_css_error(error, location)),
+            Ok(ParsedRule::Media(mut parsed)) => {
+                rules.append(&mut parsed.rules);
+                keyframes.append(&mut parsed.keyframes);
+            }
+            Err((error, _, location)) => {
+                let mut issue = match error.kind {
+                    ParseErrorKind::Custom(issue) => issue,
+                    ParseErrorKind::Basic(_) => ParseIssue::new("invalid CSS syntax"),
+                };
+                issue.line.get_or_insert(location.line);
+                return Err(ParseError::custom(issue));
+            }
         }
     }
 
@@ -610,6 +636,7 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
                     pseudo,
                     specificity,
                     declarations: declarations.clone(),
+                    media: Vec::new(),
                 })
                 .collect(),
         ))
@@ -628,6 +655,9 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     ) -> Result<Self::Prelude, ParseError<Self::Error>> {
         if name.eq_ignore_ascii_case("import") {
             return parse_import(input).map(AtRulePrelude::Import);
+        }
+        if name.eq_ignore_ascii_case("media") {
+            return MediaQueryList::parse(input).map(AtRulePrelude::Media);
         }
         if name.eq_ignore_ascii_case("keyframes") {
             let name = input
@@ -649,7 +679,7 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     ) -> Result<Self::AtRule, ()> {
         match prelude {
             AtRulePrelude::Import(import) => Ok(ParsedRule::Import(import)),
-            AtRulePrelude::Keyframes(_) => Err(()),
+            AtRulePrelude::Keyframes(_) | AtRulePrelude::Media(_) => Err(()),
         }
     }
 
@@ -663,8 +693,28 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
             AtRulePrelude::Import(_) => {
                 Err(ParseError::custom(ParseIssue::new("invalid import rule")))
             }
-            AtRulePrelude::Keyframes(name) => parse_keyframes(input)
-                .map(|frames| ParsedRule::Keyframes(Keyframes { name, frames })),
+            AtRulePrelude::Keyframes(name) => parse_keyframes(input).map(|frames| {
+                ParsedRule::Keyframes(Keyframes {
+                    name,
+                    frames,
+                    media: Vec::new(),
+                })
+            }),
+            AtRulePrelude::Media(query) => {
+                let mut parsed = parse_rules(input)?;
+                if !parsed.imports.is_empty() {
+                    return Err(ParseError::custom(ParseIssue::new(
+                        "invalid nested import rule",
+                    )));
+                }
+                for rule in &mut parsed.rules {
+                    rule.media.push(query.clone());
+                }
+                for keyframes in &mut parsed.keyframes {
+                    keyframes.media.push(query.clone());
+                }
+                Ok(ParsedRule::Media(parsed))
+            }
         }
     }
 }
@@ -1087,7 +1137,7 @@ fn parse_background<'i>(
         let mut size_tokens = Vec::new();
         let mut color_seen = false;
         for component in &components[..split] {
-            if let Ok(color) = parse_color(&mut CssParser::new(&component)) {
+            if let Ok(color) = parse_color(&mut CssParser::new(component)) {
                 if layer_index + 1 != layers.len() || color_seen {
                     return Err(ParseError::custom(
                         "background color must appear once in the final layer",

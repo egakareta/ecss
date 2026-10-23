@@ -16,6 +16,7 @@ mod rendering {
     mod box_model;
     mod columns;
     mod layout;
+    mod media;
     mod outline;
     mod selectors;
     mod tables;

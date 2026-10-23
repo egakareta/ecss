@@ -25,9 +25,10 @@ pub(super) fn resolved_background<'a>(
     stylesheet: &'a Stylesheet,
     target: &'a crate::css::SelectorTarget,
     state: u8,
+    viewport: Vec2,
 ) -> BackgroundPaint<'a> {
     background_from_declarations(
-        matching_rules(stylesheet, target)
+        matching_rules(stylesheet, target, viewport)
             .filter(move |rule| rule.state.matches(state))
             .flat_map(|rule| rule.declarations.iter()),
     )
@@ -195,8 +196,6 @@ pub(super) fn fragment_background_shapes(
     resources: &ImageResources<'_>,
     background: &BackgroundPaint<'_>,
     geometry: &BoxDecorationGeometry<'_>,
-    fill: Color32,
-    color_clip: crate::css::BackgroundClip,
     corner_radius: egui::CornerRadius,
     scroll: Vec2,
     fragment_offset: Vec2,
@@ -208,6 +207,13 @@ pub(super) fn fragment_background_shapes(
     let border = geometry.border;
     let stroke = geometry.stroke;
     let padding = geometry.padding;
+    let clip_count = background.clips.len().max(1);
+    let last_background_layer = background.images.len().saturating_sub(1);
+    let color_clip = background
+        .clips
+        .get(last_background_layer % clip_count)
+        .copied()
+        .unwrap_or(crate::css::BackgroundClip::Border);
     let shape_clip_for = |rect, clip| {
         let geometry = BoxDecorationGeometry {
             border: rect,
@@ -220,11 +226,16 @@ pub(super) fn fragment_background_shapes(
         crate::css::BackgroundClip::Padding => border - stroke,
         crate::css::BackgroundClip::Content => border - stroke - padding,
     };
-    let color_shape = box_surface_shape(color_surface, geometry, color_clip, fill, corner_radius);
+    let color_shape = box_surface_shape(
+        color_surface,
+        geometry,
+        color_clip,
+        background.color,
+        corner_radius,
+    );
     let color_clip_path = shape_clip_for(border, color_clip);
     let mut shapes = vec![clip_background_shape(color_shape, color_clip_path.as_ref())];
     let scale = context.pixels_per_point();
-    let clip_count = background.clips.len().max(1);
     let attachment_count = background.attachments.len().max(1);
     let origin_count = background.origins.len().max(1);
     let position_count = background.positions.len().max(1);
@@ -596,6 +607,7 @@ pub(super) fn resolved_element_references(
     stylesheet: &Stylesheet,
     target: &crate::css::SelectorTarget,
     state: u8,
+    viewport: Vec2,
 ) -> HashSet<String> {
     let mut references = HashSet::new();
     let mut collect = |image: &crate::css::BackgroundImage| {
@@ -603,16 +615,18 @@ pub(super) fn resolved_element_references(
         image.collect_element_ids(&mut ids);
         references.extend(ids);
     };
-    for image in resolved_background(stylesheet, target, state).images {
+    for image in resolved_background(stylesheet, target, state, viewport).images {
         collect(image);
     }
-    collect(&resolved_border_image_source(stylesheet, target, state));
+    collect(&resolved_border_image_source(
+        stylesheet, target, state, viewport,
+    ));
     for pseudo in [
         crate::css::PseudoElementKind::FirstLetter,
         crate::css::PseudoElementKind::FirstLine,
     ] {
         collect(&resolved_pseudo_border_image_source(
-            stylesheet, target, pseudo, state,
+            stylesheet, target, pseudo, state, viewport,
         ));
     }
     references
@@ -623,6 +637,7 @@ pub(super) fn resolved_element_references_from_rules(
     selector: &crate::css::SelectorTarget,
     state: u8,
     rules: &[(RuleState, Vec<Declaration>)],
+    viewport: Vec2,
 ) -> HashSet<String> {
     let mut references = HashSet::new();
     let mut collect = |image: &crate::css::BackgroundImage| {
@@ -655,7 +670,7 @@ pub(super) fn resolved_element_references_from_rules(
         crate::css::PseudoElementKind::FirstLine,
     ] {
         collect(&resolved_pseudo_border_image_source(
-            stylesheet, selector, pseudo, state,
+            stylesheet, selector, pseudo, state, viewport,
         ));
     }
     references
@@ -704,6 +719,7 @@ pub(super) fn invalid_element_references(
                     ..Default::default()
                 },
                 RuleState::ENABLED.bits(),
+                context.viewport_rect().size(),
             )
         };
         dependencies.insert(id.clone(), targets);
@@ -830,9 +846,10 @@ pub(super) fn resolved_border_image_source(
     stylesheet: &Stylesheet,
     selector: &crate::css::SelectorTarget,
     state: u8,
+    viewport: Vec2,
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
-    for rule in matching_rules(stylesheet, selector) {
+    for rule in matching_rules(stylesheet, selector, viewport) {
         if !rule.state.matches(state) {
             continue;
         }
@@ -858,9 +875,10 @@ pub(super) fn resolved_pseudo_border_image_source(
     selector: &crate::css::SelectorTarget,
     pseudo: crate::css::PseudoElementKind,
     state: u8,
+    viewport: Vec2,
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
-    for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state) {
+    for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state, viewport) {
         for declaration in &rule.declarations {
             match declaration {
                 Declaration::All(_) => source = crate::css::BackgroundImage::None,

@@ -32,6 +32,7 @@ mod layout {
     mod geometry;
     mod grid;
     mod interactions;
+    mod media;
     mod properties;
     mod scrolling;
     mod tables;

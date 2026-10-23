@@ -303,7 +303,7 @@ pub(super) fn parse_background_origins<'i>(
 ) -> Result<Vec<BackgroundOrigin>, ParseError<&'static str>> {
     split_top_level_commas(&consume_value(input)?)
         .into_iter()
-        .map(|value| parse_background_origin_value(&value))
+        .map(parse_background_origin_value)
         .collect()
 }
 
@@ -326,7 +326,7 @@ pub(super) fn parse_background_positions<'i>(
 ) -> Result<Vec<BackgroundPosition>, ParseError<&'static str>> {
     split_top_level_commas(&consume_value(input)?)
         .into_iter()
-        .map(|value| parse_background_position_value(&value))
+        .map(parse_background_position_value)
         .collect()
 }
 
@@ -427,7 +427,7 @@ pub(super) fn parse_background_sizes<'i>(
     split_top_level_commas(&consume_value(input)?)
         .into_iter()
         .map(|value| {
-            let values = crate::layout_style::components(&value).map_err(ParseError::custom)?;
+            let values = crate::layout_style::components(value).map_err(ParseError::custom)?;
             parse_background_size_components(&values)
         })
         .collect()
@@ -480,7 +480,7 @@ pub(super) fn parse_background_repeats<'i>(
 ) -> Result<Vec<BackgroundRepeatPair>, ParseError<&'static str>> {
     split_top_level_commas(&consume_value(input)?)
         .into_iter()
-        .map(|value| parse_background_repeat_component(&value))
+        .map(parse_background_repeat_component)
         .collect()
 }
 
