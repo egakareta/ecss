@@ -27,6 +27,21 @@ fn ui(ui: &mut egui::Ui, context: &egui::Context) -> Result<(), Box<dyn std::err
 Please check out [examples](https://github.com/egakareta/ecss/tree/master/examples) to
 learn more.
 
+## Performance
+
+This library may feel choppy even if you have a weak or powerful device. It's recommended to set
+`opt-level` on egui and ecss to ensure a smoother development experience.
+
+```toml
+# on just ecss
+[profile.dev.package.ecss]
+opt-level = 3
+
+# on all dependencies
+[profile.dev.package."*"]
+opt-level = 3
+```
+
 ## License
 
 Dual-licensed under the [MIT License](https://opensource.org/licenses/MIT) and the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). Choose whichever you prefer. This license only applies to ecss code.
