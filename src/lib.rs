@@ -28,6 +28,7 @@ mod layout;
 mod layout_style;
 mod layout_tree;
 mod math;
+mod transition;
 
 const STYLESHEET_ID: &str = "ecss.stylesheet";
 const BACKGROUND_ID: &str = "ecss.background";
@@ -89,6 +90,7 @@ struct RuleIndex {
     ids: HashMap<String, Vec<(u32, usize)>>,
     has_pseudo_rules: bool,
     has_element_references: bool,
+    has_transitions: bool,
 }
 
 impl RuleIndex {
@@ -112,6 +114,10 @@ impl RuleIndex {
             .iter()
             .flat_map(|rule| &rule.declarations)
             .any(declaration_has_element_references);
+        index.has_transitions = rules.iter().flat_map(|rule| &rule.declarations).any(|declaration| {
+            matches!(declaration, Declaration::Transition(_))
+                || matches!(declaration, Declaration::Deferred { name, .. } if transition::is_property(name))
+        });
 
         index
     }
@@ -973,6 +979,7 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_)
         | Declaration::Animation(_)
+        | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }
         | Declaration::Deferred { .. } => {}
     }

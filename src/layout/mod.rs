@@ -527,6 +527,19 @@ pub(crate) fn show(
         for declaration in declarations {
             match declaration {
                 Declaration::Color(color) => style.current_color = *color,
+                Declaration::Background(color) => {
+                    style.background_color = *color;
+                    style.background_set = true;
+                    style.background_current_color = false;
+                }
+                Declaration::BackgroundShorthand(background) => {
+                    style.background_color = background.color;
+                    style.background_set = true;
+                    style.background_current_color = false;
+                }
+                Declaration::Transition(property) => {
+                    style.transitions.apply(property, &parent_style.transitions)
+                }
                 Declaration::Layout(declaration) => {
                     if declaration.name == "font-size" {
                         continue;
@@ -538,6 +551,9 @@ pub(crate) fn show(
                 _ => {}
             }
         }
+    }
+    if style.background_current_color {
+        style.background_color = style.current_color;
     }
     let keyframes = stylesheet
         .keyframes
@@ -579,6 +595,11 @@ pub(crate) fn show(
     for declaration in &animated_declarations {
         match declaration {
             Declaration::Color(color) => style.current_color = *color,
+            Declaration::Background(color) => {
+                style.background_color = *color;
+                style.background_set = true;
+                style.background_current_color = false;
+            }
             Declaration::Layout(declaration) => {
                 declaration
                     .apply_with_parent(&mut style, &parent_style, units)
@@ -589,6 +610,21 @@ pub(crate) fn show(
             }
             _ => {}
         }
+    }
+    if style.background_current_color {
+        style.background_color = style.current_color;
+    }
+    let transition = if stylesheet.rule_index.has_transitions {
+        crate::transition::sample(ui.ctx(), id, &mut style, &math)
+    } else {
+        crate::transition::Sample::default()
+    };
+    if style.background_current_color && !transition.background {
+        style.background_color = style.current_color;
+    }
+    if transition.layout_sampled {
+        let mut frame = active.0.borrow_mut();
+        frame.layout_animation_active = true;
     }
     let mut computed_declarations = if all_keyword.is_none() {
         parent_style
@@ -640,6 +676,20 @@ pub(crate) fn show(
             .get(&id)
             .map(|g| g.translated(frame.origin.to_vec2() - ancestor_scroll))
             .unwrap_or_else(|| guess(&style, ui.available_rect_before_wrap()));
+        if transition.layout_sampled
+            && parent.is_none_or(|parent| {
+                !matches!(
+                    frame.nodes[parent].style.layout.display,
+                    Display::Flex | Display::Grid
+                )
+            })
+        {
+            let containing = parent.map_or_else(
+                || ui.available_rect_before_wrap(),
+                |parent| frame.nodes[parent].used.content(),
+            );
+            refresh_transition_box(&style, &mut geometry, containing);
+        }
         let sticky = sticky_offset(&style, &geometry, parent, &frame);
         geometry = geometry.translated(sticky);
         if let Some(parent) = parent {
@@ -723,6 +773,10 @@ pub(crate) fn show(
         crate::VisualState::Base,
         &animated_declarations,
     );
+    transition.apply_visuals(&mut content_ui, &style, geometry.border);
+    if resolved_rules.iter().flat_map(|(_, declarations)| declarations).any(|declaration| matches!(declaration, Declaration::Layout(layout) if layout.name == "color")) {
+        crate::apply_declarations(&mut content_ui, crate::VisualState::Base, &[Declaration::Color(style.current_color)]);
+    }
     if style.padding_set {
         content_ui.spacing_mut().button_padding = Vec2::ZERO;
     }
@@ -1146,19 +1200,21 @@ pub(crate) fn show(
     let interaction_layout_changed = state != current_state
         && matching_rules(stylesheet, target).any(|rule| {
             rule.state.matches(state) != rule.state.matches(current_state)
-                && rule.declarations.iter().any(|declaration| {
-                    matches!(
-                        declaration,
-                        Declaration::Layout(_)
-                            | Declaration::Color(_)
-                            | Declaration::All(_)
-                            | Declaration::FontFamily(_)
-                            | Declaration::FontWeight(_)
-                            | Declaration::FontStyle(_)
-                            | Declaration::CustomProperty { .. }
-                            | Declaration::Deferred { .. }
-                    )
-                })
+                && (style.transitions.enabled()
+                    || rule.declarations.iter().any(|declaration| {
+                        matches!(
+                            declaration,
+                            Declaration::Layout(_)
+                                | Declaration::Color(_)
+                                | Declaration::All(_)
+                                | Declaration::FontFamily(_)
+                                | Declaration::FontWeight(_)
+                                | Declaration::FontStyle(_)
+                                | Declaration::Transition(_)
+                                | Declaration::CustomProperty { .. }
+                                | Declaration::Deferred { .. }
+                        )
+                    }))
         });
     if interaction_layout_changed {
         ui.ctx()
@@ -1181,7 +1237,10 @@ pub(crate) fn show(
             .widgets
             .state(response.widget_state());
         let (_, current_state_rules, _) = resolve_rules(current_state);
-        let background_style = resolved_background_from_rules(&current_state_rules);
+        let mut background_style = resolved_background_from_rules(&current_state_rules);
+        if transition.background || resolved_rules.iter().flat_map(|(_, declarations)| declarations).any(|declaration| matches!(declaration, Declaration::Layout(layout) if layout.name == "background-color")) {
+            background_style.color = style.background_color;
+        }
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO
         } else if frame_stroke.is_some()

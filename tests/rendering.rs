@@ -20,4 +20,5 @@ mod rendering {
     mod selectors;
     mod tables;
     mod text;
+    mod transitions;
 }

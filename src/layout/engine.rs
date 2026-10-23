@@ -1,12 +1,73 @@
 use super::*;
 
 pub(super) fn resolve(value: taffy::CompactLength, basis: f32) -> Option<f32> {
+    if value.is_plain_calc() {
+        return Some(crate::math::resolve(value.calc_value(), basis));
+    }
     match value.tag() {
-        taffy::CompactLength::CALC_TAG => Some(crate::math::resolve(value.calc_value(), basis)),
         taffy::CompactLength::LENGTH_TAG => Some(value.value()),
         taffy::CompactLength::PERCENT_TAG if basis.is_finite() => Some(value.value() * basis),
         _ => None,
     }
+}
+
+pub(super) fn refresh_transition_box(style: &BoxStyle, geometry: &mut Geometry, containing: Rect) {
+    if style.format.writing.vertical()
+        || style.inline
+        || geometry.collapsed.is_some()
+        || !geometry.fragments.is_empty()
+        || !geometry.slices.is_empty()
+    {
+        return;
+    }
+    let content = geometry.content().size();
+    let previous_margin = geometry.margin;
+    let updated = guess(style, containing);
+    geometry.padding = updated.padding;
+    geometry.stroke = updated.stroke;
+    geometry.margin = updated.margin;
+    let extras = geometry.padding.sum() + geometry.stroke.sum();
+    let size = |dimension: Dimension,
+                min: LengthPercentageAuto,
+                max: LengthPercentageAuto,
+                basis,
+                intrinsic,
+                extras| {
+        let adjustment = if style.layout.box_sizing == BoxSizing::ContentBox {
+            extras
+        } else {
+            0.0
+        };
+        let value = resolve(dimension.into_raw(), basis).unwrap_or(intrinsic + extras - adjustment);
+        let min = resolve(min.into_raw(), basis).unwrap_or(0.0);
+        let max = resolve(max.into_raw(), basis)
+            .unwrap_or(f32::INFINITY)
+            .max(min);
+        (value.clamp(min, max) + adjustment).max(extras)
+    };
+    let size = vec2(
+        size(
+            style.layout.size.width,
+            style.layout.min_size.width,
+            style.layout.max_size.width,
+            containing.width(),
+            content.x,
+            extras.x,
+        ),
+        size(
+            style.layout.size.height,
+            style.layout.min_size.height,
+            style.layout.max_size.height,
+            containing.height(),
+            content.y,
+            extras.y,
+        ),
+    );
+    let offset = vec2(
+        geometry.margin.left - previous_margin.left,
+        geometry.margin.top - previous_margin.top,
+    );
+    geometry.border = Rect::from_min_size(geometry.border.min + offset, size);
 }
 
 pub(super) fn guess(style: &BoxStyle, available: Rect) -> Geometry {

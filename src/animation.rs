@@ -58,7 +58,7 @@ enum Iterations {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum StepPosition {
+pub(crate) enum StepPosition {
     Start,
     End,
     JumpStart,
@@ -68,13 +68,13 @@ enum StepPosition {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct LinearPoint {
+pub(crate) struct LinearPoint {
     input: f64,
     output: f64,
 }
 
 #[derive(Clone, Debug)]
-enum TimingFunction {
+pub(crate) enum TimingFunction {
     Linear,
     LinearFunction(Vec<LinearPoint>),
     Ease,
@@ -392,7 +392,7 @@ fn is_identifier(value: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
-fn split_list(value: &str) -> Vec<&str> {
+pub(crate) fn split_list(value: &str) -> Vec<&str> {
     let mut values = Vec::new();
     let mut depth = 0usize;
     let mut start = 0;
@@ -411,7 +411,7 @@ fn split_list(value: &str) -> Vec<&str> {
     values
 }
 
-fn parse_time(value: &str) -> Option<f64> {
+pub(crate) fn parse_time(value: &str) -> Option<f64> {
     let value = value.trim();
     let lower = value.to_ascii_lowercase();
     if let Some(number) = lower.strip_suffix("ms") {
@@ -425,7 +425,7 @@ fn parse_time(value: &str) -> Option<f64> {
     }
 }
 
-fn parse_timing(value: &str) -> Option<TimingFunction> {
+pub(crate) fn parse_timing(value: &str) -> Option<TimingFunction> {
     let mut input = CssParser::new(value);
     let timing = match input.next().ok()?.clone() {
         Token::Ident(name) => match name.to_ascii_lowercase().as_str() {
@@ -1067,7 +1067,7 @@ fn animation_progress(config: &Config, elapsed: f64) -> (Option<f32>, bool, bool
     )
 }
 
-fn ease(timing: &TimingFunction, progress: f64, before: bool) -> f64 {
+pub(crate) fn ease(timing: &TimingFunction, progress: f64, before: bool) -> f64 {
     match timing {
         TimingFunction::Linear => progress,
         TimingFunction::LinearFunction(points) => linear_function(points, progress, before),
@@ -1314,6 +1314,7 @@ fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declarat
         Declaration::Layout(layout) => Some((layout.name.clone(), declaration.clone())),
         Declaration::BorderRadius(_) => Some(("border-radius".to_owned(), declaration.clone())),
         Declaration::Animation(_)
+        | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }
         | Declaration::Deferred { .. } => None,
     }

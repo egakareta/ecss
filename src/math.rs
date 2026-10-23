@@ -30,12 +30,12 @@ enum Kind {
     Angle,
     Any,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Expression {
     kind: Kind,
     value: Value,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Value {
     Constant(f32),
     Percentage(f32),
@@ -44,7 +44,145 @@ enum Value {
     Clamp(Box<Expression>),
 }
 
+// Calc handles belong to one layout pass; retained computed values own their expressions.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ComputedLength(Expression);
+
+impl ComputedLength {
+    pub(crate) fn nonnegative(self) -> Self {
+        Self(
+            Expression {
+                kind: Kind::Length,
+                value: Value::Clamp(Box::new(self.0)),
+            }
+            .normalized(),
+        )
+    }
+
+    pub(crate) fn resolve(&self, basis: f32) -> f32 {
+        self.0.evaluate(basis)
+    }
+
+    pub(crate) fn length(value: f32) -> Self {
+        Self(Expression::constant(value, Kind::Length))
+    }
+
+    pub(crate) fn percentage(value: f32) -> Self {
+        Self(
+            Expression {
+                kind: Kind::Length,
+                value: Value::Percentage(value),
+            }
+            .normalized(),
+        )
+    }
+
+    pub(crate) fn from_handle(handle: *const ()) -> Self {
+        VALUES.with(|values| Self(values.borrow()[&(handle as usize)].clone().normalized()))
+    }
+
+    pub(crate) fn from_raw(value: taffy::CompactLength) -> Option<Self> {
+        if value.is_plain_calc() {
+            return Some(Self::from_handle(value.calc_value()));
+        }
+        match value.tag() {
+            taffy::CompactLength::LENGTH_TAG => Some(Self::length(value.value())),
+            taffy::CompactLength::PERCENT_TAG => Some(Self::percentage(value.value())),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn interpolate(&self, to: &Self, progress: f32) -> Self {
+        let weighted = |expression: &Expression, weight| Expression {
+            kind: Kind::Length,
+            value: Value::Binary(
+                '*',
+                Box::new(expression.clone()),
+                Box::new(Expression::constant(weight, Kind::Number)),
+            ),
+        };
+        Self(
+            Expression {
+                kind: Kind::Length,
+                value: Value::Binary(
+                    '+',
+                    Box::new(weighted(&self.0, 1.0 - progress)),
+                    Box::new(weighted(&to.0, progress)),
+                ),
+            }
+            .normalized(),
+        )
+    }
+
+    pub(crate) fn encode(&self, arena: &Arena) -> taffy::LengthPercentage {
+        match self.0.value {
+            Value::Constant(value) => taffy::LengthPercentage::length(value),
+            Value::Percentage(value) => taffy::LengthPercentage::percent(value),
+            _ => taffy::LengthPercentage::calc(arena.store(self.0.clone())),
+        }
+    }
+
+    pub(crate) fn decoration(&self, arena: &Arena) -> crate::box_decoration::LengthPercentage {
+        match self.0.value {
+            Value::Constant(value) => crate::box_decoration::LengthPercentage::Length(value),
+            Value::Percentage(value) => crate::box_decoration::LengthPercentage::Percentage(value),
+            _ => crate::box_decoration::LengthPercentage::Calc(arena.store(self.0.clone())),
+        }
+    }
+}
+
 impl Expression {
+    fn affine(&self) -> Option<(f32, f32)> {
+        match &self.value {
+            Value::Constant(value) => Some((*value, 0.0)),
+            Value::Percentage(value) => Some((0.0, *value)),
+            Value::Binary(operator, first, second) => {
+                let (a, b) = first.affine()?;
+                let (c, d) = second.affine()?;
+                match operator {
+                    '+' => Some((a + c, b + d)),
+                    '-' => Some((a - c, b - d)),
+                    '*' if b == 0.0 => Some((a * c, a * d)),
+                    '*' if d == 0.0 => Some((a * c, b * c)),
+                    '/' if d == 0.0 && c != 0.0 => Some((a / c, b / c)),
+                    _ => None,
+                }
+            }
+            Value::Function(name, arguments, _) if name == "calc" => arguments[0].affine(),
+            Value::Clamp(value) => value
+                .affine()
+                .filter(|(length, percentage)| *length >= 0.0 && *percentage >= 0.0),
+            _ => None,
+        }
+    }
+
+    fn normalized(self) -> Self {
+        if !self.percentage() {
+            return Self::constant(self.evaluate(0.0), self.kind);
+        }
+        if let Some((length, percentage)) = self.affine() {
+            let value = if percentage == 0.0 {
+                Value::Constant(length)
+            } else if length == 0.0 {
+                Value::Percentage(percentage)
+            } else {
+                Value::Binary(
+                    '+',
+                    Box::new(Self::constant(length, self.kind)),
+                    Box::new(Self {
+                        kind: self.kind,
+                        value: Value::Percentage(percentage),
+                    }),
+                )
+            };
+            return Self {
+                kind: self.kind,
+                value,
+            };
+        }
+        self
+    }
+
     fn constant(value: f32, kind: Kind) -> Self {
         Self {
             kind,
@@ -169,9 +307,7 @@ impl Arena {
             taffy::CompactLength::PERCENT_TAG => {
                 taffy::Dimension::calc(self.added_handle(raw, pixels))
             }
-            taffy::CompactLength::CALC_TAG => {
-                taffy::Dimension::calc(self.added_handle(raw, pixels))
-            }
+            _ if raw.is_plain_calc() => taffy::Dimension::calc(self.added_handle(raw, pixels)),
             _ => base,
         }
     }
@@ -186,7 +322,10 @@ impl Arena {
             taffy::CompactLength::LENGTH_TAG => {
                 taffy::LengthPercentageAuto::length((raw.value() + pixels).max(0.0))
             }
-            taffy::CompactLength::PERCENT_TAG | taffy::CompactLength::CALC_TAG => {
+            taffy::CompactLength::PERCENT_TAG => {
+                taffy::LengthPercentageAuto::calc(self.added_handle(raw, pixels))
+            }
+            _ if raw.is_plain_calc() => {
                 taffy::LengthPercentageAuto::calc(self.added_handle(raw, pixels))
             }
             _ => base,
@@ -202,7 +341,10 @@ impl Arena {
             taffy::CompactLength::LENGTH_TAG => {
                 taffy::LengthPercentage::length(base.value() + pixels)
             }
-            taffy::CompactLength::PERCENT_TAG | taffy::CompactLength::CALC_TAG => {
+            taffy::CompactLength::PERCENT_TAG => {
+                taffy::LengthPercentage::calc(self.added_handle(base, pixels))
+            }
+            _ if base.is_plain_calc() => {
                 taffy::LengthPercentage::calc(self.added_handle(base, pixels))
             }
             _ => taffy::LengthPercentage::length(pixels),

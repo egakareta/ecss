@@ -131,6 +131,7 @@ pub(crate) enum Declaration {
     FontWeight(u16),
     FontStyle(bool),
     Animation(crate::animation::Property),
+    Transition(crate::transition::Property),
     CustomProperty {
         name: String,
         value: String,
@@ -941,6 +942,26 @@ impl Declarations {
                 .map(Some)
                 .map_err(ParseError::custom);
         }
+        if crate::transition::is_property(&name) {
+            let value = consume_value(input)?;
+            return crate::transition::parse_property(&name, &value)
+                .map(Declaration::Transition)
+                .map(Some)
+                .map_err(ParseError::custom);
+        }
+        if (name.eq_ignore_ascii_case("color") || name.eq_ignore_ascii_case("background-color"))
+            && ["inherit", "initial", "unset", "revert", "currentcolor"]
+                .iter()
+                .any(|keyword| value.eq_ignore_ascii_case(keyword))
+        {
+            while input.next().is_ok() {}
+            return Ok(Some(Declaration::Layout(
+                crate::layout_style::Declaration {
+                    name: name.to_ascii_lowercase(),
+                    value,
+                },
+            )));
+        }
         if let Some(declaration) =
             crate::layout_style::parse(&name, input).map_err(ParseError::custom)?
         {
@@ -1014,6 +1035,11 @@ pub(crate) fn resolve_deferred(
 }
 
 fn invalid_computed_value(name: &str) -> Declaration {
+    if crate::transition::is_property(name) {
+        return Declaration::Transition(
+            crate::transition::parse_property(name, "unset").expect("valid transition reset"),
+        );
+    }
     Declaration::Layout(crate::layout_style::Declaration {
         name: name.to_owned(),
         value: "unset".to_owned(),

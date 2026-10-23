@@ -36,4 +36,5 @@ mod layout {
     mod scrolling;
     mod tables;
     mod text;
+    mod transitions;
 }

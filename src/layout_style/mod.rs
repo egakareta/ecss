@@ -33,6 +33,10 @@ pub(crate) struct BoxStyle {
     pub collapsed: bool,
     pub margin_trim: [bool; 4],
     pub(crate) current_color: Color32,
+    pub(crate) background_color: Color32,
+    pub(crate) background_set: bool,
+    pub(crate) background_current_color: bool,
+    pub(crate) transitions: crate::transition::Settings,
     pub(crate) scrollbar_color: ScrollbarColor,
     pub(crate) scrollbar_width: ScrollbarWidth,
     pub(crate) overscroll_behavior: [OverscrollBehavior; 2],
@@ -173,6 +177,10 @@ impl Default for BoxStyle {
             collapsed: false,
             margin_trim: [false; 4],
             current_color: Color32::BLACK,
+            background_color: Color32::TRANSPARENT,
+            background_set: false,
+            background_current_color: false,
+            transitions: crate::transition::Settings::default(),
             scrollbar_color: ScrollbarColor::Auto,
             scrollbar_width: ScrollbarWidth::Auto,
             overscroll_behavior: [OverscrollBehavior::Auto; 2],
@@ -426,6 +434,17 @@ impl Declaration {
             output.format.font_size_set = true;
         }
         let keyword = self.value.trim();
+        if keyword.eq_ignore_ascii_case("currentcolor") {
+            if self.name == "color" {
+                output.current_color = parent.current_color;
+                return Ok(());
+            }
+            if self.name == "background-color" {
+                output.background_current_color = true;
+                output.background_set = true;
+                return Ok(());
+            }
+        }
         if matches!(self.name.as_str(), "text-align" | "text-align-all")
             && keyword.eq_ignore_ascii_case("match-parent")
         {
@@ -1014,6 +1033,7 @@ fn inherited(name: &str) -> bool {
     matches!(
         name,
         "font-size"
+            | "color"
             | "font-kerning"
             | "direction"
             | "visibility"
@@ -1047,6 +1067,16 @@ fn inherited(name: &str) -> bool {
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if name == "color" {
+        out.current_color = source.current_color;
+        return;
+    }
+    if name == "background-color" {
+        out.background_color = source.background_color;
+        out.background_set = true;
+        out.background_current_color = false;
+        return;
+    }
     if outline::supported(name) {
         outline::copy_property(
             name,

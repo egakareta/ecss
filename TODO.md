@@ -350,8 +350,8 @@
   - CSS properties: `backface-visibility`, `perspective`, `perspective-origin`, `rotate`, `scale`, `transform-style`, `translate`.
 - **[CSS 3D Transformations Module](https://www.w3.org/TR/css3-3d-transforms/) - Unsupported.**
   - CSS properties: `backface-visibility`, `perspective`, `perspective-origin`, `rotate`, `scale`, `transform-style`, `translate`.
-- **[CSS Transitions](https://www.w3.org/TR/css3-transitions/) - Unsupported.**
-  - CSS properties: `transition`, `transition-delay`, `transition-duration`, `transition-property`, `transition-timing-function`.
+- **[CSS Transitions](https://www.w3.org/TR/css3-transitions/) - Partial.**
+  - CSS properties: ~~`transition`~~, ~~`transition-delay`~~, ~~`transition-duration`~~, ~~`transition-property`~~, ~~`transition-timing-function`~~.
 - **[CSS Transitions Level 2](https://www.w3.org/TR/css-transitions-2/) - Unsupported.**
   - CSS properties: `transition-behavior`.
 - **[CSS Animations Level 1](https://www.w3.org/TR/css-animations-1/) - Partial.**
