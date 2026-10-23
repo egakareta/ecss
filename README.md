@@ -45,3 +45,5 @@ opt-level = 3
 ## License
 
 Dual-licensed under the [MIT License](https://opensource.org/licenses/MIT) and the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). Choose whichever you prefer. This license only applies to ecss code.
+
+Note that ecss is not affiliated with or endorsed by egui.
