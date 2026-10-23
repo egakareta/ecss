@@ -22,3 +22,7 @@ fn ui(ui: &mut egui::Ui, context: &egui::Context) -> Result<(), Box<dyn std::err
 
 Please check out [examples](https://github.com/egakareta/ecss/tree/master/examples) to
 learn more.
+
+## License
+
+Dual-licensed under the [MIT License](https://opensource.org/licenses/MIT) and the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). Choose whichever you prefer. This license only applies to ecss code.
