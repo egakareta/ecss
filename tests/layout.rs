@@ -35,6 +35,7 @@ mod layout {
     mod media;
     mod properties;
     mod scrolling;
+    mod sizing;
     mod tables;
     mod text;
     mod transitions;

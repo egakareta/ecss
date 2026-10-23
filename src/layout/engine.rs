@@ -390,10 +390,10 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
             } else {
                 node.measured
             };
-            let text = node
-                .text
-                .as_ref()
-                .map(|text| (text.job.clone(), text.extra, text.minimum));
+            let text = node.text.as_ref().map(|text| {
+                let nowrap = matches!(node.style.format.white_space.as_str(), "nowrap" | "pre");
+                (text.job.clone(), text.extra, text.minimum, nowrap)
+            });
             (measured, text)
         })
         .collect::<Vec<_>>();
@@ -627,7 +627,7 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
             .map(|text| text_runs(context, &text.job, &node.style.format))
         {
             frame.nodes[index].text.as_mut().unwrap().minimum = minimum;
-            if let Some((_, _, snapshot_minimum)) = &mut measurements[index].1 {
+            if let Some((_, _, snapshot_minimum, _)) = &mut measurements[index].1 {
                 *snapshot_minimum = minimum;
             }
             tree.nodes[usize::from(id)].runs = runs;
@@ -712,26 +712,25 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
         |input: taffy::LayoutInput, _: NodeId, index: Option<&mut usize>, style: &Style| {
             let measurement = index.map(|index| &measurements[*index]);
             let measured = measurement.map_or(Vec2::ZERO, |measurement| measurement.0);
-            taffy::compute_leaf_layout(input, style, crate::math::resolve, |known, available| {
-                let measured = if let Some((job, extra, minimum)) =
+            taffy::compute_leaf_layout(input, style, crate::math::resolve, |_, available| {
+                let measured = if let Some((job, extra, minimum, nowrap)) =
                     measurement.and_then(|measurement| measurement.1.as_ref())
                 {
                     let mut job = job.clone();
-                    job.wrap.max_width = known
-                        .width
-                        .map(|w| (w - extra.x).max(0.0))
-                        .unwrap_or_else(|| match available.width {
-                            AvailableSpace::Definite(width) => (width - extra.x).max(0.0),
-                            AvailableSpace::MinContent => *minimum,
-                            AvailableSpace::MaxContent => f32::INFINITY,
-                        });
+                    job.wrap.max_width = match available.width {
+                        AvailableSpace::Definite(width) => {
+                            (width - extra.x).max(if *nowrap { *minimum } else { 0.0 })
+                        }
+                        AvailableSpace::MinContent => *minimum,
+                        AvailableSpace::MaxContent => f32::INFINITY,
+                    };
                     context.fonts_mut(|fonts| fonts.layout_job(job).size()) + *extra
                 } else {
                     measured
                 };
                 Size {
-                    width: known.width.unwrap_or(measured.x),
-                    height: known.height.unwrap_or(measured.y),
+                    width: measured.x,
+                    height: measured.y,
                 }
             })
         };

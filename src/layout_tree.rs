@@ -89,6 +89,7 @@ pub(crate) struct TextRun {
     pub gap: f32,
     pub marker_width: f32,
     pub newline: bool,
+    pub min_content_break: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Slice {

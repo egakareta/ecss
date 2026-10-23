@@ -113,7 +113,7 @@
   - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
     ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
     ~~`grid-template-columns`~~, ~~`grid-template-rows`~~.
-  - Partial because only a subset of CSS Grid's track-sizing and placement behavior is implemented; advanced intrinsic sizing and layout interactions remain incomplete.
+  - Text contributions to intrinsic tracks respect no-wrap text and the distinction between `overflow-wrap:break-word` and `anywhere`. Advanced intrinsic sizing and layout interactions remain incomplete.
 - **[Grid Layout Level 2](https://www.w3.org/TR/css-grid-2/) - Partial.**
   - CSS properties: ~~`grid`~~, ~~`grid-area`~~, ~~`grid-auto-columns`~~, ~~`grid-auto-flow`~~, ~~`grid-auto-rows`~~, ~~`grid-column`~~, ~~`grid-column-end`~~,
     ~~`grid-column-start`~~, ~~`grid-row`~~, ~~`grid-row-end`~~, ~~`grid-row-start`~~, ~~`grid-template`~~, ~~`grid-template-areas`~~,
@@ -131,7 +131,7 @@
 - **[CSS Flexible Box Layout Level 1](https://www.w3.org/TR/css3-flexbox/) - Partial.**
   - CSS properties: ~~`align-content`~~, ~~`align-items`~~, ~~`align-self`~~, ~~`flex`~~, ~~`flex-basis`~~, ~~`flex-direction`~~, ~~`flex-flow`~~, ~~`flex-grow`~~,
     ~~`flex-shrink`~~, ~~`flex-wrap`~~, ~~`justify-content`~~.
-  - Partial because flex sizing depends on egui content measurements, so the full specification's intrinsic-size contributions and interactions are not covered.
+  - Text automatic minimum sizes respect no-wrap text, scrollable versus clipped overflow, and explicit zero minimums. Padding and borders are excluded from text wrapping constraints. Full intrinsic-size contributions for arbitrary egui widgets remain incomplete.
 - **[CSS Fragmentation Module Level 3](https://www.w3.org/TR/css3-break/) - Partial.**
   - CSS properties: ~~`box-decoration-break`~~, ~~`break-after`~~, ~~`break-before`~~, ~~`break-inside`~~, ~~`orphans`~~, ~~`widows`~~.
   - Partial because fragmentation is implemented for columns, but paged-media and region fragmentation are not supported.
@@ -148,7 +148,7 @@
 - **[CSS Intrinsic & Extrinsic Sizing Module Level 3](https://www.w3.org/TR/css3-sizing/) - Partial.**
   - CSS properties: ~~`block-size`~~, ~~`box-sizing`~~, ~~`height`~~, ~~`inline-size`~~, ~~`max-block-size`~~, ~~`max-height`~~, ~~`max-inline-size`~~, ~~`max-width`~~,
     ~~`min-block-size`~~, ~~`min-height`~~, ~~`min-inline-size`~~, ~~`min-width`~~, ~~`width`~~.
-  - Partial because intrinsic sizing is based on egui widget and text measurements rather than the complete CSS min/max-content contribution rules for all content and layout modes.
+  - Text min/max-content measurements account for white-space and emergency line breaks. Inline percentage sizes distinguish definite containing sizes from intrinsic constraints; percentage heights remain unresolved in auto-height containers. Complete intrinsic contribution rules for arbitrary widgets and all layout modes remain incomplete.
 - **[CSS Box Sizing Module Level 4](https://www.w3.org/TR/css-sizing-4/) - Partial.**
   - CSS properties: ~~`aspect-ratio`~~, `contain-intrinsic-block-size`, `contain-intrinsic-height`, `contain-intrinsic-inline-size`,
     `contain-intrinsic-size`, `contain-intrinsic-width`, `frame-sizing`, `max-size`, `min-intrinsic-sizing`, `min-size`,

@@ -564,7 +564,6 @@ pub(super) fn text_runs(
 ) -> (Vec<crate::layout_tree::TextRun>, f32) {
     let mut start = 0;
     let mut runs = Vec::new();
-    let mut minimum = 0.0_f32;
     let preserve = matches!(
         format.white_space.as_str(),
         "pre" | "pre-wrap" | "break-spaces"
@@ -572,6 +571,18 @@ pub(super) fn text_runs(
     let break_anywhere = matches!(format.word_break.as_str(), "break-all" | "break-word")
         || matches!(format.overflow_wrap.as_str(), "break-word" | "anywhere")
         || format.line_break == "anywhere";
+    let natural_ends = unicode_linebreak::linebreaks(&job.text)
+        .filter_map(|(end, _)| {
+            if format.word_break == "keep-all" && end < job.text.len() {
+                let before = job.text[..end].chars().next_back();
+                let after = job.text[end..].chars().next();
+                if before.is_some_and(is_cjk) && after.is_some_and(is_cjk) {
+                    return None;
+                }
+            }
+            Some(end)
+        })
+        .collect::<Vec<_>>();
     let line_ends = if break_anywhere {
         let characters = job.text.char_indices().collect::<Vec<_>>();
         characters
@@ -586,19 +597,35 @@ pub(super) fn text_runs(
             })
             .collect::<Vec<_>>()
     } else {
-        unicode_linebreak::linebreaks(&job.text)
-            .filter_map(|(end, _)| {
-                if format.word_break == "keep-all" && end < job.text.len() {
-                    let before = job.text[..end].chars().next_back();
-                    let after = job.text[end..].chars().next();
-                    if before.is_some_and(is_cjk) && after.is_some_and(is_cjk) {
-                        return None;
-                    }
-                }
-                Some(end)
-            })
-            .collect()
+        natural_ends.clone()
     };
+    let intrinsic_ends = if matches!(format.white_space.as_str(), "nowrap" | "pre") {
+        natural_ends
+            .into_iter()
+            .filter(|end| *end == job.text.len() || job.text[..*end].ends_with('\n'))
+            .collect::<Vec<_>>()
+    } else if matches!(format.word_break.as_str(), "break-all" | "break-word")
+        || format.overflow_wrap == "anywhere"
+        || format.line_break == "anywhere"
+    {
+        line_ends.clone()
+    } else {
+        natural_ends
+    };
+    let mut minimum = 0.0_f32;
+    for &end in &intrinsic_ends {
+        let original = &job.text[start..end];
+        let content = if matches!(format.white_space.as_str(), "pre" | "break-spaces") {
+            original.trim_end_matches(['\r', '\n'])
+        } else {
+            original.trim_end_matches(|c: char| c.is_ascii_whitespace())
+        };
+        let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
+        let width = context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, range)).size().x);
+        minimum = minimum.max(width);
+        start = end;
+    }
+    start = 0;
     for end in line_ends {
         let original = &job.text[start..end];
         let content = if preserve {
@@ -606,12 +633,6 @@ pub(super) fn text_runs(
         } else {
             original.trim_end_matches(|c: char| c.is_ascii_whitespace())
         };
-        let minimum_content = if break_anywhere {
-            content
-        } else {
-            original.trim_end_matches(|c: char| c.is_ascii_whitespace())
-        };
-        let minimum_end = start + minimum_content.len();
         let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
         if let Some(section) = job
             .sections
@@ -620,16 +641,6 @@ pub(super) fn text_runs(
         {
             let size =
                 context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, range.clone())).size());
-            let minimum_width = if minimum_end == range.end.0 {
-                size.x
-            } else if minimum_end == start {
-                0.0
-            } else {
-                let minimum_range =
-                    egui::text::ByteIndex(start)..egui::text::ByteIndex(minimum_end);
-                context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, minimum_range)).size().x)
-            };
-            minimum = minimum.max(minimum_width);
             let (space, height) = context.fonts_mut(|fonts| {
                 (
                     fonts.glyph_width(&section.format.font_id, ' '),
@@ -651,16 +662,8 @@ pub(super) fn text_runs(
                     context.fonts_mut(|fonts| fonts.layout_job(marker_job).size().x)
                 }),
                 newline: original.contains('\n'),
+                min_content_break: intrinsic_ends.binary_search(&end).is_ok(),
             });
-        } else {
-            let minimum_width = if minimum_end == start {
-                0.0
-            } else {
-                let minimum_range =
-                    egui::text::ByteIndex(start)..egui::text::ByteIndex(minimum_end);
-                context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, minimum_range)).size().x)
-            };
-            minimum = minimum.max(minimum_width);
         }
         start = end;
     }

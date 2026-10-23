@@ -15,7 +15,9 @@ pub(crate) struct Table {
 }
 use egui::{Rect, Vec2, pos2, vec2};
 use taffy::{
-    Layout, LayoutInput, LayoutOutput, LayoutPartialTree, RunMode, compute_leaf_layout, prelude::*,
+    Layout, LayoutInput, LayoutOutput, LayoutPartialTree, RunMode, compute_leaf_layout,
+    prelude::*,
+    util::{MaybeResolve, ResolveOrZero},
 };
 
 pub(crate) fn raw(value: taffy::CompactLength, basis: f32) -> Option<f32> {
@@ -1471,13 +1473,38 @@ impl Tree<'_> {
             .map(|v| raw(v.into_raw(), basis).unwrap_or(0.0));
         let inset = vec2(padding.left + border.left, padding.top + border.top);
         let block = block.as_deref();
-        compute_leaf_layout(input, &style, crate::math::resolve, |known, available| {
-            let width = known.width.unwrap_or(match available.width {
-                AvailableSpace::Definite(v) => v,
+        let content_inset = padding.top + padding.bottom + border.top + border.bottom;
+        let height = input
+            .known_dimensions
+            .height
+            .filter(|_| input.known_dimensions_are_definite.height)
+            .map(|height| (height - content_inset).max(0.0))
+            .or_else(|| {
+                if input.sizing_mode == taffy::SizingMode::ContentSize {
+                    return None;
+                }
+                let adjustment = if style.box_sizing == BoxSizing::BorderBox {
+                    content_inset
+                } else {
+                    0.0
+                };
+                style
+                    .size
+                    .height
+                    .maybe_resolve(input.parent_size.height, crate::math::resolve)
+                    .map(|height| (height - adjustment).max(0.0))
+            });
+        compute_leaf_layout(input, &style, crate::math::resolve, |_, available| {
+            let width = match available.width {
+                AvailableSpace::Definite(v) => v.max(0.0),
                 AvailableSpace::MinContent => 0.0,
                 AvailableSpace::MaxContent => f32::INFINITY,
-            });
-            self.inline_content(id, input, width, inset, block)
+            };
+            let parent_size = Size {
+                width: matches!(available.width, AvailableSpace::Definite(_)).then_some(width),
+                height,
+            };
+            self.inline_content(id, input, width, parent_size, inset, block)
         })
     }
 
@@ -1486,6 +1513,7 @@ impl Tree<'_> {
         id: NodeId,
         input: LayoutInput,
         width: f32,
+        parent_size: Size<Option<f32>>,
         inset: Vec2,
         block: Option<&taffy::BlockContext<'_>>,
     ) -> Size<f32> {
@@ -1497,6 +1525,7 @@ impl Tree<'_> {
             gap: f32,
             marker_width: f32,
             newline: bool,
+            min_content_break: bool,
             offset: Vec2,
             size: Vec2,
             text_offset: Vec2,
@@ -1529,15 +1558,15 @@ impl Tree<'_> {
                 let padding = node
                     .parent_style
                     .padding
-                    .map(|v| raw(v.into_raw(), width).unwrap_or(0.0));
+                    .resolve_or_zero(parent_size.width, crate::math::resolve);
                 let border = node
                     .parent_style
                     .border
-                    .map(|v| raw(v.into_raw(), width).unwrap_or(0.0));
+                    .resolve_or_zero(parent_size.width, crate::math::resolve);
                 let margin = node
                     .parent_style
                     .margin
-                    .map(|v| raw(v.into_raw(), width).unwrap_or(0.0));
+                    .resolve_or_zero(parent_size.width, crate::math::resolve);
                 let top = padding.top + border.top;
                 let bottom = padding.bottom + border.bottom;
                 for (index, run) in node.runs.iter().enumerate() {
@@ -1563,6 +1592,7 @@ impl Tree<'_> {
                         gap: run.gap,
                         marker_width: run.marker_width,
                         newline: run.newline,
+                        min_content_break: run.min_content_break,
                         offset: vec2(before, -top),
                         size: vec2(run.width + left + right, run.height + top + bottom),
                         text_offset: vec2(left, top),
@@ -1575,9 +1605,10 @@ impl Tree<'_> {
                     child,
                     LayoutInput {
                         known_dimensions: Size::NONE,
-                        parent_size: Size {
-                            width: Some(width),
-                            height: input.parent_size.height,
+                        parent_size,
+                        known_dimensions_are_definite: Size {
+                            width: false,
+                            height: false,
                         },
                         available_space: Size::MAX_CONTENT,
                         vertical_margins_are_collapsible: taffy::Line::FALSE,
@@ -1587,7 +1618,7 @@ impl Tree<'_> {
                 let margin = self.nodes[usize::from(child)]
                     .parent_style
                     .margin
-                    .map(|value| raw(value.into_raw(), width).unwrap_or(0.0));
+                    .resolve_or_zero(parent_size.width, crate::math::resolve);
                 tokens.push(Token {
                     node: child,
                     range: None,
@@ -1596,6 +1627,7 @@ impl Tree<'_> {
                     gap: 0.0,
                     marker_width: 0.0,
                     newline: false,
+                    min_content_break: true,
                     offset: vec2(margin.left, margin.top),
                     size: vec2(output.size.width, output.size.height),
                     text_offset: Vec2::ZERO,
@@ -1656,6 +1688,9 @@ impl Tree<'_> {
             }
             if !nowrap
                 && !line.items.is_empty()
+                && (input.available_space.width != AvailableSpace::MinContent
+                    || index == 0
+                    || tokens[index - 1].min_content_break)
                 && line_width + gap + token.width > line.width + 0.001
             {
                 maximum = maximum.max(line_width);

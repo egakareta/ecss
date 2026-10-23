@@ -2,6 +2,103 @@ use super::*;
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn intrinsic_grid_text_contributions_position_painted_tracks_test() {
+    let stylesheet = Stylesheet::parse(
+        ".reference { width:max-content; } \
+         .grid { display:grid; width:200px; grid-template-columns:min-content 20px; gap:8px; align-items:start; background:white; } \
+         .item { overflow-wrap:break-word; padding-bottom:4px; background:red; } \
+         .tail { height:20px; background:blue; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let reference = ui
+            .add(egui::Label::new("longestword").selector(".reference"))
+            .rect;
+        let mut items = Vec::new();
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                items.push(
+                    ui.add(egui::Label::new("longestword short").selector(".item"))
+                        .rect,
+                );
+                items.push(ui.add(empty_response.selector(".tail")).rect);
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+        *capture.lock().unwrap() = vec![reference, items[0], items[1]];
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let [reference, item, tail] = bounds.as_slice() else {
+        panic!("missing layout bounds")
+    };
+    assert!((item.width() - reference.width()).abs() < 0.5, "{bounds:?}");
+    near(tail.left() - item.right(), 8.0);
+    assert_eq!(
+        pixel(&pixels, item.center().x, item.bottom() - 2.0),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, item.right() + 4.0, tail.center().y),
+        [255, 255, 255, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, tail.center().x, tail.center().y),
+        [0, 0, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn flex_automatic_minimum_and_overflow_control_painted_item_edges_test() {
+    for overflow in ["hidden", "clip"] {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".row {{ display:flex; width:80px; height:30px; background:white; }} \
+             .item {{ flex:1 1 auto; white-space:nowrap; overflow:{overflow}; background:red; }} \
+             .tail {{ width:20px; flex-shrink:0; background:blue; }}",
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    *capture.lock().unwrap() = vec![
+                        ui.add(egui::Label::new("longestword short").selector(".item"))
+                            .rect,
+                        ui.add(empty_response.selector(".tail")).rect,
+                    ];
+                    ui.response()
+                })
+                .selector(".row"),
+            );
+        })
+        .await;
+        let bounds = bounds.lock().unwrap();
+        let item = bounds[0];
+        let tail = bounds[1];
+        if overflow == "hidden" {
+            near(item.width(), 60.0);
+        } else {
+            assert!(item.width() > 100.0, "{bounds:?}");
+        }
+        near(tail.left(), item.right());
+        assert_eq!(
+            pixel(&pixels, item.right() - 2.0, item.bottom() - 2.0),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            pixel(&pixels, tail.center().x, tail.center().y),
+            [0, 0, 255, 255]
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn nested_selectors_distribute_flex_space_and_gap_test() {
     let stylesheet = Stylesheet::parse(
         ".row { display: flex; width: 200px; height: 30px; gap: 10px; }\
