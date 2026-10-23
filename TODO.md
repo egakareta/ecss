@@ -241,9 +241,9 @@
   - CSS properties: `box-sizing`, `caret-color`, `cursor`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-offset`~~, ~~`outline-style`~~,
     ~~`outline-width`~~, `resize`, ~~`text-overflow`~~.
 - **[CSS Color](https://www.w3.org/TR/css3-color/) - Unsupported.**
-  - CSS properties: ~~`color`~~, `opacity`.
+  - CSS properties: ~~`color`~~, ~~`opacity`~~.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**
-  - CSS properties: ~~`color`~~, `opacity`.
+  - CSS properties: ~~`color`~~, ~~`opacity`~~.
 - **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Partial.**
   - CSS properties: `image-orientation`, `image-rendering`, ~~`object-fit`~~, ~~`object-position`~~.
 - **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Partial.**

@@ -105,12 +105,18 @@ macro_rules! numbers {
 
             fn name(self) -> &'static str { match self { $(Self::$variant => $name,)+ } }
 
-            fn constrain(self, value: f32) -> f32 { match self { $(Self::$variant => if $nonnegative { value.max(0.0) } else { value },)+ } }
+            fn constrain(self, value: f32) -> f32 {
+                if self == Self::Opacity {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    match self { $(Self::$variant => if $nonnegative { value.max(0.0) } else { value },)+ }
+                }
+            }
 
             fn get(self, style: &BoxStyle) -> Value { Value::Number(match self { $(Self::$variant => style.$($field).+,)+ }) }
 
             fn set(self, style: &mut BoxStyle, value: f32) {
-                match self { $(Self::$variant => style.$($field).+ = if $nonnegative { value.max(0.0) } else { value },)+ }
+                match self { $(Self::$variant => style.$($field).+ = if self == Self::Opacity { value.clamp(0.0, 1.0) } else if $nonnegative { value.max(0.0) } else { value },)+ }
                 if self == Self::FontSize { style.format.font_size_set = true; }
             }
         }
@@ -128,6 +134,7 @@ numbers! {
     ColumnRuleWidth => "column-rule-width", format.column_rule.width, true;
     BorderSpacingX => "border-spacing", format.spacing.width, true;
     BorderSpacingY => "border-spacing", format.spacing.height, true;
+    Opacity => "opacity", opacity, true;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,7 +330,10 @@ impl PropertyId {
                 | Self::Radius(_)
                 | Self::ObjectPosition
                 | Self::Number(
-                    Number::OutlineWidth | Number::OutlineOffset | Number::ColumnRuleWidth
+                    Number::OutlineWidth
+                        | Number::OutlineOffset
+                        | Number::ColumnRuleWidth
+                        | Number::Opacity
                 )
         )
     }

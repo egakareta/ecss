@@ -21,6 +21,7 @@ mod elements;
 mod engine;
 mod gradient;
 mod object;
+mod opacity;
 mod paint;
 mod pseudo;
 mod states;

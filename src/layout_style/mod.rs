@@ -31,6 +31,7 @@ pub(crate) struct BoxStyle {
     pub(crate) will_change: Vec<String>,
     pub hidden: bool,
     pub collapsed: bool,
+    pub(crate) opacity: f32,
     pub margin_trim: [bool; 4],
     pub(crate) current_color: Color32,
     pub(crate) background_color: Color32,
@@ -178,6 +179,7 @@ impl Default for BoxStyle {
             will_change: Vec::new(),
             hidden: false,
             collapsed: false,
+            opacity: 1.0,
             margin_trim: [false; 4],
             current_color: Color32::BLACK,
             background_color: Color32::TRANSPARENT,
@@ -284,6 +286,7 @@ fn supported(name: &str) -> bool {
                 | "object-position"
                 | "position"
                 | "will-change"
+                | "opacity"
                 | "scroll-behavior"
                 | "top"
                 | "right"
@@ -532,6 +535,10 @@ impl Declaration {
         }
         if crate::text_decoration::supported(name) {
             return crate::text_decoration::apply(name, value, &mut output.text_decoration, units);
+        }
+        if name == "opacity" {
+            output.opacity = opacity_value(value, units)?;
+            return Ok(());
         }
         let parts = components(value)?;
         let s = &mut output.layout;
@@ -1091,6 +1098,10 @@ fn inherited(name: &str) -> bool {
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if name == "opacity" {
+        out.opacity = source.opacity;
+        return;
+    }
     if name == "object-fit" {
         out.object_fit = source.object_fit;
         return;
@@ -1561,6 +1572,30 @@ impl BoxStyle {
             .iter()
             .any(|value| value.eq_ignore_ascii_case(property))
     }
+}
+
+fn opacity_value(value: &str, units: Units) -> Result<f32, &'static str> {
+    if let Some(percentage) = crate::math::percentage(value, units, true)? {
+        return Ok(crate::math::resolve(percentage, 1.0).clamp(0.0, 1.0));
+    }
+    if let Some(number) = crate::math::number(value, units)? {
+        return number
+            .is_finite()
+            .then(|| number.clamp(0.0, 1.0))
+            .ok_or("invalid opacity");
+    }
+
+    let mut input = Parser::new(value);
+    let number = match input.next().map_err(|_| "invalid opacity")? {
+        Token::Number { value, .. } => *value,
+        Token::Percentage { unit_value, .. } => *unit_value,
+        _ => return Err("expected opacity number or percentage"),
+    };
+    input.expect_exhausted().map_err(|_| "invalid opacity")?;
+    number
+        .is_finite()
+        .then(|| number.clamp(0.0, 1.0))
+        .ok_or("invalid opacity")
 }
 
 fn parse_will_change(value: &str) -> Result<Vec<String>, &'static str> {

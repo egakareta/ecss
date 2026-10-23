@@ -1454,6 +1454,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
     if frame.nodes.iter().all(|node| {
         !node.style.positioned
             && node.style.z_index.is_none()
+            && node.style.opacity >= 1.0
             && !node.style.fixed
             && node.style.layout.position != Position::Sticky
             && !node.style.layout.float.is_floated()
@@ -1522,6 +1523,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
         let will_change_z_index =
             node.style.will_change("z-index") && (node.style.positioned || item);
         let real = i == 0
+            || node.style.opacity < 1.0
             || node.style.z_index.is_some() && (node.style.positioned || item)
             || node.style.will_change("position")
             || will_change_z_index
@@ -1759,6 +1761,77 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
             }
         }
     }
+    let mut opacity_nodes = order
+        .iter()
+        .copied()
+        .filter(|index| frame.nodes[*index].style.opacity < 1.0)
+        .collect::<Vec<_>>();
+    opacity_nodes.sort_by_key(|index| {
+        let mut depth = 0;
+        let mut parent = frame.nodes[*index].parent;
+        while let Some(ancestor) = parent {
+            depth += 1;
+            parent = frame.nodes[ancestor].parent;
+        }
+        std::cmp::Reverse(depth)
+    });
+    let mut opacity_textures = context
+        .data(|data| data.get_temp::<opacity::TextureCache>(Id::unique("ecss.opacity-textures")))
+        .unwrap_or_default();
+    for opacity_node in opacity_nodes.iter().copied() {
+        let mut members = vec![false; count];
+        for (candidate, member) in members.iter_mut().enumerate() {
+            let mut current = Some(candidate);
+            while let Some(index) = current {
+                if index == opacity_node {
+                    *member = true;
+                    break;
+                }
+                current = frame.nodes[index].parent;
+            }
+        }
+        let opacity = frame.nodes[opacity_node].style.opacity;
+        let mut entries = Vec::new();
+        for index in &order {
+            if members[*index] {
+                entries.append(&mut grouped[*index]);
+            }
+        }
+        for index in &order {
+            if members[*index] {
+                entries.append(&mut overlays[*index]);
+            }
+        }
+        let composited = if opacity <= 0.0 {
+            Vec::new()
+        } else {
+            opacity::composite(
+                context,
+                &mut opacity_textures,
+                frame.nodes[opacity_node].id,
+                opacity,
+                entries,
+            )
+        };
+        grouped[opacity_node] = composited;
+        for (index, member) in members.into_iter().enumerate() {
+            if member && index != opacity_node {
+                grouped[index].clear();
+                overlays[index].clear();
+            }
+        }
+    }
+    let active_opacity_ids = opacity_nodes
+        .iter()
+        .filter(|index| frame.nodes[**index].style.opacity > 0.0)
+        .map(|index| frame.nodes[*index].id)
+        .collect::<HashSet<_>>();
+    opacity_textures
+        .0
+        .retain(|id, _| active_opacity_ids.contains(id));
+    context.data_mut(|data| {
+        data.insert_temp(Id::unique("ecss.opacity-textures"), opacity_textures);
+    });
     context.graphics_mut(|layers| {
         let list = layers.entry(layer);
         let end = list.next_idx().0;

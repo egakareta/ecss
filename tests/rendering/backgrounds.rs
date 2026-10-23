@@ -38,6 +38,73 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn opacity_composites_overlapping_descendants_as_a_group_test() {
+    let stylesheet = Stylesheet::parse(
+        ".group { position:relative; width:60px; height:60px; opacity:50%; } \
+         .red { position:absolute; left:0; top:0; width:40px; height:40px; background:#f00; } \
+         .blue { position:absolute; left:20px; top:20px; width:40px; height:40px; background:#00f; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let response = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_response.selector(".red"));
+                ui.add(empty_response.selector(".blue"));
+                ui.response()
+            })
+            .selector(".group"),
+        );
+        *capture.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 10.5, rect.top() + 10.5),
+        [255, 127, 127, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 30.5, rect.top() + 30.5),
+        [127, 127, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn opacity_keyframes_composite_the_animated_group_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes fade { from { opacity:0; } to { opacity:1; } } \
+         .group { position:relative; width:60px; height:60px; opacity:25%; animation:fade 1s linear both; } \
+         .red { position:absolute; left:0; top:0; width:40px; height:40px; background:#f00; } \
+         .blue { position:absolute; left:20px; top:20px; width:40px; height:40px; background:#00f; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        let response = ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_response.selector(".red"));
+                ui.add(empty_response.selector(".blue"));
+                ui.response()
+            })
+            .selector(".group"),
+        );
+        *capture.lock().unwrap() = Some(response.rect);
+    })
+    .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 30.5, rect.top() + 30.5),
+        [127, 127, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inherited_custom_properties_resolve_widget_background_colors_test() {
     let stylesheet = Stylesheet::parse(
         ".parent { --surface:#f00; } .primary { background-color:var(--surface); }",

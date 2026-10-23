@@ -1000,7 +1000,9 @@ pub(crate) fn sample(
             });
             layout_active |= sampled
                 .iter()
-                .any(|declaration| matches!(declaration, Declaration::Layout(_)))
+                .any(|declaration| {
+                    matches!(declaration, Declaration::Layout(layout) if layout.name != "opacity")
+                })
                 && matches!(config.play_state, PlayState::Running);
         }
         declarations.extend(sampled);
