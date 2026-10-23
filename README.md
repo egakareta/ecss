@@ -1,10 +1,14 @@
 <div align="center">
+<img style="width:128px" src="examples/logo.svg" width="128px">
 
-# ecss 🐦
+<a href="https://github.com/egakareta/ecss/actions/workflows/ci.yml"><img alt="Build Status" src="https://github.com/egakareta/ecss/actions/workflows/ci.yml/badge.svg?branch=master"/></a>
+<a href="https://crates.io/crates/ecss"><img alt="crates.io" src="https://img.shields.io/crates/v/ecss"/></a>
 
 </div>
 
-`ecss` adds cascading style sheet (CSS) support to [egui](https://github.com/emilk/egui).
+# ecss 🐦
+
+Add cascading style sheet (CSS) support to [egui](https://github.com/emilk/egui).
 
 ```rust,no_run
 use ecss::{SelectorExt as _, Stylesheet};
