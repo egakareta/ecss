@@ -1416,6 +1416,24 @@ enum CssComponent {
 }
 
 fn interpolate_css_values(property: &str, from: &str, to: &str, progress: f32) -> Option<String> {
+    if property == "object-position" && !is_css_wide(from) && !is_css_wide(to) {
+        let from =
+            crate::object::position_values(&crate::layout_style::components(from).ok()?).ok()?;
+        let to = crate::object::position_values(&crate::layout_style::components(to).ok()?).ok()?;
+        return Some(
+            from.iter()
+                .zip(&to)
+                .map(|(from, to)| {
+                    format!(
+                        "calc(({from}) * {} + ({to}) * {})",
+                        format_number(f64::from(1.0 - progress)),
+                        format_number(f64::from(progress))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+    }
     if let (Some(from), Some(to)) = (parse_color(from), parse_color(to)) {
         return Some(color_to_css(interpolate_color(from, to, progress)));
     }

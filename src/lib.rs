@@ -28,6 +28,7 @@ mod layout;
 mod layout_style;
 mod layout_tree;
 mod math;
+mod object;
 mod text_decoration;
 mod transition;
 

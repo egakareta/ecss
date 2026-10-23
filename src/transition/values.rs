@@ -12,6 +12,7 @@ pub(super) enum Value {
     Number(f32),
     Length(ComputedLength),
     Radius(ComputedLength, ComputedLength),
+    Position(crate::object::Position),
 }
 
 impl Value {
@@ -35,6 +36,9 @@ impl Value {
             (Self::Length(from), Self::Length(to)) => Self::Length(from.interpolate(to, progress)),
             (Self::Radius(x, y), Self::Radius(to_x, to_y)) => {
                 Self::Radius(x.interpolate(to_x, progress), y.interpolate(to_y, progress))
+            }
+            (Self::Position(from), Self::Position(to)) => {
+                Self::Position(from.interpolate(to, progress))
             }
             _ => return None,
         })
@@ -143,6 +147,7 @@ pub(super) enum PropertyId {
     TabSize,
     Order,
     ZIndex,
+    ObjectPosition,
 }
 
 impl PropertyId {
@@ -158,6 +163,7 @@ impl PropertyId {
             Self::TabSize,
             Self::Order,
             Self::ZIndex,
+            Self::ObjectPosition,
         ]
         .into_iter()
         .chain((0..4).flat_map(|side| {
@@ -203,6 +209,7 @@ impl PropertyId {
             Self::TabSize => "tab-size",
             Self::Order => "order",
             Self::ZIndex => "z-index",
+            Self::ObjectPosition => "object-position",
         }
     }
 
@@ -314,6 +321,7 @@ impl PropertyId {
                 | Self::OutlineColor
                 | Self::ColumnRuleColor
                 | Self::Radius(_)
+                | Self::ObjectPosition
                 | Self::Number(
                     Number::OutlineWidth | Number::OutlineOffset | Number::ColumnRuleWidth
                 )
@@ -349,6 +357,7 @@ impl PropertyId {
     pub(super) fn get(self, style: &BoxStyle) -> Option<Value> {
         Some(match self {
             Self::Color => Value::Color(style.current_color),
+            Self::ObjectPosition => Value::Position(style.object_position.clone()),
             Self::Background => Value::Color(style.background_color),
             Self::BorderColor(side) => {
                 if style.border_stripes[side].is_some() {
@@ -390,6 +399,7 @@ impl PropertyId {
             (Self::BorderColor(side), Value::Color(value)) => {
                 style.border_colors[side] = Some(*value)
             }
+            (Self::ObjectPosition, Value::Position(value)) => style.object_position = value.clone(),
             (Self::OutlineColor, Value::Color(value)) => style.outline.color = Some(*value),
             (Self::ColumnRuleColor, Value::Color(value)) => {
                 style.format.column_rule.color = Some(*value)

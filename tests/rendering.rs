@@ -17,6 +17,7 @@ mod rendering {
     mod columns;
     mod layout;
     mod media;
+    mod objects;
     mod outline;
     mod selectors;
     mod tables;

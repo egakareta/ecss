@@ -20,6 +20,7 @@ mod background_paint;
 mod elements;
 mod engine;
 mod gradient;
+mod object;
 mod paint;
 mod pseudo;
 mod states;
@@ -105,6 +106,7 @@ struct Node {
     ancestor_scroll: Vec2,
     sticky: Vec2,
     text: Option<TextMeasurement>,
+    image: Option<Vec2>,
     absent: bool,
     paint: Option<PaintRecord>,
     color: Color32,
@@ -332,6 +334,7 @@ pub(crate) fn show(
     style.layout.direction = parent_style.layout.direction;
     style.custom_properties = parent_style.custom_properties.clone();
     style.hidden = parent_style.hidden;
+    style.object_position = parent_style.object_position.clone();
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
     style.format.font_kerning = parent_style.format.font_kerning;
@@ -736,6 +739,7 @@ pub(crate) fn show(
             ancestor_scroll,
             sticky,
             text: None,
+            image: None,
             absent,
             paint: None,
             color: Color32::BLACK,
@@ -883,6 +887,12 @@ pub(crate) fn show(
     let start = shape_index(ui.ctx(), layer);
     let response = widget.ui(&mut content_ui);
     let end = shape_index(ui.ctx(), layer);
+    let image = active.0.borrow().nodes[index]
+        .children
+        .is_empty()
+        .then(|| object::image_size(ui.ctx(), ShapeRange { layer, start, end }, response.rect))
+        .flatten();
+    active.0.borrow_mut().nodes[index].image = image;
     let mut measured = content_ui
         .min_rect()
         .size()
@@ -1191,6 +1201,16 @@ pub(crate) fn show(
         .as_ref()
         .unwrap_or_else(|| style.as_ref());
     let border = final_geometry.border;
+    if let Some(natural) = image {
+        object::fit_image(
+            ui.ctx(),
+            ShapeRange { layer, start, end },
+            response.rect,
+            natural,
+            final_geometry.content(),
+            &style,
+        );
+    }
     let visual = if final_geometry.slices.is_empty() {
         border
     } else {

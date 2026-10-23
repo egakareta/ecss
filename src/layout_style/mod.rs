@@ -37,6 +37,8 @@ pub(crate) struct BoxStyle {
     pub(crate) background_set: bool,
     pub(crate) background_current_color: bool,
     pub(crate) transitions: crate::transition::Settings,
+    pub(crate) object_fit: crate::object::Fit,
+    pub(crate) object_position: crate::object::Position,
     pub(crate) scrollbar_color: ScrollbarColor,
     pub(crate) scrollbar_width: ScrollbarWidth,
     pub(crate) overscroll_behavior: [OverscrollBehavior; 2],
@@ -206,6 +208,8 @@ impl Default for BoxStyle {
             border_widths: [3.0; 4],
             outline: outline::Outline::default(),
             text_decoration: Default::default(),
+            object_fit: Default::default(),
+            object_position: Default::default(),
             decorations: crate::box_decoration::DecorationStyle::default(),
         }
     }
@@ -276,6 +280,8 @@ fn supported(name: &str) -> bool {
                 | "max-inline-size"
                 | "max-block-size"
                 | "aspect-ratio"
+                | "object-fit"
+                | "object-position"
                 | "position"
                 | "will-change"
                 | "scroll-behavior"
@@ -463,6 +469,7 @@ impl Declaration {
         }
         if keyword.eq_ignore_ascii_case("inherit")
             || keyword.eq_ignore_ascii_case("unset") && inherited(&self.name)
+            || self.name == "object-position" && keyword.eq_ignore_ascii_case("revert")
         {
             copy_property(&self.name, output, parent);
             return Ok(());
@@ -529,6 +536,10 @@ impl Declaration {
         let parts = components(value)?;
         let s = &mut output.layout;
         match name {
+            "object-fit" => output.object_fit = crate::object::Fit::parse(value)?,
+            "object-position" => {
+                output.object_position = crate::object::Position::parse(&parts, units)?
+            }
             "direction" => s.direction = value.parse().map_err(|_| "invalid direction")?,
             "float" => s.float = value.parse().map_err(|_| "invalid float")?,
             "clear" => s.clear = value.parse().map_err(|_| "invalid clear")?,
@@ -1075,10 +1086,19 @@ fn inherited(name: &str) -> bool {
             | "orphans"
             | "widows"
             | "scrollbar-color"
+            | "object-position"
     )
 }
 
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
+    if name == "object-fit" {
+        out.object_fit = source.object_fit;
+        return;
+    }
+    if name == "object-position" {
+        out.object_position = source.object_position.clone();
+        return;
+    }
     if crate::text_decoration::supported(name) {
         let mut decoration = source.text_decoration.clone();
         decoration.color = Some(decoration.color.unwrap_or(source.current_color));

@@ -12,6 +12,82 @@ fn example_theme_uses_supported_css() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn object_properties_validate_their_css_grammar() {
+    for value in [
+        "fill",
+        "contain",
+        "cover",
+        "none",
+        "scale-down",
+        "contain scale-down",
+        "scale-down cover",
+        "CoVeR",
+        "inherit",
+        "initial",
+        "unset",
+        "revert",
+    ] {
+        Stylesheet::parse(&format!(".image {{object-fit:{value}}}")).unwrap();
+    }
+    for value in [
+        "auto",
+        "contain cover",
+        "scale-down none",
+        "cover cover",
+        "fill scale-down",
+        "10px",
+        "none, fill",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".image {{object-fit:{value}}}")).is_err(),
+            "{value}"
+        );
+    }
+    for value in [
+        "left",
+        "top",
+        "center",
+        "25%",
+        "0",
+        "bottom right",
+        "center left",
+        "center center",
+        "left 10px",
+        "10px top",
+        "right 10px bottom 20px",
+        "top -5% left calc(10% + 1em)",
+        "calc(100% - 3px) -10px",
+        "inherit",
+        "initial",
+        "unset",
+        "revert",
+    ] {
+        Stylesheet::parse(&format!(".image {{object-position:{value}}}")).unwrap();
+    }
+    for value in [
+        "auto",
+        "left right",
+        "top bottom",
+        "top 10px",
+        "10px left",
+        "left 10px top",
+        "center 5px top 10px",
+        "left 1px right 2px",
+        "1px 2px 3px 4px",
+        "left, top",
+        "1fr 2px",
+        "1deg 2px",
+        "left top extra",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".image {{object-position:{value}}}")).is_err(),
+            "{value}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn css_wide_values_copy_parent_properties_and_restore_initial_values() {
     let context = Context::default();
     Stylesheet::parse(".parent { box-sizing:border-box; width:180px; padding:10px; } .inherited { box-sizing:inherit; width:80px; padding:inherit; height:40px; } .initial { box-sizing:inherit; box-sizing:initial; padding:10px; width:80px; height:20px; }").unwrap().install(&context);

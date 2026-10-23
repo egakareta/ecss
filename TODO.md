@@ -244,10 +244,10 @@
   - CSS properties: ~~`color`~~, `opacity`.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**
   - CSS properties: ~~`color`~~, `opacity`.
-- **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Unsupported.**
-  - CSS properties: `image-orientation`, `image-rendering`, `object-fit`, `object-position`.
-- **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Unsupported.**
-  - CSS properties: `image-resolution`, `object-fit`.
+- **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Partial.**
+  - CSS properties: `image-orientation`, `image-rendering`, ~~`object-fit`~~, ~~`object-position`~~.
+- **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Partial.**
+  - CSS properties: `image-resolution`, ~~`object-fit`~~.
 - **[Compositing and Blending](https://www.w3.org/TR/compositing/) - Unsupported.**
   - CSS properties: `background-blend-mode`, `isolation`, `mix-blend-mode`.
 - **[Filter Effects](https://www.w3.org/TR/filter-effects/) - Unsupported.**

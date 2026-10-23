@@ -394,7 +394,7 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 let nowrap = matches!(node.style.format.white_space.as_str(), "nowrap" | "pre");
                 (text.job.clone(), text.extra, text.minimum, nowrap)
             });
-            (measured, text)
+            (measured, text, node.image.is_some())
         })
         .collect::<Vec<_>>();
     let mut tree = crate::layout_tree::Tree::new(crate::math::resolve);
@@ -712,7 +712,7 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
         |input: taffy::LayoutInput, _: NodeId, index: Option<&mut usize>, style: &Style| {
             let measurement = index.map(|index| &measurements[*index]);
             let measured = measurement.map_or(Vec2::ZERO, |measurement| measurement.0);
-            taffy::compute_leaf_layout(input, style, crate::math::resolve, |_, available| {
+            taffy::compute_leaf_layout(input, style, crate::math::resolve, |known, available| {
                 let measured = if let Some((job, extra, minimum, nowrap)) =
                     measurement.and_then(|measurement| measurement.1.as_ref())
                 {
@@ -728,9 +728,16 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 } else {
                     measured
                 };
-                Size {
-                    width: measured.x,
-                    height: measured.y,
+                if measurement.is_some_and(|measurement| measurement.2) {
+                    Size {
+                        width: known.width.unwrap_or(measured.x),
+                        height: known.height.unwrap_or(measured.y),
+                    }
+                } else {
+                    Size {
+                        width: measured.x,
+                        height: measured.y,
+                    }
                 }
             })
         };
