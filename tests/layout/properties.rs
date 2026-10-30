@@ -181,6 +181,101 @@ fn all_revert_restores_inherited_values_and_discards_author_overrides() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn important_declarations_beat_normal_specificity_and_inline_styles() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".same { width:40px; height:10px; }\
+         .same { width:80px !important; }\
+         .specific { width:40px !important; height:10px; }\
+         .specific.extra { width:80px; }\
+         .inline { width:40px !important; height:10px; }\
+         .inline-important { width:40px !important; height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.push(ui.add(empty_response.selector(".same")).rect);
+        rects.push(ui.add(empty_response.selector(".specific.extra")).rect);
+        rects.push(
+            ui.add(
+                empty_response
+                    .selector(".inline")
+                    .inline_style(InlineStyle::parse("width:90px; height:10px;").unwrap()),
+            )
+            .rect,
+        );
+        rects.push(
+            ui.add(
+                empty_response.selector(".inline-important").inline_style(
+                    InlineStyle::parse("width:90px !important; height:10px;").unwrap(),
+                ),
+            )
+            .rect,
+        );
+    });
+
+    assert_eq!(rects[0].width(), 80.0);
+    assert_eq!(rects[1].width(), 40.0);
+    assert_eq!(rects[2].width(), 40.0);
+    assert_eq!(rects[3].width(), 90.0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn important_shorthands_reset_longhands_at_their_cascade_priority() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".shorthand { width:100px; height:10px; padding:20px !important; padding-left:4px; }\
+         .longhand { width:100px; height:10px; padding:20px; padding-left:4px !important; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.push(ui.add(empty_response.selector(".shorthand")).rect);
+        rects.push(ui.add(empty_response.selector(".longhand")).rect);
+    });
+
+    assert_eq!(rects[0].size(), vec2(140.0, 50.0));
+    assert_eq!(rects[1].size(), vec2(124.0, 50.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn revert_on_inherited_properties_uses_the_parent_computed_value() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { color:red; font-size:32px; }\
+         .child { color:blue; color:revert; font-size:12px; font-size:revert; width:40px; height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut observed = None;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        observed = Some((
+                            ui.visuals().widgets.inactive.fg_stroke.color,
+                            ui.style().text_styles[&egui::TextStyle::Body].size,
+                        ));
+                        ui.response()
+                    })
+                    .selector(".child"),
+                );
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    });
+
+    assert_eq!(observed, Some((egui::Color32::RED, 32.0)));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn unset_and_inherit_follow_writing_mode_when_mapping_logical_sizes() {
     let context = Context::default();
     Stylesheet::parse(".flow {writing-mode:vertical-rl; inline-size:40px; block-size:70px; white-space:pre;} .unset {writing-mode:unset; inline-size:inherit; block-size:inherit; white-space:unset;} .horizontal {writing-mode:horizontal-tb; inline-size:inherit; block-size:inherit; white-space:initial;}")

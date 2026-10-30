@@ -487,8 +487,8 @@ impl Declaration {
             return Ok(());
         }
         if keyword.eq_ignore_ascii_case("inherit")
-            || keyword.eq_ignore_ascii_case("unset") && inherited(&self.name)
-            || self.name == "object-position" && keyword.eq_ignore_ascii_case("revert")
+            || (keyword.eq_ignore_ascii_case("unset") || keyword.eq_ignore_ascii_case("revert"))
+                && inherited(&self.name)
         {
             copy_property(&self.name, output, parent);
             return Ok(());
@@ -1140,6 +1140,12 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
         out.background_color = source.background_color;
         out.background_set = true;
         out.background_current_color = false;
+        return;
+    }
+    if name == "background" {
+        out.background_color = source.background_color;
+        out.background_set = source.background_set;
+        out.background_current_color = source.background_current_color;
         return;
     }
     if outline::supported(name) {

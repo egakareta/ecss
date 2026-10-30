@@ -70,6 +70,7 @@ pub struct Stylesheet {
 #[derive(Clone, Debug)]
 pub struct InlineStyle {
     declarations: Vec<Declaration>,
+    importance: Vec<bool>,
     assets: Stylesheet,
     load_id: Arc<()>,
 }
@@ -77,8 +78,10 @@ pub struct InlineStyle {
 impl InlineStyle {
     /// Parses the contents of a CSS `style` attribute.
     pub fn parse(source: &str) -> Result<Self, CssError> {
+        let parsed = css::parse_style_attribute(source)?;
         Ok(Self {
-            declarations: css::parse_style_attribute(source)?,
+            declarations: parsed.declarations,
+            importance: parsed.importance,
             assets: Stylesheet::default(),
             load_id: Arc::default(),
         })
@@ -227,10 +230,13 @@ impl Stylesheet {
 
     fn parse_unloaded(source: &str) -> Result<Self, CssError> {
         let css::ParsedStylesheet {
-            rules,
+            mut rules,
             imports,
             keyframes,
         } = css::parse(source)?;
+        for (source_order, rule) in rules.iter_mut().enumerate() {
+            rule.source_order = source_order;
+        }
         let rule_index = RuleIndex::new(&rules);
         Ok(Self {
             rules,
@@ -385,17 +391,21 @@ impl Stylesheet {
         let mut families = None;
         let mut weight = 400;
         let mut italic = false;
-        for rule in self.rule_index.matching(&self.rules, target) {
-            if rule.pseudo.is_some() || rule.state != RuleState::BASE || !rule.media.is_empty() {
-                continue;
-            }
-            for declaration in &rule.declarations {
-                match declaration {
-                    Declaration::FontFamily(value) => families = Some(value.clone()),
-                    Declaration::FontWeight(value) => weight = *value,
-                    Declaration::FontStyle(value) => italic = *value,
-                    _ => {}
-                }
+        let rules = self
+            .rule_index
+            .matching(&self.rules, target)
+            .filter(|rule| {
+                rule.pseudo.is_none() && rule.state == RuleState::BASE && rule.media.is_empty()
+            });
+        for (_, declaration) in css::cascade::ordered(rules) {
+            match declaration {
+                Declaration::FontFamily(value) => families = Some(value.clone()),
+                Declaration::FontWeight(value) => weight = *value,
+                Declaration::FontStyle(value) => italic = *value,
+                Declaration::Layout(value) if value.name == "font-family" => families = None,
+                Declaration::Layout(value) if value.name == "font-weight" => weight = 400,
+                Declaration::Layout(value) if value.name == "font-style" => italic = false,
+                _ => {}
             }
         }
         Some(FontRequest {
@@ -413,14 +423,17 @@ impl Stylesheet {
                 (RuleState::HOVERED, VisualState::Hovered),
                 (RuleState::ACTIVE, VisualState::Active),
             ] {
-                for rule in self.rules.iter().filter(|rule| {
+                let rules = self.rules.iter().filter(|rule| {
                     rule.pseudo.is_none()
                         && rule.target.is_universal()
                         && rule.state == state
                         && rule.media.is_empty()
-                }) {
-                    apply_style_declarations(style, visual_state, &rule.declarations);
-                }
+                });
+                let declarations = css::cascade::ordered(rules)
+                    .into_iter()
+                    .map(|(_, declaration)| declaration.clone())
+                    .collect::<Vec<_>>();
+                apply_style_declarations(style, visual_state, &declarations);
             }
         });
 
@@ -447,14 +460,17 @@ impl Stylesheet {
                             (RuleState::HOVERED, VisualState::Hovered),
                             (RuleState::ACTIVE, VisualState::Active),
                         ] {
-                            for rule in stylesheet.rules.iter().filter(|rule| {
+                            let rules = stylesheet.rules.iter().filter(|rule| {
                                 rule.pseudo.is_none()
                                     && rule.target.is_universal()
                                     && rule.state == state
                                     && rule.matches_media(viewport)
-                            }) {
-                                apply_declarations(ui, visual_state, &rule.declarations);
-                            }
+                            });
+                            let declarations = css::cascade::ordered(rules)
+                                .into_iter()
+                                .map(|(_, declaration)| declaration.clone())
+                                .collect::<Vec<_>>();
+                            apply_declarations(ui, visual_state, &declarations);
                         }
                     }
                     ui.painter().rect_filled(
@@ -591,6 +607,8 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
             pseudo: None,
             specificity: u32::MAX,
             declarations: style.declarations,
+            importance: style.importance,
+            source_order: usize::MAX,
             media: Vec::new(),
         });
         stylesheet.rule_index = RuleIndex::new(&stylesheet.rules);

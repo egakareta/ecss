@@ -225,8 +225,105 @@ fn ordinarily_inherited(declaration: &Declaration) -> bool {
     )
 }
 
+fn is_css_wide_value(value: &str) -> bool {
+    ["inherit", "initial", "unset", "revert"]
+        .iter()
+        .any(|keyword| value.eq_ignore_ascii_case(keyword))
+}
+
+fn is_background_property(name: &str) -> bool {
+    name == "background" || name.starts_with("background-")
+}
+
+fn is_font_property(name: &str) -> bool {
+    matches!(name, "font-family" | "font-weight" | "font-style")
+}
+
+fn should_inherit_wide_property(name: &str, value: &str) -> bool {
+    (is_font_property(name) && is_css_wide_value(value) && !value.eq_ignore_ascii_case("initial"))
+        || (is_background_property(name) && value.eq_ignore_ascii_case("inherit"))
+}
+
+fn matches_wide_property(declaration: &Declaration, name: &str) -> bool {
+    if name == "background" {
+        return match declaration {
+            Declaration::Background(_)
+            | Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundImage(_)
+            | Declaration::BackgroundAttachment(_)
+            | Declaration::BackgroundClip(_)
+            | Declaration::BackgroundOrigin(_)
+            | Declaration::BackgroundPosition(_)
+            | Declaration::BackgroundRepeat(_)
+            | Declaration::BackgroundSize(_) => true,
+            Declaration::Layout(layout) => {
+                layout.name == "background" || is_background_property(&layout.name)
+            }
+            _ => false,
+        };
+    }
+    match name {
+        "background-color" => match declaration {
+            Declaration::Background(_) | Declaration::BackgroundShorthand(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-color",
+            _ => false,
+        },
+        "background-image" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundImage(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-image",
+            _ => false,
+        },
+        "background-attachment" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundAttachment(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-attachment",
+            _ => false,
+        },
+        "background-clip" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundClip(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-clip",
+            _ => false,
+        },
+        "background-origin" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundOrigin(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-origin",
+            _ => false,
+        },
+        "background-position" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundPosition(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-position",
+            _ => false,
+        },
+        "background-repeat" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundRepeat(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-repeat",
+            _ => false,
+        },
+        "background-size" => match declaration {
+            Declaration::BackgroundShorthand(_) | Declaration::BackgroundSize(_) => true,
+            Declaration::Layout(layout) => layout.name == "background-size",
+            _ => false,
+        },
+        "font-family" => match declaration {
+            Declaration::FontFamily(_) => true,
+            Declaration::Layout(layout) => layout.name == "font-family",
+            _ => false,
+        },
+        "font-weight" => match declaration {
+            Declaration::FontWeight(_) => true,
+            Declaration::Layout(layout) => layout.name == "font-weight",
+            _ => false,
+        },
+        "font-style" => match declaration {
+            Declaration::FontStyle(_) => true,
+            Declaration::Layout(layout) => layout.name == "font-style",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn apply_all_rules(
-    rules: Vec<(RuleState, Vec<Declaration>)>,
+    rules: Vec<(RuleState, Declaration)>,
     parent_declarations: &[Declaration],
 ) -> (
     Vec<(RuleState, Vec<Declaration>)>,
@@ -234,22 +331,33 @@ fn apply_all_rules(
 ) {
     let mut effective = Vec::new();
     let mut all_keyword = None;
-    for (state, declarations) in rules {
-        for declaration in declarations {
-            if let Declaration::All(keyword) = declaration {
-                effective.retain(|(_, declaration)| survives_all(declaration));
-                all_keyword = Some(keyword);
-                effective.push((state, Declaration::All(keyword)));
-                effective.extend(
-                    parent_declarations
-                        .iter()
-                        .filter(|declaration| inherited_by_all(declaration, keyword))
-                        .cloned()
-                        .map(|declaration| (state, declaration)),
-                );
-            } else {
-                effective.push((state, declaration));
-            }
+    for (state, declaration) in rules {
+        if let Declaration::Layout(layout) = &declaration
+            && should_inherit_wide_property(&layout.name, &layout.value)
+        {
+            let name = layout.name.clone();
+            effective.retain(|(_, previous)| !matches_wide_property(previous, &name));
+            effective.push((state, declaration));
+            effective.extend(
+                parent_declarations
+                    .iter()
+                    .filter(|previous| matches_wide_property(previous, &name))
+                    .cloned()
+                    .map(|previous| (state, previous)),
+            );
+        } else if let Declaration::All(keyword) = declaration {
+            effective.retain(|(_, declaration)| survives_all(declaration));
+            all_keyword = Some(keyword);
+            effective.push((state, Declaration::All(keyword)));
+            effective.extend(
+                parent_declarations
+                    .iter()
+                    .filter(|declaration| inherited_by_all(declaration, keyword))
+                    .cloned()
+                    .map(|declaration| (state, declaration)),
+            );
+        } else {
+            effective.push((state, declaration));
         }
     }
 
@@ -386,24 +494,18 @@ pub(crate) fn show(
     let resolve_rules = |state: u8| {
         let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
             applicable_rules(stylesheet, target, state, units.viewport).collect();
-        let custom_declarations = rules
+        let ordered = crate::css::cascade::ordered(rules.iter().copied());
+        let custom_declarations = ordered
             .iter()
-            .flat_map(|rule| &rule.declarations)
+            .map(|(_, declaration)| *declaration)
             .collect::<Vec<_>>();
         let custom_properties =
             crate::css::variables::compute(&parent_style.custom_properties, &custom_declarations);
-        let resolved = rules
-            .iter()
-            .map(|rule| {
-                (
-                    rule.state,
-                    rule.declarations
-                        .iter()
-                        .filter_map(|declaration| {
-                            crate::css::resolve_deferred(declaration, &custom_properties)
-                        })
-                        .collect::<Vec<_>>(),
-                )
+        let resolved = ordered
+            .into_iter()
+            .filter_map(|(rule_state, declaration)| {
+                crate::css::resolve_deferred(declaration, &custom_properties)
+                    .map(|declaration| (rule_state, declaration))
             })
             .collect::<Vec<_>>();
         let (resolved, all_keyword) =
@@ -461,6 +563,15 @@ pub(crate) fn show(
             Declaration::FontFamily(families) => font_families = Some(families.clone()),
             Declaration::FontWeight(weight) => font_weight = *weight,
             Declaration::FontStyle(italic) => font_italic = *italic,
+            Declaration::Layout(declaration) if declaration.name == "font-family" => {
+                font_families = None;
+            }
+            Declaration::Layout(declaration) if declaration.name == "font-weight" => {
+                font_weight = 400;
+            }
+            Declaration::Layout(declaration) if declaration.name == "font-style" => {
+                font_italic = false;
+            }
             Declaration::Layout(declaration) if declaration.name.starts_with("border-image") => {
                 background_urls
                     .extend(crate::box_decoration::border_image_urls(&declaration.value));
@@ -1301,7 +1412,14 @@ pub(crate) fn show(
             .state(response.widget_state());
         let (_, current_state_rules, _) = resolve_rules(current_state);
         let mut background_style = resolved_background_from_rules(&current_state_rules);
-        if transition.background || resolved_rules.iter().flat_map(|(_, declarations)| declarations).any(|declaration| matches!(declaration, Declaration::Layout(layout) if layout.name == "background-color")) {
+        if transition.background
+            || resolved_rules
+                .iter()
+                .flat_map(|(_, declarations)| declarations)
+                .any(|declaration| {
+                    matches!(declaration, Declaration::Layout(layout) if layout.name == "background" || layout.name == "background-color")
+                })
+        {
             background_style.color = style.background_color;
         }
         let corner_radius = if final_geometry.collapsed.is_some() {

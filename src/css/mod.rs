@@ -16,6 +16,7 @@ use selectors::parser::{self, Component, ParseRelative, SelectorList};
 use crate::CssError;
 
 mod background;
+pub(crate) mod cascade;
 mod color;
 mod media;
 mod supports;
@@ -39,6 +40,8 @@ pub(crate) struct Rule {
     pub(crate) pseudo: Option<PseudoElementKind>,
     pub(crate) specificity: u32,
     pub(crate) declarations: Vec<Declaration>,
+    pub(crate) importance: Vec<bool>,
+    pub(crate) source_order: usize,
     pub(crate) media: Vec<MediaQueryList>,
 }
 
@@ -513,6 +516,11 @@ struct ParseIssue {
     line: Option<u32>,
 }
 
+pub(crate) struct ParsedDeclarations {
+    pub(crate) declarations: Vec<Declaration>,
+    pub(crate) importance: Vec<bool>,
+}
+
 impl ParseIssue {
     fn new(message: &'static str) -> Self {
         Self {
@@ -578,7 +586,7 @@ fn parse_rules_with_options(
     })
 }
 
-pub(crate) fn parse_style_attribute(source: &str) -> Result<Vec<Declaration>, CssError> {
+pub(crate) fn parse_style_attribute(source: &str) -> Result<ParsedDeclarations, CssError> {
     let mut parser = CssParser::new(source);
     parse_declarations(&mut parser, true)
         .map_err(|issue| CssError::at_line(issue.line.unwrap_or(0), issue.message))
@@ -645,7 +653,10 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
         _start: &ParserState,
         input: &mut CssParser<'i>,
     ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
-        let declarations = parse_declarations(input, false).map_err(ParseError::custom)?;
+        let ParsedDeclarations {
+            declarations,
+            importance,
+        } = parse_declarations(input, true).map_err(ParseError::custom)?;
         Ok(ParsedRule::Style(
             selectors
                 .into_iter()
@@ -655,6 +666,8 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
                     pseudo,
                     specificity,
                     declarations: declarations.clone(),
+                    importance: importance.clone(),
+                    source_order: 0,
                     media: Vec::new(),
                 })
                 .collect(),
@@ -815,7 +828,8 @@ impl<'i> QualifiedRuleParser<'i> for KeyframeRuleParser {
         _start: &ParserState,
         input: &mut CssParser<'i>,
     ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
-        let declarations = parse_declarations(input, false).map_err(ParseError::custom)?;
+        let ParsedDeclarations { declarations, .. } =
+            parse_declarations(input, false).map_err(ParseError::custom)?;
         let timing_function = declarations.iter().rev().find_map(|declaration| {
             let Declaration::Animation(property) = declaration else {
                 return None;
@@ -965,7 +979,7 @@ struct Declarations {
 }
 
 impl<'i> DeclarationParser<'i> for Declarations {
-    type Declaration = Option<Declaration>;
+    type Declaration = Option<(Declaration, bool)>;
     type Error = &'static str;
 
     fn parse_value(
@@ -994,7 +1008,7 @@ impl Declarations {
         name: CowRcStr<'i>,
         input: &mut CssParser<'i>,
         important: bool,
-    ) -> Result<Option<Declaration>, ParseError<&'static str>> {
+    ) -> Result<Option<(Declaration, bool)>, ParseError<&'static str>> {
         let start = input.state();
         while input.next().is_ok() {}
         let value = input.slice_from(start.position()).trim().to_owned();
@@ -1004,17 +1018,23 @@ impl Declarations {
                 return Err(ParseError::custom("invalid custom property name"));
             }
             let stripped = strip_important(&value);
-            return Ok(Some(Declaration::CustomProperty {
-                name: name.to_string(),
-                value: stripped.unwrap_or(&value).trim().to_owned(),
-                important: important || stripped.is_some(),
-            }));
+            return Ok(Some((
+                Declaration::CustomProperty {
+                    name: name.to_string(),
+                    value: stripped.unwrap_or(&value).trim().to_owned(),
+                    important: important || stripped.is_some(),
+                },
+                important || stripped.is_some(),
+            )));
         }
         if variables::contains_var(&value) {
-            return Ok(Some(Declaration::Deferred {
-                name: name.to_ascii_lowercase(),
-                value,
-            }));
+            return Ok(Some((
+                Declaration::Deferred {
+                    name: name.to_ascii_lowercase(),
+                    value,
+                },
+                important,
+            )));
         }
         input.reset(&start);
         if name.eq_ignore_ascii_case("all") {
@@ -1027,19 +1047,19 @@ impl Declarations {
                 _ => return Err(ParseError::custom("invalid all value")),
             };
             while input.next().is_ok() {}
-            return Ok(Some(Declaration::All(keyword)));
+            return Ok(Some((Declaration::All(keyword), important)));
         }
         if crate::animation::is_property(&name) {
             let value = consume_value(input)?;
             return crate::animation::parse_property(&name, &value)
-                .map(Declaration::Animation)
+                .map(|declaration| (Declaration::Animation(declaration), important))
                 .map(Some)
                 .map_err(ParseError::custom);
         }
         if crate::transition::is_property(&name) {
             let value = consume_value(input)?;
             return crate::transition::parse_property(&name, &value)
-                .map(Declaration::Transition)
+                .map(|declaration| (Declaration::Transition(declaration), important))
                 .map(Some)
                 .map_err(ParseError::custom);
         }
@@ -1049,17 +1069,28 @@ impl Declarations {
                 .any(|keyword| value.eq_ignore_ascii_case(keyword))
         {
             while input.next().is_ok() {}
-            return Ok(Some(Declaration::Layout(
-                crate::layout_style::Declaration {
+            return Ok(Some((
+                Declaration::Layout(crate::layout_style::Declaration {
                     name: name.to_ascii_lowercase(),
                     value,
-                },
+                }),
+                important,
+            )));
+        }
+        if is_non_layout_css_wide_property(&name, &value) {
+            while input.next().is_ok() {}
+            return Ok(Some((
+                Declaration::Layout(crate::layout_style::Declaration {
+                    name: name.to_ascii_lowercase(),
+                    value,
+                }),
+                important,
             )));
         }
         if let Some(declaration) =
             crate::layout_style::parse(&name, input).map_err(ParseError::custom)?
         {
-            return Ok(Some(Declaration::Layout(declaration)));
+            return Ok(Some((Declaration::Layout(declaration), important)));
         }
         let declaration = if name.eq_ignore_ascii_case("color") {
             Some(Declaration::Color(parse_color(input)?))
@@ -1106,8 +1137,20 @@ impl Declarations {
             while input.next().is_ok() {}
             None
         };
-        Ok(declaration)
+        Ok(declaration.map(|declaration| (declaration, important)))
     }
+}
+
+fn is_non_layout_css_wide_property(name: &str, value: &str) -> bool {
+    let wide = ["inherit", "initial", "unset", "revert"]
+        .iter()
+        .any(|keyword| value.eq_ignore_ascii_case(keyword));
+    wide && (name.eq_ignore_ascii_case("background")
+        || name.to_ascii_lowercase().starts_with("background-")
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "font-family" | "font-weight" | "font-style"
+        ))
 }
 
 pub(crate) fn resolve_deferred(
@@ -1122,7 +1165,9 @@ pub(crate) fn resolve_deferred(
     };
     let source = format!("{name}: {value};");
     let mut input = CssParser::new(&source);
-    let mut declarations = parse_declarations(&mut input, false).unwrap_or_default();
+    let mut declarations = parse_declarations(&mut input, false)
+        .map(|parsed| parsed.declarations)
+        .unwrap_or_default();
     declarations
         .pop()
         .or_else(|| Some(invalid_computed_value(name)))
@@ -1330,17 +1375,17 @@ fn parse_background_images_value<'i>(
 
 impl<'i> AtRuleParser<'i> for Declarations {
     type Prelude = ();
-    type AtRule = Option<Declaration>;
+    type AtRule = Option<(Declaration, bool)>;
     type Error = &'static str;
 }
 
 impl<'i> QualifiedRuleParser<'i> for Declarations {
     type Prelude = ();
-    type QualifiedRule = Option<Declaration>;
+    type QualifiedRule = Option<(Declaration, bool)>;
     type Error = &'static str;
 }
 
-impl<'i> RuleBodyItemParser<'i, Option<Declaration>, &'static str> for Declarations {
+impl<'i> RuleBodyItemParser<'i, Option<(Declaration, bool)>, &'static str> for Declarations {
     fn parse_declarations(&self) -> bool {
         true
     }
@@ -1353,12 +1398,16 @@ impl<'i> RuleBodyItemParser<'i, Option<Declaration>, &'static str> for Declarati
 fn parse_declarations<'i>(
     input: &mut CssParser<'i>,
     allow_important: bool,
-) -> Result<Vec<Declaration>, ParseIssue> {
+) -> Result<ParsedDeclarations, ParseIssue> {
     let mut parser = Declarations { allow_important };
     let mut declarations = Vec::new();
+    let mut importance = Vec::new();
     for item in RuleBodyParser::new(input, &mut parser) {
         match item {
-            Ok(Some(declaration)) => declarations.push(declaration),
+            Ok(Some((declaration, declaration_importance))) => {
+                declarations.push(declaration);
+                importance.push(declaration_importance);
+            }
             Ok(None) => {}
             Err((error, _, location)) => {
                 let message = match error.kind {
@@ -1372,7 +1421,10 @@ fn parse_declarations<'i>(
             }
         }
     }
-    Ok(declarations)
+    Ok(ParsedDeclarations {
+        declarations,
+        importance,
+    })
 }
 
 fn strip_important(source: &str) -> Option<&str> {

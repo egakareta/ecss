@@ -27,16 +27,26 @@ pub(super) fn resolved_background<'a>(
     state: u8,
     viewport: Vec2,
 ) -> BackgroundPaint<'a> {
-    background_from_declarations(
-        matching_rules(stylesheet, target, viewport)
-            .filter(move |rule| rule.state.matches(state))
-            .flat_map(|rule| rule.declarations.iter()),
-    )
+    let ordered = crate::css::cascade::ordered(
+        matching_rules(stylesheet, target, viewport).filter(move |rule| rule.state.matches(state)),
+    );
+    background_from_declarations(ordered.into_iter().map(|(_, declaration)| declaration))
 }
 
 fn background_from_declarations<'a>(
     declarations: impl Iterator<Item = &'a Declaration>,
 ) -> BackgroundPaint<'a> {
+    fn reset(background: &mut BackgroundPaint<'_>) {
+        background.color = Color32::TRANSPARENT;
+        background.images = &[];
+        background.attachments = &[];
+        background.clips = &[];
+        background.origins = &[];
+        background.positions = &[];
+        background.repeats = &[];
+        background.sizes = &[];
+    }
+
     let mut background = BackgroundPaint {
         color: Color32::TRANSPARENT,
         images: &[],
@@ -49,16 +59,7 @@ fn background_from_declarations<'a>(
     };
     for declaration in declarations {
         match declaration {
-            Declaration::All(_) => {
-                background.color = Color32::TRANSPARENT;
-                background.images = &[];
-                background.attachments = &[];
-                background.clips = &[];
-                background.origins = &[];
-                background.positions = &[];
-                background.repeats = &[];
-                background.sizes = &[];
-            }
+            Declaration::All(_) => reset(&mut background),
             Declaration::Background(color) => background.color = *color,
             Declaration::BackgroundShorthand(value) => {
                 background.color = value.color;
@@ -79,6 +80,25 @@ fn background_from_declarations<'a>(
             Declaration::BackgroundPosition(positions) => background.positions = positions,
             Declaration::BackgroundRepeat(repeats) => background.repeats = repeats,
             Declaration::BackgroundSize(sizes) => background.sizes = sizes,
+            Declaration::Layout(layout)
+                if layout.value.eq_ignore_ascii_case("initial")
+                    || layout.value.eq_ignore_ascii_case("unset")
+                    || layout.value.eq_ignore_ascii_case("revert")
+                    || layout.value.eq_ignore_ascii_case("inherit") =>
+            {
+                match layout.name.as_str() {
+                    "background" => reset(&mut background),
+                    "background-color" => background.color = Color32::TRANSPARENT,
+                    "background-image" => background.images = &[],
+                    "background-attachment" => background.attachments = &[],
+                    "background-clip" => background.clips = &[],
+                    "background-origin" => background.origins = &[],
+                    "background-position" => background.positions = &[],
+                    "background-repeat" => background.repeats = &[],
+                    "background-size" => background.sizes = &[],
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -849,22 +869,21 @@ pub(super) fn resolved_border_image_source(
     viewport: Vec2,
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
-    for rule in matching_rules(stylesheet, selector, viewport) {
-        if !rule.state.matches(state) {
-            continue;
-        }
-        for declaration in &rule.declarations {
-            match declaration {
-                Declaration::All(_) => source = crate::css::BackgroundImage::None,
-                Declaration::Layout(layout) => {
-                    if let Some(value) =
-                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
-                    {
-                        source = value;
-                    }
+    let ordered = crate::css::cascade::ordered(
+        matching_rules(stylesheet, selector, viewport)
+            .filter(move |rule| rule.state.matches(state)),
+    );
+    for (_, declaration) in ordered {
+        match declaration {
+            Declaration::All(_) => source = crate::css::BackgroundImage::None,
+            Declaration::Layout(layout) => {
+                if let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                {
+                    source = value;
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     source
@@ -878,19 +897,19 @@ pub(super) fn resolved_pseudo_border_image_source(
     viewport: Vec2,
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
-    for rule in matching_pseudo_rules(stylesheet, selector, pseudo, state, viewport) {
-        for declaration in &rule.declarations {
-            match declaration {
-                Declaration::All(_) => source = crate::css::BackgroundImage::None,
-                Declaration::Layout(layout) => {
-                    if let Some(value) =
-                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
-                    {
-                        source = value;
-                    }
+    let rules = matching_pseudo_rules(stylesheet, selector, pseudo, state, viewport);
+    let ordered = crate::css::cascade::ordered(rules.into_iter());
+    for (_, declaration) in ordered {
+        match declaration {
+            Declaration::All(_) => source = crate::css::BackgroundImage::None,
+            Declaration::Layout(layout) => {
+                if let Some(value) =
+                    crate::box_decoration::border_image_source(&layout.name, &layout.value)
+                {
+                    source = value;
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     source
