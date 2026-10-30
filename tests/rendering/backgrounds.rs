@@ -273,6 +273,84 @@ async fn keyframes_animate_background_color_at_the_timeline_midpoint_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn important_declarations_override_keyframes_while_normal_values_animate_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes pulse { from { width:20px; color:#000; background-color:#000; }\
+         to { width:80px; color:#fff; background-color:#fff; } }\
+         .box { width:20px; height:24px; color:#000; background-color:#000; animation:pulse 1s linear both; }\
+         .box.important-width { width:36px !important; }\
+         .box.important-color { color:#f00 !important; }\
+         .box.important-background { background-color:#0f0 !important; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let rects = bounds.clone();
+    let inline = InlineStyle::parse(
+        "width:44px !important; color:#0ff !important; background-color:#f0f !important;",
+    )
+    .unwrap();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        let mut current_bounds = Vec::new();
+        for selector in [
+            ".box",
+            ".box.important-width",
+            ".box.important-color",
+            ".box.important-background",
+        ] {
+            current_bounds.push(ui.add(egui::Button::new("X").selector(selector)).rect);
+        }
+        current_bounds.push(
+            ui.add(
+                egui::Button::new("X")
+                    .selector(".box")
+                    .inline_style(inline.clone()),
+            )
+            .rect,
+        );
+        *rects.lock().unwrap() = current_bounds;
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    for (rect, expected) in bounds.iter().zip([50.0, 36.0, 50.0, 50.0, 44.0]) {
+        near(rect.width(), expected);
+    }
+    let has_tint = |rect: egui::Rect, red: bool| {
+        (rect.min.y.floor() as usize..rect.max.y.ceil() as usize).any(|y| {
+            (rect.min.x.floor() as usize..rect.max.x.ceil() as usize).any(|x| {
+                let color = pixels[y * WIDTH as usize + x];
+                if red {
+                    color[0] > 220 && color[1] < 180 && color[2] < 180
+                } else {
+                    color[0] < 180 && color[1] > 220 && color[2] > 220
+                }
+            })
+        })
+    };
+    assert_eq!(
+        pixel(&pixels, bounds[0].min.x + 4.0, bounds[0].min.y + 4.0),
+        [128, 128, 128, 255]
+    );
+    assert!(
+        has_tint(bounds[2], true),
+        "important text color was not red"
+    );
+    assert_eq!(
+        pixel(&pixels, bounds[3].min.x + 4.0, bounds[3].min.y + 4.0),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, bounds[4].min.x + 4.0, bounds[4].min.y + 4.0),
+        [255, 0, 255, 255]
+    );
+    assert!(
+        has_tint(bounds[4], false),
+        "inline important text color was not cyan"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn custom_properties_resolve_in_keyframe_declarations_test() {
     let stylesheet = Stylesheet::parse(
         "@keyframes fade { from { background-color:var(--from); } to { background-color:var(--to); } }\

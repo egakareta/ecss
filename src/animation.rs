@@ -926,6 +926,7 @@ pub(crate) fn sample(
     properties: &[Property],
     keyframes: &HashMap<String, Vec<Keyframe>>,
     underlying: &[Declaration],
+    important: &[Declaration],
 ) -> Sample {
     if properties.is_empty() {
         return Sample {
@@ -970,10 +971,15 @@ pub(crate) fn sample(
         let Some(frames) = keyframes.get(&config.name) else {
             continue;
         };
-        if !frames
+        let has_unoverridden_property = frames
             .iter()
-            .any(|frame| frame.declarations.iter().any(is_interpolable))
-        {
+            .flat_map(|frame| &frame.declarations)
+            .filter(|declaration| is_interpolable(declaration))
+            .filter_map(normalized_declaration)
+            .any(|(_, declaration)| {
+                !crate::css::cascade::overrides_animation(important, &declaration)
+            });
+        if !has_unoverridden_property {
             continue;
         }
         let elapsed = effective_now - clock.started_at - config.delay;
@@ -990,7 +996,10 @@ pub(crate) fn sample(
         let Some(progress) = progress else {
             continue;
         };
-        let sampled = sample_keyframes(frames, progress, before, underlying);
+        let sampled = sample_keyframes(frames, progress, before, underlying)
+            .into_iter()
+            .filter(|declaration| !crate::css::cascade::overrides_animation(important, declaration))
+            .collect::<Vec<_>>();
         if active {
             can_defer_layout &= sampled.iter().all(|declaration| {
                 matches!(

@@ -55,6 +55,33 @@ async fn hover_transitions_reverse_and_reverse_again_without_jumping() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn transitions_override_important_values_and_animations_test() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes colors { from { background-color:red; } to { background-color:blue; } }\
+         .box { width:48px; height:24px; background-color:black; transition:background-color 1s linear; animation:colors 1s linear both; }\
+         .box:hover { background-color:white !important; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels =
+        render_ui_pixels_with_events(stylesheet, hover_frames(6, &[(1, true)]), move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect)
+        })
+        .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    let actual = pixel(&pixels, rect.center().x, rect.center().y);
+    assert!(
+        actual[0].abs_diff(255) <= 1
+            && actual[1].abs_diff(128) <= 1
+            && actual[2].abs_diff(128) <= 1,
+        "transition sample was {actual:?}, expected a halfway red-to-white value"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn changing_the_destination_retargets_from_the_current_color() {
     let stylesheet = Stylesheet::parse(
         ".box { width:48px; height:24px; transition:background-color 1s linear; }",

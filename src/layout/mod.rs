@@ -554,28 +554,43 @@ pub(crate) fn show(
     let resolve_rules = |state: u8| {
         let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
             applicable_rules(stylesheet, target, state, units.viewport).collect();
-        let ordered = crate::css::cascade::ordered(rules.iter().copied());
+        let ordered = crate::css::cascade::ordered_with_importance(rules.iter().copied());
         let custom_declarations = ordered
             .iter()
-            .map(|(_, declaration)| *declaration)
+            .map(|(_, declaration, _)| *declaration)
             .collect::<Vec<_>>();
         let custom_properties =
             crate::css::variables::compute(&parent_style.custom_properties, &custom_declarations);
         let resolved = ordered
             .into_iter()
-            .filter_map(|(rule_state, declaration)| {
+            .filter_map(|(rule_state, declaration, important)| {
                 crate::css::resolve_deferred(declaration, &custom_properties)
-                    .map(|declaration| (rule_state, declaration))
+                    .map(|declaration| (rule_state, declaration, important))
             })
             .collect::<Vec<_>>();
+        let important_declarations = resolved
+            .iter()
+            .filter(|(_, _, important)| *important)
+            .map(|(_, declaration, _)| declaration.clone())
+            .collect::<Vec<_>>();
+        let resolved = resolved
+            .into_iter()
+            .map(|(rule_state, declaration, _)| (rule_state, declaration))
+            .collect();
         let (resolved, all_keyword) = apply_all_rules(
             resolved,
             &parent_style.computed_declarations,
             parent_style.background_color,
         );
-        (custom_properties, resolved, all_keyword)
+        (
+            custom_properties,
+            resolved,
+            all_keyword,
+            important_declarations,
+        )
     };
-    let (custom_properties, resolved_rules, all_keyword) = resolve_rules(state);
+    let (custom_properties, resolved_rules, all_keyword, important_declarations) =
+        resolve_rules(state);
     style.custom_properties = custom_properties.clone();
     match all_keyword {
         Some(crate::css::AllKeyword::Inherit) => {
@@ -596,14 +611,15 @@ pub(crate) fn show(
     }
     units.font = style.format.em;
     let non_pointer_state = state & !(RuleState::HOVERED.bits() | RuleState::ACTIVE.bits());
-    let (_, base_visual_rules, _) = resolve_rules(non_pointer_state);
-    let (_, hovered_visual_rules, _) = resolve_rules(non_pointer_state | RuleState::HOVERED.bits());
+    let (_, base_visual_rules, _, _) = resolve_rules(non_pointer_state);
+    let (_, hovered_visual_rules, _, _) =
+        resolve_rules(non_pointer_state | RuleState::HOVERED.bits());
     let active_state = if state & (RuleState::FOCUS.bits() | RuleState::ACTIVE.bits()) != 0 {
         state
     } else {
         non_pointer_state | RuleState::HOVERED.bits() | RuleState::ACTIVE.bits()
     };
-    let (_, active_visual_rules, _) = resolve_rules(active_state);
+    let (_, active_visual_rules, _, _) = resolve_rules(active_state);
     let mut background_urls = Vec::new();
     for declaration in resolved_rules
         .iter()
@@ -771,6 +787,7 @@ pub(crate) fn show(
         &animation_properties,
         &keyframes,
         &underlying_declarations,
+        &important_declarations,
     );
     {
         let mut frame = active.0.borrow_mut();
@@ -1441,7 +1458,7 @@ pub(crate) fn show(
     };
     let current_state = states::response_state(&response, id, enabled);
     if stylesheet.rule_index.has_element_references {
-        let (_, current_element_rules, _) = resolve_rules(current_state);
+        let (_, current_element_rules, _, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
             resolved_element_references_from_rules(
                 stylesheet,
@@ -1491,7 +1508,7 @@ pub(crate) fn show(
             .visuals
             .widgets
             .state(response.widget_state());
-        let (_, current_state_rules, _) = resolve_rules(current_state);
+        let (_, current_state_rules, _, _) = resolve_rules(current_state);
         let mut background_style = resolved_background_from_rules(&current_state_rules);
         if transition.background
             || resolved_rules
