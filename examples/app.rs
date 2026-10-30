@@ -248,6 +248,10 @@ fn create_app(
 mod tests {
     use super::*;
 
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[cfg(not(target_arch = "wasm32"))]
     static PERFORMANCE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn collect_text_bounds(
@@ -326,7 +330,7 @@ mod tests {
         size: egui::Vec2,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        context.run_ui(
+        let mut output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 time: Some(time),
@@ -334,7 +338,126 @@ mod tests {
                 ..Default::default()
             },
             |ui| app.show(ui),
-        )
+        );
+        output.textures_delta.clear();
+        assert_no_egui_performance_warnings(&output, time);
+        output
+    }
+
+    fn assert_no_egui_performance_warnings(output: &egui::FullOutput, time: f64) {
+        fn warning(shape: &egui::Shape) -> Option<&str> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text.contains("egui PERF WARNING:") => {
+                    Some(&text.galley.job.text)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(warning),
+                _ => None,
+            }
+        }
+
+        if let Some(warning) = output
+            .shapes
+            .iter()
+            .find_map(|clipped| warning(&clipped.shape))
+        {
+            panic!(
+                "{warning}\nat {time:.3}s; completed passes: {}; discard reasons: {:?}",
+                output.platform_output.num_completed_passes,
+                output.platform_output.request_discard_reasons,
+            );
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn egui_performance_warning_check_rejects_repeated_discards() {
+        let context = egui::Context::default();
+        for frame in 0..8 {
+            let time = frame as f64 / 60.0;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.label("Discard warning control");
+                    ui.ctx().request_discard("discard warning control");
+                },
+            );
+            output.textures_delta.clear();
+            assert_no_egui_performance_warnings(&output, time);
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn save_feedback_has_no_egui_performance_warnings() {
+        let context = egui::Context::default();
+        let theme = include_str!("theme.css").split_once('\n').unwrap().1;
+        Stylesheet::parse(theme).unwrap().install(&context);
+        let mut app = App::default();
+        let mut frame = 0;
+        let mut next_frame = |app: &mut App, events| {
+            let output = run_frame(&context, app, frame as f64 / 60.0, events);
+            frame += 1;
+            output
+        };
+        let mut output = next_frame(&mut app, Vec::new());
+        for _ in 0..5 {
+            output = next_frame(&mut app, Vec::new());
+        }
+
+        let confirmation = |output: &egui::FullOutput| {
+            output.shapes.iter().find_map(|clipped| {
+                find_text_shape(&clipped.shape, "Saved for your changes.")
+                    .map(|text| text.visual_bounding_rect().height())
+            })
+        };
+        assert!(confirmation(&output).is_none());
+
+        for button in ["Save changes", "Cancel"] {
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|clipped| find_text_shape(&clipped.shape, button))
+                .unwrap_or_else(|| panic!("{button:?} button should render"))
+                .visual_bounding_rect()
+                .center();
+            next_frame(&mut app, vec![egui::Event::PointerMoved(position)]);
+            for pressed in [true, false] {
+                output = next_frame(
+                    &mut app,
+                    vec![egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+
+            if button == "Cancel" {
+                assert!(
+                    confirmation(&output).is_none(),
+                    "Cancel did not hide feedback"
+                );
+                for _ in 0..8 {
+                    output = next_frame(&mut app, Vec::new());
+                }
+            } else {
+                let mut peak_height = confirmation(&output).expect("Save did not show feedback");
+                for _ in 0..90 {
+                    output = next_frame(&mut app, Vec::new());
+                    peak_height =
+                        peak_height.max(confirmation(&output).expect("save feedback disappeared"));
+                }
+                let end_height = confirmation(&output).unwrap();
+                assert!(
+                    peak_height > end_height,
+                    "save-feedback did not animate font size: {peak_height} -> {end_height}"
+                );
+            }
+        }
     }
 
     fn select_and_copy(
@@ -458,7 +581,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn demo_has_no_egui_widget_id_clash_diagnostics() {
         let context = egui::Context::default();
         context.options_mut(|options| options.warn_on_id_clash = true);
@@ -488,7 +612,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn save_confirmation_layout_animation_avoids_repeated_discard_passes() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -537,7 +662,8 @@ mod tests {
         assert_ne!(start_position, midpoint_position, "padding did not animate");
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn hero_and_feature_copy_labels_remain_selectable() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -578,7 +704,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn demo_page_scrolls_to_content_below_the_viewport() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -742,7 +869,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn demo_input_fits_inside_its_panel() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -777,7 +905,8 @@ mod tests {
         assert!(field.right() <= panel.right());
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn demo_overflow_text_ellipsizes_on_one_line() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;
@@ -809,7 +938,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn demo_overflow_text_remains_selectable() {
         let context = egui::Context::default();
         let theme = include_str!("theme.css").split_once('\n').unwrap().1;

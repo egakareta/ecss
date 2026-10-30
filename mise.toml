@@ -31,13 +31,13 @@ run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
 
 [tasks.test]
 description = "Run .rs tests for native and wasm"
-run = "mise run test:native && mise run test:wasm"
+run = ["mise run test:native", "mise run test:wasm"]
 
 [tasks."test:native"]
 description = "Run .rs tests for native"
-run = "cargo test --all-features -- --nocapture"
+run = "cargo test --all-features --all-targets -- --nocapture"
 
 [tasks."test:wasm"]
 description = "Run .rs tests for wasm"
-run = "wasm-pack test --headless --chrome"
+run = "wasm-pack test --headless --chrome -- --all-features --all-targets"
 env = { WASM_BINDGEN_TEST_WEBDRIVER_JSON = "tests/webdriver.json", WASM_BINDGEN_TEST_TIMEOUT = 120 }
