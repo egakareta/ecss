@@ -446,23 +446,6 @@ impl Stylesheet {
     fn apply_w3c_defaults(&self, context: &egui::Context) {
         context.all_styles_mut(|style| {
             apply_w3c_defaults(style);
-            for (state, visual_state) in [
-                (RuleState::BASE, VisualState::Base),
-                (RuleState::HOVERED, VisualState::Hovered),
-                (RuleState::ACTIVE, VisualState::Active),
-            ] {
-                let rules = self.rules.iter().filter(|rule| {
-                    rule.pseudo.is_none()
-                        && rule.target.is_universal()
-                        && rule.state == state
-                        && rule.media.is_empty()
-                });
-                let declarations = css::cascade::ordered(rules)
-                    .into_iter()
-                    .map(|(_, declaration)| declaration.clone())
-                    .collect::<Vec<_>>();
-                apply_style_declarations(style, visual_state, &declarations);
-            }
         });
 
         let background_registered = context
@@ -963,6 +946,7 @@ fn apply_style_declarations(
     state: VisualState,
     declarations: &[Declaration],
 ) {
+    let inherited_widgets = style.visuals.widgets.clone();
     for declaration in declarations {
         if let Declaration::All(keyword) = declaration {
             reset_all_visuals(style, state, *keyword);
@@ -971,18 +955,45 @@ fn apply_style_declarations(
         if matches!(declaration, Declaration::Color(_)) {
             style.visuals.override_text_color = None;
         }
+        if matches!(declaration, Declaration::Layout(value) if value.name == "color") {
+            style.visuals.override_text_color = None;
+        }
 
         let visuals = &mut style.visuals.widgets;
         match state {
             VisualState::Base => {
-                apply_visual_declaration(&mut visuals.noninteractive, declaration);
-                apply_visual_declaration(&mut visuals.inactive, declaration);
-                apply_visual_declaration(&mut visuals.hovered, declaration);
-                apply_visual_declaration(&mut visuals.active, declaration);
-                apply_visual_declaration(&mut visuals.open, declaration);
+                apply_visual_declaration(
+                    &mut visuals.noninteractive,
+                    declaration,
+                    &inherited_widgets.noninteractive,
+                );
+                apply_visual_declaration(
+                    &mut visuals.inactive,
+                    declaration,
+                    &inherited_widgets.inactive,
+                );
+                apply_visual_declaration(
+                    &mut visuals.hovered,
+                    declaration,
+                    &inherited_widgets.hovered,
+                );
+                apply_visual_declaration(
+                    &mut visuals.active,
+                    declaration,
+                    &inherited_widgets.active,
+                );
+                apply_visual_declaration(&mut visuals.open, declaration, &inherited_widgets.open);
             }
-            VisualState::Hovered => apply_visual_declaration(&mut visuals.hovered, declaration),
-            VisualState::Active => apply_visual_declaration(&mut visuals.active, declaration),
+            VisualState::Hovered => apply_visual_declaration(
+                &mut visuals.hovered,
+                declaration,
+                &inherited_widgets.hovered,
+            ),
+            VisualState::Active => apply_visual_declaration(
+                &mut visuals.active,
+                declaration,
+                &inherited_widgets.active,
+            ),
         }
     }
 }
@@ -1019,7 +1030,11 @@ fn reset_all_visuals(style: &mut egui::Style, state: VisualState, keyword: crate
     }
 }
 
-fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declaration) {
+fn apply_visual_declaration(
+    visuals: &mut WidgetVisuals,
+    declaration: &Declaration,
+    inherited: &WidgetVisuals,
+) {
     match declaration {
         Declaration::Color(color) => visuals.fg_stroke.color = *color,
         Declaration::Background(color) => {
@@ -1036,6 +1051,38 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         Declaration::Layout(declaration) if declaration.name == "border-radius" => {
             if let Some(radius) = crate::box_decoration::simple_visual_radius(&declaration.value) {
                 visuals.corner_radius = CornerRadius::same(radius);
+            }
+        }
+        Declaration::Layout(declaration)
+            if matches!(
+                declaration.name.as_str(),
+                "color" | "background" | "background-color"
+            ) =>
+        {
+            let value = declaration.value.trim().to_ascii_lowercase();
+            match declaration.name.as_str() {
+                "color" => {
+                    visuals.fg_stroke.color = match value.as_str() {
+                        "initial" => Color32::BLACK,
+                        "inherit" | "unset" | "revert" | "currentcolor" => {
+                            inherited.fg_stroke.color
+                        }
+                        _ => visuals.fg_stroke.color,
+                    };
+                }
+                "background" | "background-color" => {
+                    let (background, weak_background) = match value.as_str() {
+                        "inherit" => (inherited.bg_fill, inherited.weak_bg_fill),
+                        "initial" | "unset" | "revert" => {
+                            (Color32::TRANSPARENT, Color32::TRANSPARENT)
+                        }
+                        "currentcolor" => (visuals.fg_stroke.color, visuals.fg_stroke.color),
+                        _ => (visuals.bg_fill, visuals.weak_bg_fill),
+                    };
+                    visuals.bg_fill = background;
+                    visuals.weak_bg_fill = weak_background;
+                }
+                _ => unreachable!(),
             }
         }
         Declaration::Layout(_)

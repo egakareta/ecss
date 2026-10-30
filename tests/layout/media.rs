@@ -89,6 +89,28 @@ fn universal_media_declarations_share_cascade_priority_and_source_order() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn universal_css_wide_color_and_background_reset_widget_visuals() {
+    let context = Context::default();
+    Stylesheet::parse(
+        "* { color:red; color:initial; background-color:blue; background-color:initial; }",
+    )
+    .unwrap()
+    .install(&context);
+
+    let mut foreground = egui::Color32::TRANSPARENT;
+    let mut background = egui::Color32::BLACK;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        let visuals = &ui.visuals().widgets.inactive;
+        foreground = visuals.fg_stroke.color;
+        background = visuals.bg_fill;
+        let _ = ui.button("Unwrapped");
+    });
+    assert_eq!(foreground, egui::Color32::BLACK);
+    assert_eq!(background, egui::Color32::TRANSPARENT);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn malformed_media_reports_source_lines_and_does_not_hide_declaration_errors() {
     for query in [
         "(min-width:)",
