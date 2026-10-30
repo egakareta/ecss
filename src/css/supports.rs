@@ -4,6 +4,9 @@ use super::{
 };
 
 pub(super) fn parse(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIssue>> {
+    let start = input.state();
+    general_tokens(input, 0)?;
+    input.reset(&start);
     let condition = parse_condition(input).map_err(|error| with_source_line(error, input))?;
     if input.expect_exhausted().is_err() {
         return Err(invalid_at(input));
@@ -84,38 +87,43 @@ fn parse_in_parens(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIs
     };
     match token {
         Token::ParenthesisBlock => input.parse_nested_block(|input| {
-            let start = input.state();
-            let first = match input.next() {
-                Ok(token) => token.clone(),
-                Err(_) => return Err(invalid_at(input)),
-            };
-            input.reset(&start);
-            let grouped = match &first {
-                Token::ParenthesisBlock => true,
-                Token::Function(_) => true,
-                Token::Ident(name) if name.eq_ignore_ascii_case("not") => {
-                    if input.expect_ident_matching("not").is_err() {
-                        return Err(invalid_at(input));
-                    }
-                    let declaration = input.try_parse(|input| input.expect_colon()).is_ok();
-                    input.reset(&start);
-                    !declaration
-                }
-                _ => false,
-            };
-            let condition = if grouped {
-                parse_condition(input)?
-            } else {
-                parse_declaration(input).unwrap_or(false)
-            };
-            if input.expect_exhausted().is_err() {
-                return Err(invalid_at(input));
+            if let Ok(condition) = input.try_parse(parse_condition) {
+                return Ok(condition);
             }
-            Ok(condition)
+            if let Ok(condition) = input.try_parse(parse_declaration) {
+                return Ok(condition);
+            }
+            general_tokens(input, 0)?;
+            Ok(false)
         }),
         Token::Function(name) => parse_function(input, name.as_ref()),
         _ => Err(invalid_at(input)),
     }
+}
+
+fn general_tokens(input: &mut CssParser<'_>, depth: usize) -> Result<(), ParseError<ParseIssue>> {
+    if depth >= 128 {
+        return Err(invalid_at(input));
+    }
+    while !input.is_exhausted() {
+        let token = match input.next() {
+            Ok(token) => token.clone(),
+            Err(_) => return Err(invalid_at(input)),
+        };
+        if token.is_parse_error() {
+            return Err(invalid_at(input));
+        }
+        if matches!(
+            token,
+            Token::Function(_)
+                | Token::ParenthesisBlock
+                | Token::SquareBracketBlock
+                | Token::CurlyBracketBlock
+        ) {
+            input.parse_nested_block(|input| general_tokens(input, depth + 1))?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_function(input: &mut CssParser<'_>, name: &str) -> Result<bool, ParseError<ParseIssue>> {

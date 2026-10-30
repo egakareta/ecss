@@ -131,6 +131,10 @@ fn supports_selector_queries_and_unknown_conditions_do_not_match() {
          @supports future-feature(foo) { .box { width:40px; } }
          @supports (future-feature(foo)) { .box { width:45px; } }
          @supports (future-feature) { .box { width:47px; } }
+         @supports () { .box { width:90px; } }
+         @supports (future-feature(foo) trailing) { .box { width:90px; } }
+         @supports (display:flex; color:red) { .box { width:90px; } }
+         @supports ((display:flex) and) { .box { width:90px; } }
          @supports not() { .box { width:50px; } }
          @supports not(display:flex) { .box { width:52px; } }
          @supports and() { .box { width:55px; } }
@@ -138,7 +142,8 @@ fn supports_selector_queries_and_unknown_conditions_do_not_match() {
          @supports (--: value) { .box { width:70px; } }
          @supports (width:var(--)) { .box { height:20px; } }
          @supports (--custom: value !bogus) { .box { width:50px; } }
-         @supports (width:var(foo)) { .box { height:20px; } }",
+         @supports (width:var(foo)) { .box { height:20px; } }
+         @supports not () { .box { height:15px; } }",
     )
     .unwrap()
     .install(&context);
@@ -147,7 +152,7 @@ fn supports_selector_queries_and_unknown_conditions_do_not_match() {
     frame(&context, 100.0, 0.0, Vec::new(), |ui| {
         rect = ui.add(empty_response.selector(".box")).rect;
     });
-    assert_eq!(rect.size(), vec2(60.0, 10.0));
+    assert_eq!(rect.size(), vec2(60.0, 15.0));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -178,7 +183,6 @@ fn malformed_supports_conditions_report_source_lines() {
         "display: flex",
         "(display: flex) and",
         "(display: flex) xor (color:red)",
-        "(display: flex; color:red)",
         "not",
         "(display:flex) or (color:red) and (width:1px)",
     ] {
@@ -196,6 +200,9 @@ fn malformed_supports_conditions_report_source_lines() {
     let error =
         Stylesheet::parse("@supports (display:flex) {\n .box { width:invalid; }\n}").unwrap_err();
     assert_eq!(error.line(), 2);
+
+    let nested = format!("{}display:flex{}", "(".repeat(4096), ")".repeat(4096));
+    assert!(Stylesheet::parse(&format!("@supports {nested} {{}}")).is_err());
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
