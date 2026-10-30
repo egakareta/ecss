@@ -446,6 +446,23 @@ impl Stylesheet {
     fn apply_w3c_defaults(&self, context: &egui::Context) {
         context.all_styles_mut(|style| {
             apply_w3c_defaults(style);
+            for (state, visual_state) in [
+                (RuleState::BASE, VisualState::Base),
+                (RuleState::HOVERED, VisualState::Hovered),
+                (RuleState::ACTIVE, VisualState::Active),
+            ] {
+                let rules = self.rules.iter().filter(|rule| {
+                    rule.pseudo.is_none()
+                        && rule.target.is_universal()
+                        && rule.state == state
+                        && rule.media.is_empty()
+                });
+                let declarations = css::cascade::ordered(rules)
+                    .into_iter()
+                    .map(|(_, declaration)| declaration.clone())
+                    .collect::<Vec<_>>();
+                apply_style_declarations(style, visual_state, &declarations);
+            }
         });
 
         let background_registered = context
@@ -460,10 +477,11 @@ impl Stylesheet {
                         .ctx()
                         .data(|data| data.get_temp::<Arc<Stylesheet>>(Id::unique(STYLESHEET_ID)));
                     if let Some(stylesheet) = stylesheet
-                        && stylesheet
-                            .rules
-                            .iter()
-                            .any(|rule| rule.pseudo.is_none() && rule.target.is_universal())
+                        && stylesheet.rules.iter().any(|rule| {
+                            rule.pseudo.is_none()
+                                && rule.target.is_universal()
+                                && !rule.media.is_empty()
+                        })
                     {
                         let viewport = ui.ctx().viewport_rect().size();
                         for (state, visual_state) in [
