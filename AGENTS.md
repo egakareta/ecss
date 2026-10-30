@@ -7,6 +7,12 @@
 - Do not add explanatory prose unless requested.
 - Unless I say otherwise, ALWAYS assume that my feature request should work cross-platform (native and web).
 
+## egui Pass Policy
+
+- Production discard requests must go through `src/layout/invalidation.rs`. The warning-detector control test is the only other permitted direct `request_discard` call.
+- Do not access `egui::Options::max_passes` or add exceptions to the pass-policy lints.
+- Schedule animation frames with `request_repaint`; reserve layout invalidation for same-frame corrections.
+
 ## Test Implementation Rules
 
 Tests exist to detect regressions in externally observable behavior.

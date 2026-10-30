@@ -1,0 +1,6 @@
+disallowed-methods = [
+  { path = "egui::Context::request_discard", reason = "Use layout::invalidation::request_relayout for layout convergence; use request_repaint to schedule animation frames." },
+]
+disallowed-fields = [
+  { path = "egui::Options::max_passes", reason = "ECSS must respect egui's default or the host application's pass budget." },
+]

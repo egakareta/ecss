@@ -1884,7 +1884,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
     }
     let ids: Vec<_> = order.iter().map(|i| frame.nodes[*i].id).collect();
     if ids != frame.cache.paint_order {
-        context.request_discard("CSS paint order changed");
+        request_relayout(context, LayoutInvalidation::PaintOrder);
     }
     context.data_mut(|data| {
         let mut cache = data

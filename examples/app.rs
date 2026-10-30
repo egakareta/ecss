@@ -370,6 +370,7 @@ mod tests {
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[should_panic]
     fn egui_performance_warning_check_rejects_repeated_discards() {
         let context = egui::Context::default();
         for frame in 0..8 {
@@ -381,6 +382,10 @@ mod tests {
                 },
                 |ui| {
                     ui.label("Discard warning control");
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "The detector control must provoke egui's real discard warning."
+                    )]
                     ui.ctx().request_discard("discard warning control");
                 },
             );

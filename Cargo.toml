@@ -7,6 +7,10 @@ documentation = "https://docs.rs/ecss"
 repository = "https://github.com/egakareta/ecss"
 license = "MIT"
 
+[lints.clippy]
+disallowed_methods = "deny"
+disallowed_fields = "forbid"
+
 [dependencies]
 base64 = "0.23"
 cssparser = "0.38"

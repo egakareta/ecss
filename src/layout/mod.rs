@@ -20,6 +20,7 @@ mod background_paint;
 mod elements;
 mod engine;
 mod gradient;
+mod invalidation;
 mod object;
 mod opacity;
 mod paint;
@@ -30,6 +31,7 @@ mod text;
 use background_paint::*;
 use elements::*;
 use engine::*;
+use invalidation::{LayoutInvalidation, request_relayout};
 use paint::*;
 use pseudo::*;
 pub(crate) use states::keyboard_modality;
@@ -1170,7 +1172,7 @@ pub(crate) fn show(
             if scroll_changed_last_frame {
                 ui.ctx().request_repaint();
             } else if !can_defer_layout_animation {
-                ui.ctx().request_discard("CSS selector layout changed");
+                request_relayout(ui.ctx(), LayoutInvalidation::Geometry);
             }
         }
         geometry
@@ -1279,8 +1281,7 @@ pub(crate) fn show(
                     }))
         });
     if interaction_layout_changed {
-        ui.ctx()
-            .request_discard("CSS selector interaction state changed");
+        request_relayout(ui.ctx(), LayoutInvalidation::Interaction);
     }
     let overlay = shape_index(ui.ctx(), layer);
     let mut outline = None;

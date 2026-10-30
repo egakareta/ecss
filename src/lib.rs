@@ -474,11 +474,6 @@ impl Stylesheet {
     pub fn install(&self, context: &egui::Context) {
         self.apply_w3c_defaults(context);
         self.start_background_image_load(context);
-        context.options_mut(|options| {
-            options.max_passes = options
-                .max_passes
-                .max(std::num::NonZeroUsize::new(8).unwrap())
-        });
         let stylesheet = Arc::new(self.clone());
         context.data_mut(|data| {
             data.insert_temp(Id::unique(STYLESHEET_ID), stylesheet);
@@ -617,11 +612,6 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
                 stylesheet.start_font_load();
             }
         }
-        ui.ctx().options_mut(|options| {
-            options.max_passes = options
-                .max_passes
-                .max(std::num::NonZeroUsize::new(8).unwrap())
-        });
         layout::show(widget, ui, &stylesheet, &target)
     }
 }
