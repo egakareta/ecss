@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod background_paint;
+pub(crate) mod cursor;
 mod elements;
 mod engine;
 mod gradient;
@@ -99,6 +100,7 @@ struct Node {
     element_first_occurrence: bool,
     element_references: HashSet<String>,
     style: Rc<BoxStyle>,
+    cursor_value: Option<cursor::Value>,
     children: smallvec::SmallVec<[usize; 4]>,
     parent: Option<usize>,
     flow_source: bool,
@@ -197,6 +199,7 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
             false
         }
         Declaration::FontShorthand(_) => false,
+        Declaration::Cursor(_) => false,
         Declaration::Color(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
@@ -223,6 +226,7 @@ fn ordinarily_inherited(declaration: &Declaration) -> bool {
             | Declaration::FontFamily(_)
             | Declaration::FontWeight(_)
             | Declaration::FontStyle(_)
+            | Declaration::Cursor(_)
             | Declaration::FontShorthand(_)
     )
 }
@@ -504,6 +508,7 @@ pub(crate) fn show(
     style.object_position = parent_style.object_position.clone();
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
+    style.cursor = parent_style.cursor;
     style.format.font_family = parent_style.format.font_family.clone();
     style.format.font_weight = parent_style.format.font_weight;
     style.format.font_italic = parent_style.format.font_italic;
@@ -735,6 +740,9 @@ pub(crate) fn show(
                 Declaration::FontStyle(italic) => {
                     style.format.font_italic = *italic;
                 }
+                Declaration::Cursor(value) => {
+                    style.cursor = value.resolve(parent_style.cursor);
+                }
                 Declaration::Layout(declaration) => {
                     if declaration.name == "font-size" {
                         continue;
@@ -933,6 +941,7 @@ pub(crate) fn show(
             element_first_occurrence: first_element_occurrence,
             element_references: HashSet::new(),
             style: style.clone(),
+            cursor_value: None,
             children: smallvec::SmallVec::new(),
             parent,
             flow_source: false,
@@ -1457,6 +1466,16 @@ pub(crate) fn show(
         response.enabled()
     };
     let current_state = states::response_state(&response, id, enabled);
+    let (_, cursor_rules, _) = resolve_rules(current_state);
+    let cursor_value = cursor_rules
+        .iter()
+        .flat_map(|(_, declarations)| declarations)
+        .fold(None, |value, declaration| match declaration {
+            Declaration::All(keyword) => Some(cursor::Value::from_all(*keyword)),
+            Declaration::Cursor(cursor) => Some(*cursor),
+            _ => value,
+        });
+    active.0.borrow_mut().nodes[index].cursor_value = cursor_value;
     if stylesheet.rule_index.has_element_references {
         let (_, current_element_rules, _, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
@@ -1984,6 +2003,41 @@ pub(crate) fn show(
         }
     }
     if root {
+        let candidates = {
+            let frame = active.0.borrow();
+            let mut computed: Vec<cursor::Computed> = Vec::with_capacity(frame.nodes.len());
+            let mut candidates = Vec::new();
+            for (order, node) in frame.nodes.iter().enumerate() {
+                let inherited = node
+                    .parent
+                    .map_or(cursor::Computed::Auto, |parent| computed[parent]);
+                let value = node
+                    .cursor_value
+                    .map_or(inherited, |value| value.resolve(inherited));
+                computed.push(value);
+
+                let Some(paint) = &node.paint else {
+                    continue;
+                };
+                if !node.absent && !node.style.hidden && paint.response.hovered() {
+                    let mut depth = 0;
+                    let mut parent = node.parent;
+                    while let Some(index) = parent {
+                        depth += 1;
+                        parent = frame.nodes[index].parent;
+                    }
+                    candidates.push(cursor::Candidate {
+                        cursor: value,
+                        depth,
+                        z_index: node.style.z_index.unwrap_or_default(),
+                        order,
+                        layer: paint.ui.layer_id(),
+                    });
+                }
+            }
+            candidates
+        };
+        cursor::submit(ui.ctx(), &candidates);
         if let Some(cache) = ui.ctx().data(|data| data.get_temp::<Cache>(id)) {
             let frame = active.0.borrow();
             paint_named_flow_texts(&frame, &cache, ui.ctx());

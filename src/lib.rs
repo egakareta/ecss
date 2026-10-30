@@ -517,6 +517,7 @@ impl Stylesheet {
 
     /// Installs this stylesheet on an egui context for selector-wrapped widgets to use.
     pub fn install(&self, context: &egui::Context) {
+        layout::cursor::install(context);
         self.apply_w3c_defaults(context);
         self.start_background_image_load(context);
         let stylesheet = Arc::new(self.clone());
@@ -1116,6 +1117,7 @@ fn apply_visual_declaration(
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_)
         | Declaration::FontShorthand(_)
+        | Declaration::Cursor(_)
         | Declaration::Animation(_)
         | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }

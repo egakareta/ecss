@@ -146,6 +146,7 @@ pub(crate) enum Declaration {
     FontWeight(u16),
     FontStyle(bool),
     FontShorthand(FontShorthand),
+    Cursor(crate::layout::cursor::Value),
     Animation(crate::animation::Property),
     Transition(crate::transition::Property),
     CustomProperty {
@@ -1050,6 +1051,12 @@ impl Declarations {
             )));
         }
         input.reset(&start);
+        if name.eq_ignore_ascii_case("cursor") {
+            let value = consume_value(input)?;
+            return crate::layout::cursor::Value::parse(&value)
+                .map(|declaration| Some((Declaration::Cursor(declaration), important)))
+                .map_err(ParseError::custom);
+        }
         if name.eq_ignore_ascii_case("all") {
             let keyword = match value.trim().to_ascii_lowercase().as_str() {
                 "initial" => AllKeyword::Initial,
@@ -1198,6 +1205,9 @@ fn invalid_computed_value(name: &str) -> Declaration {
         return Declaration::Transition(
             crate::transition::parse_property(name, "unset").expect("valid transition reset"),
         );
+    }
+    if name == "cursor" {
+        return Declaration::Cursor(crate::layout::cursor::Value::Unset);
     }
     Declaration::Layout(crate::layout_style::Declaration {
         name: name.to_owned(),

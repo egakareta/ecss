@@ -1328,6 +1328,7 @@ fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declarat
         Declaration::Animation(_)
         | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }
+        | Declaration::Cursor(_)
         | Declaration::Deferred { .. } => None,
     }
 }
