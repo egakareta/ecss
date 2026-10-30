@@ -473,14 +473,14 @@ impl Declaration {
             };
             match self.name.as_str() {
                 "text-align" => {
-                    output.format.text_align = resolve(&parent.format.text_align).into();
-                    output.format.text_align_last = resolve(&parent.format.text_align_last).into();
+                    output.format.text_align = resolve(&parent.format.text_align);
+                    output.format.text_align_last = resolve(&parent.format.text_align_last);
                 }
                 "text-align-all" => {
-                    output.format.text_align = resolve(&parent.format.text_align).into();
+                    output.format.text_align = resolve(&parent.format.text_align);
                 }
                 "text-align-last" => {
-                    output.format.text_align_last = resolve(&parent.format.text_align_last).into();
+                    output.format.text_align_last = resolve(&parent.format.text_align_last);
                 }
                 _ => unreachable!(),
             }

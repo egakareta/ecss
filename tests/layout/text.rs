@@ -279,6 +279,20 @@ fn text_align_shorthand_resets_text_align_last() {
     );
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert!(rows.iter().all(|row| row.left() < 5.0), "{rows:?}");
+
+    let text = "alpha beta gamma delta";
+    let shorthand = aligned_text_rows("text-align:justify-all;", text);
+    let longhands = aligned_text_rows("text-align:justify; text-align-last:justify;", text);
+    let automatic = aligned_text_rows("text-align:justify;", text);
+    assert!(
+        shorthand.last().unwrap().top() > shorthand.first().unwrap().top(),
+        "{shorthand:?}"
+    );
+    assert_eq!(shorthand, longhands);
+    assert!(
+        shorthand.last().unwrap().right() > automatic.last().unwrap().right() + 1.0,
+        "shorthand: {shorthand:?}, automatic: {automatic:?}"
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
