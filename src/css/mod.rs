@@ -18,6 +18,7 @@ use crate::CssError;
 mod background;
 mod color;
 mod media;
+mod supports;
 pub(crate) mod variables;
 
 pub(crate) use background::parse_background_image;
@@ -496,12 +497,14 @@ enum ParsedRule {
     Style(Vec<Rule>),
     Keyframes(Keyframes),
     Media(ParsedStylesheet),
+    Supports(ParsedStylesheet),
 }
 
 enum AtRulePrelude {
     Import(String),
     Keyframes(String),
     Media(MediaQueryList),
+    Supports(bool),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -538,6 +541,10 @@ fn parse_rules(input: &mut CssParser<'_>) -> Result<ParsedStylesheet, ParseError
                 keyframes.push(parsed);
             }
             Ok(ParsedRule::Media(mut parsed)) => {
+                rules.append(&mut parsed.rules);
+                keyframes.append(&mut parsed.keyframes);
+            }
+            Ok(ParsedRule::Supports(mut parsed)) => {
                 rules.append(&mut parsed.rules);
                 keyframes.append(&mut parsed.keyframes);
             }
@@ -659,6 +666,9 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
         if name.eq_ignore_ascii_case("media") {
             return MediaQueryList::parse(input).map(AtRulePrelude::Media);
         }
+        if name.eq_ignore_ascii_case("supports") {
+            return supports::parse(input).map(AtRulePrelude::Supports);
+        }
         if name.eq_ignore_ascii_case("keyframes") {
             let name = input
                 .expect_ident_cloned()
@@ -679,7 +689,9 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     ) -> Result<Self::AtRule, ()> {
         match prelude {
             AtRulePrelude::Import(import) => Ok(ParsedRule::Import(import)),
-            AtRulePrelude::Keyframes(_) | AtRulePrelude::Media(_) => Err(()),
+            AtRulePrelude::Keyframes(_) | AtRulePrelude::Media(_) | AtRulePrelude::Supports(_) => {
+                Err(())
+            }
         }
     }
 
@@ -714,6 +726,23 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
                     keyframes.media.push(query.clone());
                 }
                 Ok(ParsedRule::Media(parsed))
+            }
+            AtRulePrelude::Supports(enabled) => {
+                let parsed = parse_rules(input)?;
+                if !parsed.imports.is_empty() {
+                    return Err(ParseError::custom(ParseIssue::new(
+                        "invalid nested import rule",
+                    )));
+                }
+                if enabled {
+                    Ok(ParsedRule::Supports(parsed))
+                } else {
+                    Ok(ParsedRule::Supports(ParsedStylesheet {
+                        rules: Vec::new(),
+                        imports: Vec::new(),
+                        keyframes: Vec::new(),
+                    }))
+                }
             }
         }
     }
@@ -1359,6 +1388,8 @@ fn strip_important(source: &str) -> Option<&str> {
                     if input.is_exhausted() {
                         return Some(&source[..state.position().byte_index()]);
                     }
+                } else {
+                    input.next_including_whitespace_and_comments().ok();
                 }
             }
             _ => {}
