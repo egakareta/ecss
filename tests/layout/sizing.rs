@@ -296,3 +296,170 @@ fn grid_intrinsic_tracks_use_text_contributions_instead_of_emergency_breaks() {
         "{rects:?}"
     );
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn intrinsic_width_percentage_padding_uses_the_containing_block() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { width:100px; } .box { width:min-content; padding:10%; } \
+         .reference { width:max-content; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = [Rect::NOTHING; 2];
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects[0] = ui
+            .add(egui::Label::new("longestword").selector(".reference"))
+            .rect;
+        ui.add(
+            (|ui: &mut Ui| {
+                rects[1] = ui
+                    .add(egui::Label::new("longestword").selector(".box"))
+                    .rect;
+                ui.response()
+            })
+            .selector(".outer"),
+        );
+    });
+    assert!(
+        (rects[1].width() - rects[0].width() - 20.0).abs() < 0.5,
+        "{rects:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn nested_flex_percentage_height_uses_the_flexed_inner_height() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { display:flex; flex-direction:column; width:100px; height:120px; } \
+         .inner { display:flex; flex-direction:column; flex:1; } \
+         .item { width:20px; height:50%; min-height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut item = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        item = ui.add(empty_response.selector(".item")).rect;
+                        ui.response()
+                    })
+                    .selector(".inner"),
+                );
+                ui.response()
+            })
+            .selector(".outer"),
+        );
+    });
+    assert!((item.height() - 60.0).abs() < 0.5, "{item:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn grid_percentage_height_uses_a_definite_grid_area() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; width:100px; height:120px; grid-template-rows:120px; } \
+         .item { width:20px; height:50%; min-height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut item = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                item = ui.add(empty_response.selector(".item")).rect;
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert!((item.height() - 60.0).abs() < 0.5, "{item:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn nested_grid_percentage_height_uses_a_definite_parent_area() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { height:120px; width:100px; } \
+         .grid { display:grid; height:100%; grid-template-rows:100%; } \
+         .item { width:20px; height:50%; min-height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut item = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        item = ui.add(empty_response.selector(".item")).rect;
+                        ui.response()
+                    })
+                    .selector(".grid"),
+                );
+                ui.response()
+            })
+            .selector(".outer"),
+        );
+    });
+    assert!((item.height() - 60.0).abs() < 0.5, "{item:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn intrinsic_height_does_not_make_percentage_children_definite() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".box { width:100px; max-height:max-content; } \
+         .item { width:20px; height:50%; min-height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut item = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                item = ui.add(empty_response.selector(".item")).rect;
+                ui.response()
+            })
+            .selector(".box"),
+        );
+    });
+    assert!((item.height() - 10.0).abs() < 0.5, "{item:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn auto_height_flex_ancestors_do_not_resolve_percentage_children() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { display:flex; flex-direction:column; width:100px; } \
+         .inner { display:flex; flex-direction:column; height:100%; } \
+         .item { width:20px; height:50%; min-height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut item = Rect::NOTHING;
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        item = ui.add(empty_response.selector(".item")).rect;
+                        ui.response()
+                    })
+                    .selector(".inner"),
+                );
+                ui.response()
+            })
+            .selector(".outer"),
+        );
+    });
+    assert!((item.height() - 10.0).abs() < 0.5, "{item:?}");
+}

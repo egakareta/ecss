@@ -472,7 +472,9 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
         if node.style.inline && style.size.width.is_auto() && node.children.is_empty() {
             style.size.width = length(node.measured.x);
         }
-        if node.style.format.display == crate::formatting::DisplayKind::Inline {
+        if node.style.format.display == crate::formatting::DisplayKind::Inline
+            && !style.float.is_floated()
+        {
             style.size = Size::auto();
             style.min_size = Size::auto();
             style.max_size = Size::auto();

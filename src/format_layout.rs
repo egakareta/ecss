@@ -78,7 +78,10 @@ impl Tree<'_> {
         }
         let mut output = Vec::new();
         for group in groups {
-            if group.len() == 1 && !self.nodes[usize::from(group[0])].format.inline_level {
+            if group.len() == 1
+                && (!self.nodes[usize::from(group[0])].format.inline_level
+                    || self.nodes[usize::from(group[0])].style.float.is_floated())
+            {
                 output.push(group[0]);
                 continue;
             }

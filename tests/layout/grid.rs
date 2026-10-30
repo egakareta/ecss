@@ -258,3 +258,55 @@ fn subgrid_uses_parent_track_sizes_and_intrinsic_child_contributions() {
     assert_eq!(rects[2].top(), 20.0);
     assert_eq!(rects[2].height(), 30.0);
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn nested_flex_grid_items_contribute_intrinsic_track_sizes() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".grid { display:grid; grid-template-columns:min-content max-content; gap:10px; } \
+         .item { display:flex; } .reference { width:max-content; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        rects.push(
+            ui.add(egui::Label::new("longestword").selector(".reference"))
+                .rect,
+        );
+        rects.push(
+            ui.add(egui::Label::new("longestword short").selector(".reference"))
+                .rect,
+        );
+        ui.add(
+            (|ui: &mut Ui| {
+                for text in ["longestword", "longestword short"] {
+                    let item = ui.add(
+                        (|ui: &mut Ui| {
+                            ui.add(egui::Label::new(text));
+                            ui.response()
+                        })
+                        .selector(".item"),
+                    );
+                    rects.push(item.rect);
+                }
+                ui.response()
+            })
+            .selector(".grid"),
+        );
+    });
+    assert!(
+        (rects[2].width() - rects[0].width()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!(
+        (rects[3].width() - rects[1].width()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!(
+        (rects[3].left() - rects[2].right() - 10.0).abs() < 0.5,
+        "{rects:?}"
+    );
+}

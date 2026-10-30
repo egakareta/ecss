@@ -466,5 +466,185 @@ fn inline_display_float_is_removed_from_inline_flow() {
         );
     });
     assert_eq!(float.min, pos2(0.0, 0.0), "{float:?}");
+    assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
     assert!(text[0].left() >= float.right(), "{float:?} {text:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn floated_inline_container_types_keep_their_used_box_size() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; height:50px; } \
+         .inline-block { display:inline-block; float:left; width:40px; height:40px; } \
+         .flex { display:inline-flex; float:left; width:40px; height:40px; } \
+         .grid { display:inline-grid; float:left; width:40px; height:40px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        for selector in [".inline-block", ".flex", ".grid"] {
+            let mut rect = Rect::NOTHING;
+            ui.add(
+                (|ui: &mut Ui| {
+                    rect = ui.add(empty_response.selector(selector)).rect;
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+            rects.push(rect);
+        }
+    });
+    for rect in rects {
+        assert_eq!(rect.size(), vec2(40.0, 40.0), "{rect:?}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn floats_preserve_inline_text_flow_and_clear_left_and_both() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; height:100px; } \
+         .float { display:inline; float:left; width:40px; height:40px; } \
+         .text { display:inline; } \
+         .left-float { float:left; width:25px; height:20px; } \
+         .right-float { float:right; width:25px; height:30px; } \
+         .clear-left { display:block; clear:left; width:10px; height:10px; } \
+         .clear-both { display:block; clear:both; width:10px; height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut float = Rect::NOTHING;
+    let mut before = Rect::NOTHING;
+    let mut after = Vec::new();
+    let mut clears = [Rect::NOTHING; 2];
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                before = ui.add(egui::Label::new("P ").selector(".text")).rect;
+                float = ui.add(empty_response.selector(".float")).rect;
+                after.clear();
+                for _ in 0..16 {
+                    after.push(ui.add(egui::Label::new("X ").selector(".text")).rect);
+                }
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+        ui.add(
+            (|ui: &mut Ui| {
+                let left = ui.add(empty_response.selector(".left-float")).rect;
+                clears[0] = ui.add(empty_response.selector(".clear-left")).rect;
+                assert!(left.height() > 0.0);
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(empty_response.selector(".left-float"));
+                let right = ui.add(empty_response.selector(".right-float")).rect;
+                clears[1] = ui.add(empty_response.selector(".clear-both")).rect;
+                assert!(right.height() > 0.0);
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    });
+    assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
+    assert!(before.top() < float.top(), "{before:?} {float:?}");
+    assert!(after[0].left() >= float.right(), "{float:?} {after:?}");
+    assert!(
+        after
+            .iter()
+            .any(|rect| rect.top() >= float.bottom() && rect.left() < 1.0),
+        "{float:?} {after:?}"
+    );
+    assert!(clears[0].top() >= 20.0, "{clears:?}");
+    assert!(clears[1].top() >= 30.0, "{clears:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn nested_floats_inside_inline_boxes_leave_inline_flow() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; height:80px; } \
+         .parent { display:inline; } .float { display:inline; float:left; width:40px; height:40px; } \
+         .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut float = Rect::NOTHING;
+    let mut text = Vec::new();
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        float = ui.add(empty_response.selector(".float")).rect;
+                        text.clear();
+                        for _ in 0..16 {
+                            text.push(ui.add(egui::Label::new("X ").selector(".text")).rect);
+                        }
+                        ui.response()
+                    })
+                    .selector(".parent"),
+                );
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    });
+    assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
+    assert!(text[0].left() >= float.right(), "{float:?} {text:?}");
+    assert!(
+        text.iter()
+            .any(|rect| rect.top() >= float.bottom() && rect.left() < 1.0),
+        "{float:?} {text:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn nested_float_in_an_inline_box_affects_following_block_content() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; height:80px; } \
+         .parent { display:inline; } .float { display:inline; float:left; width:40px; height:40px; } \
+         .sibling { display:block; } .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut float = Rect::NOTHING;
+    let mut sibling = Rect::NOTHING;
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        float = ui.add(empty_response.selector(".float")).rect;
+                        ui.response()
+                    })
+                    .selector(".parent"),
+                );
+                sibling = ui
+                    .add(
+                        (|ui: &mut Ui| {
+                            ui.add(egui::Label::new("X").selector(".text"));
+                            ui.response()
+                        })
+                        .selector(".sibling"),
+                    )
+                    .rect;
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    });
+    assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
+    assert!(sibling.top() < float.bottom(), "{float:?} {sibling:?}");
 }
