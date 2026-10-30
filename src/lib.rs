@@ -480,7 +480,7 @@ impl Stylesheet {
                         && stylesheet
                             .rules
                             .iter()
-                            .any(|rule| rule.target.is_universal() && !rule.media.is_empty())
+                            .any(|rule| rule.pseudo.is_none() && rule.target.is_universal())
                     {
                         let viewport = ui.ctx().viewport_rect().size();
                         for (state, visual_state) in [

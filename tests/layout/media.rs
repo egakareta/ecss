@@ -60,6 +60,35 @@ fn universal_media_colors_update_unwrapped_widgets_without_leaking_between_frame
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn universal_media_declarations_share_cascade_priority_and_source_order() {
+    let context = Context::default();
+    Stylesheet::parse(
+        "* { color:red !important; background-color:red; }\
+         @media (min-width:200px) { * { color:lime; background-color:blue; } }\
+         * { background-color:green; }",
+    )
+    .unwrap()
+    .install(&context);
+
+    for (index, width) in [300.0, 100.0].into_iter().enumerate() {
+        let mut foreground = egui::Color32::TRANSPARENT;
+        let mut background = egui::Color32::TRANSPARENT;
+        frame(&context, width, index as f64, Vec::new(), |ui| {
+            foreground = ui.visuals().widgets.inactive.fg_stroke.color;
+            background = ui.visuals().widgets.inactive.bg_fill;
+            let _ = ui.button("Unwrapped");
+        });
+        assert_eq!(foreground, egui::Color32::RED, "viewport width {width}");
+        assert_eq!(
+            background,
+            egui::Color32::from_rgb(0, 128, 0),
+            "viewport width {width}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn malformed_media_reports_source_lines_and_does_not_hide_declaration_errors() {
     for query in [
         "(min-width:)",
