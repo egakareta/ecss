@@ -60,11 +60,11 @@ impl ComputedLength {
     }
 
     pub(crate) fn resolve(&self, basis: f32) -> f32 {
-        self.0.evaluate(basis)
+        finite_result(self.0.evaluate(basis))
     }
 
     pub(crate) fn length(value: f32) -> Self {
-        Self(Expression::constant(value, Kind::Length))
+        Self(Expression::constant(finite_result(value), Kind::Length))
     }
 
     pub(crate) fn percentage(value: f32) -> Self {
@@ -116,16 +116,24 @@ impl ComputedLength {
 
     pub(crate) fn encode(&self, arena: &Arena) -> taffy::LengthPercentage {
         match self.0.value {
-            Value::Constant(value) => taffy::LengthPercentage::length(value),
-            Value::Percentage(value) => taffy::LengthPercentage::percent(value),
+            Value::Constant(value) if value.is_finite() => {
+                taffy::LengthPercentage::length(finite_result(value))
+            }
+            Value::Percentage(value) if value.abs() <= 1.0 => {
+                taffy::LengthPercentage::percent(value)
+            }
             _ => taffy::LengthPercentage::calc(arena.store(self.0.clone())),
         }
     }
 
     pub(crate) fn decoration(&self, arena: &Arena) -> crate::box_decoration::LengthPercentage {
         match self.0.value {
-            Value::Constant(value) => crate::box_decoration::LengthPercentage::Length(value),
-            Value::Percentage(value) => crate::box_decoration::LengthPercentage::Percentage(value),
+            Value::Constant(value) if value.is_finite() => {
+                crate::box_decoration::LengthPercentage::Length(finite_result(value))
+            }
+            Value::Percentage(value) if value.abs() <= 1.0 => {
+                crate::box_decoration::LengthPercentage::Percentage(value)
+            }
             _ => crate::box_decoration::LengthPercentage::Calc(arena.store(self.0.clone())),
         }
     }
@@ -158,7 +166,7 @@ impl Expression {
 
     fn normalized(self) -> Self {
         if !self.percentage() {
-            return Self::constant(self.evaluate(0.0), self.kind);
+            return Self::constant(finite_result(self.evaluate(0.0)), self.kind);
         }
         if let Some((length, percentage)) = self.affine() {
             let value = if percentage == 0.0 {
@@ -206,6 +214,9 @@ impl Expression {
             }
             Value::Function(name, args, pixels_per_point) => {
                 let values: Vec<_> = args.iter().map(|arg| arg.evaluate(basis)).collect();
+                if values.iter().any(|value| value.is_nan()) {
+                    return f32::NAN;
+                }
                 let a = values[0];
                 match name.as_str() {
                     "calc" => a,
@@ -220,7 +231,7 @@ impl Expression {
                             a.signum()
                         }
                     }
-                    "hypot" => values.iter().map(|v| v * v).sum::<f32>().sqrt(),
+                    "hypot" => values.iter().copied().fold(0.0, f32::hypot),
                     "pow" => a.powf(values[1]),
                     "sqrt" => a.sqrt(),
                     "log" => {
@@ -238,7 +249,7 @@ impl Expression {
                     "acos" => a.acos(),
                     "atan" => a.atan(),
                     "atan2" => a.atan2(values[1]),
-                    "mod" => a - values[1] * (a / values[1]).floor(),
+                    "mod" => modulo(a, values[1]),
                     "rem" => a % values[1],
                     "round-line-width" => {
                         let pixels_per_point =
@@ -251,14 +262,7 @@ impl Expression {
                     }
                     name if name.starts_with("round") => {
                         let step = values.get(1).copied().unwrap_or(1.0);
-                        let v = a / step;
-                        let n = match name {
-                            "round-up" => v.ceil(),
-                            "round-down" => v.floor(),
-                            "round-to-zero" => v.trunc(),
-                            _ => (v + 0.5).floor(),
-                        };
-                        n * step
+                        round(a, step, name)
                     }
                     _ => unreachable!(),
                 }
@@ -402,12 +406,71 @@ pub(crate) fn resolve(handle: *const (), basis: f32) -> f32 {
             .get(&(handle as usize))
             .expect("CSS expression outlived its layout pass")
             .evaluate(basis);
-        if value.is_nan() {
-            0.0
-        } else {
-            value.clamp(-1.0e12, 1.0e12)
-        }
+        finite_result(value)
     })
+}
+
+fn finite_result(value: f32) -> f32 {
+    if value.is_nan() || value == 0.0 {
+        0.0
+    } else {
+        value.clamp(-1.0e12, 1.0e12)
+    }
+}
+
+fn literal(value: f32) -> f32 {
+    if value == 0.0 { 0.0 } else { value }
+}
+
+fn modulo(value: f32, step: f32) -> f32 {
+    if !value.is_finite() || step == 0.0 {
+        return f32::NAN;
+    }
+    if step.is_infinite() {
+        return if value.is_sign_negative() == step.is_sign_negative() {
+            value
+        } else {
+            f32::NAN
+        };
+    }
+    let remainder = value % step;
+    if remainder == 0.0 {
+        0.0_f32.copysign(step)
+    } else if remainder.is_sign_negative() != step.is_sign_negative() {
+        remainder + step
+    } else {
+        remainder
+    }
+}
+
+fn round(value: f32, step: f32, strategy: &str) -> f32 {
+    let step = step.abs();
+    if step == 0.0 || value.is_infinite() && step.is_infinite() {
+        return f32::NAN;
+    }
+    if value.is_infinite() || value == 0.0 {
+        return value;
+    }
+    if step.is_infinite() {
+        return match strategy {
+            "round-up" if value > 0.0 => f32::INFINITY,
+            "round-down" if value < 0.0 => f32::NEG_INFINITY,
+            _ => 0.0_f32.copysign(value),
+        };
+    }
+    let quotient = f64::from(value) / f64::from(step);
+    let multiple = match strategy {
+        "round-up" => quotient.ceil(),
+        "round-down" => quotient.floor(),
+        "round-to-zero" => quotient.trunc(),
+        _ => (quotient + 0.5).floor(),
+    };
+    let result = (multiple * f64::from(step)) as f32;
+    if result == 0.0 {
+        result.copysign(value)
+    } else {
+        result
+    }
 }
 
 fn round_line_width(value: f32, step: f32, pixels_per_point: f32) -> f32 {
@@ -458,7 +521,7 @@ pub(crate) fn length(
         return Ok(None);
     }
     let mut parser = Parser::new(value);
-    let mut result = sum(&mut parser, units).map_err(|_| "invalid CSS math expression")?;
+    let mut result = calculation(&mut parser, units).map_err(|_| "invalid CSS math expression")?;
     parser
         .expect_exhausted()
         .map_err(|_| "unexpected CSS math input")?;
@@ -489,14 +552,14 @@ pub(crate) fn number(value: &str, units: Units<'_>) -> Result<Option<f32>, &'sta
         return Ok(None);
     }
     let mut parser = Parser::new(value);
-    let result = sum(&mut parser, units).map_err(|_| "invalid CSS number expression")?;
+    let result = calculation(&mut parser, units).map_err(|_| "invalid CSS number expression")?;
     parser
         .expect_exhausted()
         .map_err(|_| "unexpected CSS math input")?;
     if result.kind != Kind::Number {
         return Err("CSS number math must produce a number");
     }
-    Ok(Some(result.evaluate(0.0)))
+    Ok(Some(finite_result(result.evaluate(0.0))))
 }
 
 pub(crate) fn percentage(
@@ -508,7 +571,8 @@ pub(crate) fn percentage(
         return Ok(None);
     }
     let mut parser = Parser::new(value);
-    let mut result = sum(&mut parser, units).map_err(|_| "invalid CSS percentage expression")?;
+    let mut result =
+        calculation(&mut parser, units).map_err(|_| "invalid CSS percentage expression")?;
     parser
         .expect_exhausted()
         .map_err(|_| "unexpected CSS percentage input")?;
@@ -531,8 +595,13 @@ pub(crate) fn percentage(
 }
 
 type ResultExpr = Result<Expression, ParseError<&'static str>>;
-fn sum<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
-    let mut left = product(parser, units)?;
+fn calculation<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
+    let name = parser.expect_function()?.to_ascii_lowercase();
+    parser.parse_nested_block(|parser| function(&name, parser, units, &mut 128))
+}
+
+fn sum<'i>(parser: &mut Parser<'i>, units: Units<'_>, budget: &mut usize) -> ResultExpr {
+    let mut left = product(parser, units, budget)?;
     loop {
         let operator = parser.try_parse(|p| match p.next()? {
             Token::Delim(op @ ('+' | '-')) => Ok(*op),
@@ -541,7 +610,7 @@ fn sum<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
         let Ok(op) = operator else {
             break;
         };
-        let right = product(parser, units)?;
+        let right = product(parser, units, budget)?;
         if left.kind != right.kind {
             return Err(ParseError::custom("incompatible CSS math dimensions"));
         }
@@ -552,8 +621,8 @@ fn sum<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
     }
     Ok(left)
 }
-fn product<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
-    let mut left = atom(parser, units)?;
+fn product<'i>(parser: &mut Parser<'i>, units: Units<'_>, budget: &mut usize) -> ResultExpr {
+    let mut left = atom(parser, units, budget)?;
     loop {
         let operator = parser.try_parse(|p| match p.next()? {
             Token::Delim(op @ ('*' | '/')) => Ok(*op),
@@ -562,7 +631,7 @@ fn product<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
         let Ok(op) = operator else {
             break;
         };
-        let right = atom(parser, units)?;
+        let right = atom(parser, units, budget)?;
         let kind = if right.kind == Kind::Number {
             left.kind
         } else if op == '*' && left.kind == Kind::Number {
@@ -579,16 +648,20 @@ fn product<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
     }
     Ok(left)
 }
-fn atom<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
+fn atom<'i>(parser: &mut Parser<'i>, units: Units<'_>, budget: &mut usize) -> ResultExpr {
+    *budget = budget
+        .checked_sub(1)
+        .ok_or_else(|| ParseError::custom("CSS math expression is too complex"))?;
     let start = parser.position();
     let token = parser.next()?.clone();
     Ok(match token {
-        Token::Number { value, .. } => Expression::constant(value, Kind::Number),
+        Token::Number { value, .. } => Expression::constant(literal(value), Kind::Number),
         Token::Percentage { unit_value, .. } => Expression {
             kind: Kind::Length,
-            value: Value::Percentage(unit_value),
+            value: Value::Percentage(literal(unit_value)),
         },
         Token::Dimension { value, unit, .. } => {
+            let value = literal(value);
             let angle = match unit.to_ascii_lowercase().as_str() {
                 "deg" => Some(value.to_radians()),
                 "rad" => Some(value),
@@ -600,16 +673,18 @@ fn atom<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
                 Expression::constant(angle, Kind::Angle)
             } else {
                 Expression::constant(
-                    crate::layout_style::length_value(parser.slice_from(start), units, true)
-                        .map_err(ParseError::custom)?
-                        .0,
+                    literal(
+                        crate::layout_style::length_value(parser.slice_from(start), units, true)
+                            .map_err(ParseError::custom)?
+                            .0,
+                    ),
                     Kind::Length,
                 )
             }
         }
-        Token::ParenthesisBlock => parser.parse_nested_block(|p| sum(p, units))?,
+        Token::ParenthesisBlock => parser.parse_nested_block(|p| sum(p, units, budget))?,
         Token::Delim(op @ ('+' | '-')) => {
-            let value = atom(parser, units)?;
+            let value = atom(parser, units, budget)?;
             Expression {
                 kind: value.kind,
                 value: Value::Binary(
@@ -642,12 +717,17 @@ fn atom<'i>(parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
             )
         }
         Token::Function(name) => {
-            parser.parse_nested_block(|p| function(&name.to_ascii_lowercase(), p, units))?
+            parser.parse_nested_block(|p| function(&name.to_ascii_lowercase(), p, units, budget))?
         }
         _ => return Err(ParseError::custom("invalid CSS math operand")),
     })
 }
-fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> ResultExpr {
+fn function<'i>(
+    name: &str,
+    parser: &mut Parser<'i>,
+    units: Units<'_>,
+    budget: &mut usize,
+) -> ResultExpr {
     let mut name = name.to_owned();
     let mut line_width_rounding = false;
     if name == "round"
@@ -667,7 +747,7 @@ fn function<'i>(name: &str, parser: &mut Parser<'i>, units: Units<'_>) -> Result
         name.push('-');
         name.push_str(&strategy);
     }
-    let mut args = parser.parse_comma_separated(|p| sum(p, units))?;
+    let mut args = parser.parse_comma_separated(|p| sum(p, units, budget))?;
     let kind = args
         .iter()
         .find(|a| a.kind != Kind::Any)

@@ -152,6 +152,18 @@ async fn object_position_resolves_keywords_lengths_percentages_and_edge_offsets(
         ),
         (
             "none",
+            "calc(NaN * 1px) 0px",
+            egui::vec2(0.0, 0.0),
+            egui::vec2(40.0, 20.0),
+        ),
+        (
+            "none",
+            "min(calc(NaN * 1px), 10px) 0px",
+            egui::vec2(0.0, 0.0),
+            egui::vec2(40.0, 20.0),
+        ),
+        (
+            "none",
             "right 3px bottom 5px",
             egui::vec2(17.0, 35.0),
             egui::vec2(40.0, 20.0),
