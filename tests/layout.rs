@@ -29,6 +29,7 @@ mod layout {
         output
     }
 
+    mod animations;
     mod geometry;
     mod grid;
     mod interactions;
