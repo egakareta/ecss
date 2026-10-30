@@ -15,7 +15,7 @@ ehttp = { version = "0.7", features = ["native-async"] }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 precomputed-hash = "0.1"
-resvg = { version = "0.48", default-features = false, features = [
+resvg = { version = "0.49", default-features = false, features = [
   "raster-images",
   "svgz",
   "system-fonts",
