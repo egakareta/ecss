@@ -245,6 +245,7 @@ pub(super) fn pseudo_decoration_style(
     let mut style = BoxStyle::default();
     style.layout.direction = parent.layout.direction;
     style.format = parent.format.clone();
+    style.current_color = current;
     let ordered = crate::css::cascade::ordered(rules.iter().copied());
     let custom_declarations = ordered
         .iter()
@@ -285,9 +286,36 @@ pub(super) fn pseudo_decoration_style(
     for (_, declarations) in rules {
         for declaration in declarations {
             match &declaration {
-                Declaration::Color(value) => color = *value,
-                Declaration::Background(value) => fill = *value,
-                Declaration::BackgroundShorthand(value) => fill = value.color,
+                Declaration::Color(value) => {
+                    color = *value;
+                    style.current_color = *value;
+                }
+                Declaration::Background(value) => {
+                    fill = *value;
+                    style.background_color = *value;
+                    style.background_set = true;
+                    style.background_current_color = false;
+                }
+                Declaration::BackgroundShorthand(value) => {
+                    fill = value.color;
+                    style.background_color = value.color;
+                    style.background_set = true;
+                    style.background_current_color = false;
+                }
+                Declaration::Layout(value)
+                    if matches!(
+                        value.name.as_str(),
+                        "color" | "background" | "background-color"
+                    ) =>
+                {
+                    value
+                        .apply_with_parent(&mut style, parent, units)
+                        .expect("validated pseudo-element color declaration");
+                    color = style.current_color;
+                    if matches!(value.name.as_str(), "background" | "background-color") {
+                        fill = style.background_color;
+                    }
+                }
                 Declaration::Layout(value)
                     if pseudo_decoration_property_applies(pseudo, &value.name) =>
                 {
@@ -306,6 +334,10 @@ pub(super) fn pseudo_decoration_style(
                 _ => {}
             }
         }
+    }
+    if style.background_current_color {
+        style.background_color = style.current_color;
+        fill = style.current_color;
     }
     style.finish();
     Some((style, fill, color))

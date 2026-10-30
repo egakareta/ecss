@@ -91,6 +91,38 @@ async fn pseudo_element_borders_paint_first_letter_and_first_line_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn first_letter_css_wide_color_and_background_reset_pseudo_decoration_test() {
+    let stylesheet = Stylesheet::parse(
+        ".letter { color:green; background-color:yellow; font-size:32px; }\
+         .letter::first-letter { color:red; background-color:blue; }\
+         .letter::first-letter { color:initial; background-color:initial; border:2px solid currentcolor; }",
+    )
+    .unwrap();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(egui::Label::new("A").selector(".letter"));
+    })
+    .await;
+
+    assert!(
+        pixels.contains(&[0, 0, 0, 255]),
+        "initial pseudo color should reset to black"
+    );
+    assert!(
+        pixels.contains(&[255, 255, 0, 255]),
+        "initial pseudo background should be transparent"
+    );
+    assert!(
+        !pixels.contains(&[255, 0, 0, 255]),
+        "pseudo border kept the earlier red color"
+    );
+    assert!(
+        !pixels.contains(&[0, 0, 255, 255]),
+        "pseudo background kept the earlier blue fill"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn first_letter_decoration_selects_numbers_and_associated_punctuation_test() {
     let stylesheet = Stylesheet::parse(
         ".number, .punctuation, .symbol { font-size:32px; }\
