@@ -17,9 +17,9 @@ pub(crate) use paths::{
 };
 use shadows::{
     apply_shadow_longhand, color_value, copy_shadows, cross_vec, offset_filled_paths,
-    parse_shadows, set_shadows, split_commas,
+    parse_shadows, set_shadows,
 };
-pub(crate) use shadows::{inset_shadow_extent, shadow_shapes};
+pub(crate) use shadows::{inset_shadow_extent, shadow_opacity, shadow_shapes, split_commas};
 use shape_parser::{ArcParameters, append_arc, append_cubic, append_quadratic, parse_border_shape};
 
 const MIN_ROUNDED_CORNER_SEGMENTS: usize = 8;

@@ -143,6 +143,237 @@ pub(super) fn composite(
     )]
 }
 
+pub(crate) fn rasterize_alpha_mask(
+    context: &Context,
+    meshes: &[egui::epaint::Mesh],
+    bounds: Rect,
+    blur: f32,
+) -> Option<(egui::ColorImage, Rect)> {
+    if !bounds.is_positive() || !blur.is_finite() || blur < 0.0 {
+        return None;
+    }
+    let pixels_per_point = context.pixels_per_point();
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return None;
+    }
+    if meshes
+        .iter()
+        .any(|mesh| mesh.texture_id != egui::TextureId::default())
+    {
+        return None;
+    }
+
+    let pixel_edge = |value: f32, ceil: bool| {
+        let value = value * pixels_per_point;
+        let value = if ceil { value.ceil() } else { value.floor() };
+        value.clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    };
+    let target_origin = [
+        pixel_edge(bounds.min.x, false),
+        pixel_edge(bounds.min.y, false),
+    ];
+    let target_end = [
+        pixel_edge(bounds.max.x, true),
+        pixel_edge(bounds.max.y, true),
+    ];
+    let target_size = [
+        target_end[0].checked_sub(target_origin[0])? as usize,
+        target_end[1].checked_sub(target_origin[1])? as usize,
+    ];
+    if target_size.contains(&0) {
+        return None;
+    }
+
+    let max_texture_side = context.input(|input| input.max_texture_side).max(1);
+    let max_pixels = 16 * 1024 * 1024;
+    if target_size.iter().any(|side| *side > max_texture_side)
+        || target_size[0].checked_mul(target_size[1])? > max_pixels
+    {
+        return None;
+    }
+
+    let sigma = (blur * 0.5 * pixels_per_point).min(max_texture_side as f32);
+    let requested_padding = (sigma * 3.0).ceil() as usize;
+    let max_padding =
+        (max_texture_side - target_size[0]).min(max_texture_side - target_size[1]) / 2;
+    let mut low = 0;
+    let mut high = requested_padding.min(max_padding);
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        let width = target_size[0] + middle * 2;
+        let height = target_size[1] + middle * 2;
+        if width
+            .checked_mul(height)
+            .is_some_and(|pixels| pixels <= max_pixels)
+        {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let padding = low;
+    let source_size = [target_size[0] + padding * 2, target_size[1] + padding * 2];
+    let source_origin = [
+        target_origin[0].saturating_sub(padding as i32),
+        target_origin[1].saturating_sub(padding as i32),
+    ];
+    let source_clip = Rect::from_min_max(
+        pos2(
+            source_origin[0] as f32 / pixels_per_point,
+            source_origin[1] as f32 / pixels_per_point,
+        ),
+        pos2(
+            (source_origin[0] as f32 + source_size[0] as f32) / pixels_per_point,
+            (source_origin[1] as f32 + source_size[1] as f32) / pixels_per_point,
+        ),
+    );
+    let font_image = context.fonts_mut(|fonts| fonts.image());
+    crate::background::remember_texture_image(
+        context,
+        egui::TextureId::default(),
+        font_image.clone(),
+    );
+    let mut source = vec![Color32::TRANSPARENT; source_size[0] * source_size[1]];
+    for mesh in meshes {
+        rasterize_mesh(
+            mesh,
+            &font_image,
+            source_clip,
+            pixels_per_point,
+            source_origin,
+            source_size,
+            &mut source,
+        );
+    }
+    let effective_sigma = sigma.min(padding as f32 / 3.0);
+    let alpha = blur_alpha(
+        source.iter().map(|pixel| f32::from(pixel.a())).collect(),
+        source_size,
+        effective_sigma,
+        padding,
+    );
+    let mut pixels = Vec::with_capacity(target_size[0] * target_size[1]);
+    for y in 0..target_size[1] {
+        for x in 0..target_size[0] {
+            let value = alpha[(y + padding) * source_size[0] + x + padding]
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            pixels.push(Color32::from_rgba_unmultiplied(255, 255, 255, value));
+        }
+    }
+    let image = egui::ColorImage::new(target_size, pixels);
+    let output_bounds = Rect::from_min_max(
+        pos2(
+            target_origin[0] as f32 / pixels_per_point,
+            target_origin[1] as f32 / pixels_per_point,
+        ),
+        pos2(
+            target_end[0] as f32 / pixels_per_point,
+            target_end[1] as f32 / pixels_per_point,
+        ),
+    );
+    Some((image, output_bounds))
+}
+
+fn blur_alpha(mut alpha: Vec<f32>, size: [usize; 2], sigma: f32, padding: usize) -> Vec<f32> {
+    if sigma <= 0.0 || padding == 0 {
+        return alpha;
+    }
+    let radius = (sigma * 3.0).ceil().min(padding as f32) as usize;
+    let kernel_len = radius * 2 + 1;
+    if alpha.len().saturating_mul(kernel_len).saturating_mul(2) > 8_000_000 {
+        let radius = sigma.round().max(1.0).min(padding as f32) as usize;
+        for _ in 0..3 {
+            alpha = box_blur_axis(&alpha, size, radius, true);
+            alpha = box_blur_axis(&alpha, size, radius, false);
+        }
+        return alpha;
+    }
+
+    let mut weights = (-i32::try_from(radius).unwrap_or(i32::MAX)
+        ..=i32::try_from(radius).unwrap_or(i32::MAX))
+        .map(|offset| {
+            crate::box_decoration::shadow_opacity(offset as f32 - 0.5, sigma)
+                - crate::box_decoration::shadow_opacity(offset as f32 + 0.5, sigma)
+        })
+        .collect::<Vec<_>>();
+    let total = weights.iter().sum::<f32>();
+    if total <= 0.0 || !total.is_finite() {
+        return alpha;
+    }
+    weights.iter_mut().for_each(|weight| *weight /= total);
+    alpha = gaussian_blur_axis(&alpha, size, &weights, true);
+    gaussian_blur_axis(&alpha, size, &weights, false)
+}
+
+fn gaussian_blur_axis(
+    alpha: &[f32],
+    size: [usize; 2],
+    weights: &[f32],
+    horizontal: bool,
+) -> Vec<f32> {
+    let radius = weights.len() / 2;
+    let mut output = vec![0.0; alpha.len()];
+    for y in 0..size[1] {
+        for x in 0..size[0] {
+            let mut value = 0.0;
+            for (kernel, weight) in weights.iter().enumerate() {
+                let offset = kernel as isize - radius as isize;
+                let (sample_x, sample_y) = if horizontal {
+                    (x as isize + offset, y as isize)
+                } else {
+                    (x as isize, y as isize + offset)
+                };
+                if sample_x >= 0
+                    && sample_x < size[0] as isize
+                    && sample_y >= 0
+                    && sample_y < size[1] as isize
+                {
+                    value += alpha[sample_y as usize * size[0] + sample_x as usize] * weight;
+                }
+            }
+            output[y * size[0] + x] = value;
+        }
+    }
+    output
+}
+
+fn box_blur_axis(alpha: &[f32], size: [usize; 2], radius: usize, horizontal: bool) -> Vec<f32> {
+    let (lines, line_length) = if horizontal {
+        (size[1], size[0])
+    } else {
+        (size[0], size[1])
+    };
+    let mut output = vec![0.0; alpha.len()];
+    let window = radius.saturating_mul(2).saturating_add(1) as f32;
+    for line in 0..lines {
+        let mut prefix = Vec::with_capacity(line_length + 1);
+        prefix.push(0.0);
+        for index in 0..line_length {
+            let position = if horizontal {
+                line * size[0] + index
+            } else {
+                index * size[0] + line
+            };
+            prefix.push(prefix[index] + alpha[position]);
+        }
+        for index in 0..line_length {
+            let start = index.saturating_sub(radius);
+            let end = index
+                .saturating_add(radius)
+                .saturating_add(1)
+                .min(line_length);
+            let position = if horizontal {
+                line * size[0] + index
+            } else {
+                index * size[0] + line
+            };
+            output[position] = (prefix[end] - prefix[start]) / window;
+        }
+    }
+    output
+}
+
 fn multiply_shape_opacity(
     primitives: Vec<egui::epaint::ClippedPrimitive>,
     opacity: f32,

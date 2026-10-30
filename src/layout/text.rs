@@ -679,6 +679,8 @@ pub(super) struct FragmentedTextInput<'a> {
     pub(super) format: &'a crate::formatting::Formatting,
     pub(super) selection_visuals: &'a egui::Visuals,
     pub(super) decorations: &'a [crate::text_decoration::Decoration],
+    pub(super) shadows: &'a [crate::text_shadow::Shadow],
+    pub(super) current_color: Color32,
 }
 
 pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Context) {
@@ -706,6 +708,8 @@ pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Con
             format: &node.style.format,
             selection_visuals: &selection_visuals,
             decorations: &node.text_decorations,
+            shadows: &node.style.text_shadows,
+            current_color: node.style.current_color,
         });
     }
 }
@@ -721,6 +725,8 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
         format,
         selection_visuals,
         decorations,
+        shadows,
+        current_color,
     } = input;
     let original = context.graphics(|layers| {
         layers
@@ -853,7 +859,13 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
             if format.writing.vertical() {
                 vertical_text(&mut text, fragment.text_rect.size(), format);
             }
-            fragment_painter.add(egui::Shape::Text(text));
+            fragment_painter.add(crate::text_shadow::paint(
+                context,
+                &text,
+                fragment_clip,
+                shadows,
+                current_color,
+            ));
         }
     }
 }
@@ -891,6 +903,78 @@ pub(super) fn decorate_texts(context: &Context, frame: &Frame, index: usize, ran
             list.mutate_shape(index, |entry| entry.shape = shape);
         }
     });
+}
+
+pub(super) fn paint_text_shadows(
+    context: &Context,
+    frame: &Frame,
+    index: usize,
+    range: ShapeRange,
+) {
+    let node = &frame.nodes[index];
+    if node.style.text_shadows.is_empty() {
+        return;
+    }
+    let mut shapes = context.graphics(|layers| {
+        layers.get(range.layer).map_or_else(Vec::new, |list| {
+            list.all_entries()
+                .enumerate()
+                .take(range.end.0)
+                .skip(range.start.0)
+                .filter(|(shape, entry)| {
+                    matches!(entry.shape, egui::Shape::Text(_) | egui::Shape::Vec(_))
+                        && !node.children.iter().any(|child| {
+                            frame.nodes[*child].paint.as_ref().is_some_and(|paint| {
+                                paint.ui.layer_id() == range.layer
+                                    && (paint.start.0..paint.end.0).contains(shape)
+                            })
+                        })
+                })
+                .map(|(index, entry)| {
+                    (
+                        egui::layers::ShapeIdx(index),
+                        entry.shape.clone(),
+                        entry.clip_rect,
+                    )
+                })
+                .collect()
+        })
+    });
+    for (_, shape, clip) in &mut shapes {
+        paint_text_shadow_shape(
+            context,
+            shape,
+            *clip,
+            &node.style.text_shadows,
+            node.style.current_color,
+        );
+    }
+    context.graphics_mut(|layers| {
+        let list = layers.entry(range.layer);
+        for (index, shape, _) in shapes {
+            list.mutate_shape(index, |entry| entry.shape = shape);
+        }
+    });
+}
+
+fn paint_text_shadow_shape(
+    context: &Context,
+    shape: &mut egui::Shape,
+    clip: Rect,
+    shadows: &[crate::text_shadow::Shadow],
+    current_color: Color32,
+) {
+    match shape {
+        egui::Shape::Text(text) => {
+            *shape = crate::text_shadow::paint(context, text, clip, shadows, current_color);
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                paint_text_shadow_shape(context, shape, clip, shadows, current_color);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn decorate_text_shape(

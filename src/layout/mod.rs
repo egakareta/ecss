@@ -29,6 +29,8 @@ mod pseudo;
 mod states;
 mod text;
 
+pub(crate) use opacity::rasterize_alpha_mask;
+
 use background_paint::*;
 use elements::*;
 use engine::*;
@@ -214,6 +216,13 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
                 && (declaration.name == "border-radius"
                     || declaration.name == "overscroll-behavior"
                     || declaration.name.starts_with("overscroll-behavior-"))
+                || declaration.name == "text-shadow"
+                    && matches!(
+                        keyword,
+                        crate::css::AllKeyword::Inherit
+                            | crate::css::AllKeyword::Unset
+                            | crate::css::AllKeyword::Revert
+                    )
         }
         _ => keyword == crate::css::AllKeyword::Inherit,
     }
@@ -228,7 +237,7 @@ fn ordinarily_inherited(declaration: &Declaration) -> bool {
             | Declaration::FontStyle(_)
             | Declaration::Cursor(_)
             | Declaration::FontShorthand(_)
-    )
+    ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "text-shadow")
 }
 
 fn is_css_wide_value(value: &str) -> bool {
@@ -711,6 +720,7 @@ pub(crate) fn show(
     style.custom_properties = parent_style.custom_properties.clone();
     style.hidden = parent_style.hidden;
     style.object_position = parent_style.object_position.clone();
+    style.text_shadows.clone_from(&parent_style.text_shadows);
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
     style.cursor = parent_style.cursor;
@@ -1191,6 +1201,7 @@ pub(crate) fn show(
         let mut frame = active.0.borrow_mut();
         frame.layout_animation_active = true;
     }
+    crate::text_shadow::resolve_current_color(&mut style.text_shadows, style.current_color);
     let font_request = style
         .format
         .font_family
@@ -1655,6 +1666,8 @@ pub(crate) fn show(
                 format: &style.format,
                 selection_visuals: content_ui.visuals(),
                 decorations: &active.0.borrow().nodes[index].text_decorations,
+                shadows: &style.text_shadows,
+                current_color: style.current_color,
             });
         }
     } else {
@@ -1667,6 +1680,12 @@ pub(crate) fn show(
         if text_vertical {
             rotate_text(ui.ctx(), layer, start, end, &geometry, &style.format);
         }
+        text::paint_text_shadows(
+            ui.ctx(),
+            &active.0.borrow(),
+            index,
+            ShapeRange { layer, start, end },
+        );
     }
     if style.format.display == crate::formatting::DisplayKind::Cell
         && active.0.borrow().nodes[index].children.is_empty()

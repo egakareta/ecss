@@ -22,6 +22,16 @@ pub(crate) fn remember_texture_image(context: &Context, id: TextureId, image: Co
     });
 }
 
+pub(crate) fn forget_texture_image(context: &Context, id: TextureId) {
+    context.data_mut(|data| {
+        let key = Id::unique(TEXTURE_IMAGES);
+        if let Some(mut images) = data.get_temp::<HashMap<TextureId, Arc<ColorImage>>>(key) {
+            images.remove(&id);
+            data.insert_temp(key, images);
+        }
+    });
+}
+
 pub(crate) fn texture_image(context: &Context, id: TextureId) -> Option<Arc<ColorImage>> {
     context.data(|data| {
         data.get_temp::<HashMap<TextureId, Arc<ColorImage>>>(Id::unique(TEXTURE_IMAGES))

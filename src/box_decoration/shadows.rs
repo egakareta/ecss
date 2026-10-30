@@ -211,7 +211,7 @@ pub(super) fn color_value(value: &str) -> Result<Option<Color32>, &'static str> 
         .map_err(|_| "invalid shadow color")
 }
 
-pub(super) fn split_commas(value: &str) -> Vec<&str> {
+pub(crate) fn split_commas(value: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut depth = 0_i32;
     let mut start = 0;
@@ -637,7 +637,7 @@ pub(super) fn cross_vec(a: Vec2, b: Vec2) -> f32 {
     a.x * b.y - a.y * b.x
 }
 
-fn shadow_opacity(distance: f32, sigma: f32) -> f32 {
+pub(crate) fn shadow_opacity(distance: f32, sigma: f32) -> f32 {
     if sigma <= 0.0 {
         return if distance < 0.0 { 1.0 } else { 0.0 };
     }

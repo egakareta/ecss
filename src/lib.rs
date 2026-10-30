@@ -30,6 +30,7 @@ mod layout_tree;
 mod math;
 mod object;
 mod text_decoration;
+mod text_shadow;
 mod transition;
 
 const STYLESHEET_ID: &str = "ecss.stylesheet";

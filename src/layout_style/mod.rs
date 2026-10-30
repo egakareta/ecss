@@ -60,6 +60,7 @@ pub(crate) struct BoxStyle {
     pub border_widths: [f32; 4],
     pub(crate) outline: outline::Outline,
     pub(crate) text_decoration: crate::text_decoration::TextDecoration,
+    pub(crate) text_shadows: Vec<crate::text_shadow::Shadow>,
     pub decorations: crate::box_decoration::DecorationStyle,
 }
 
@@ -214,6 +215,7 @@ impl Default for BoxStyle {
             border_widths: [3.0; 4],
             outline: outline::Outline::default(),
             text_decoration: Default::default(),
+            text_shadows: Vec::new(),
             object_fit: Default::default(),
             object_position: Default::default(),
             decorations: crate::box_decoration::DecorationStyle::default(),
@@ -268,6 +270,7 @@ fn supported(name: &str) -> bool {
     crate::formatting::supported(name)
         || outline::supported(name)
         || crate::text_decoration::supported(name)
+        || crate::text_shadow::supported(name)
         || crate::box_decoration::supported(name)
         || matches!(
             name,
@@ -555,6 +558,10 @@ impl Declaration {
         }
         if crate::text_decoration::supported(name) {
             return crate::text_decoration::apply(name, value, &mut output.text_decoration, units);
+        }
+        if crate::text_shadow::supported(name) {
+            output.text_shadows = crate::text_shadow::parse(value, units)?;
+            return Ok(());
         }
         if name == "opacity" {
             output.opacity = opacity_value(value, units)?;
@@ -1114,6 +1121,7 @@ fn inherited(name: &str) -> bool {
             | "widows"
             | "scrollbar-color"
             | "object-position"
+            | "text-shadow"
     )
 }
 
@@ -1199,6 +1207,10 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
         let mut decoration = source.text_decoration.clone();
         decoration.color = Some(decoration.color.unwrap_or(source.current_color));
         crate::text_decoration::copy_property(name, &mut out.text_decoration, decoration);
+        return;
+    }
+    if crate::text_shadow::supported(name) {
+        out.text_shadows.clone_from(&source.text_shadows);
         return;
     }
     if name == "color" {

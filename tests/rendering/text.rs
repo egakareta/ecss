@@ -1,5 +1,228 @@
 use super::*;
 
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
+    for declaration in [
+        "text-shadow:none",
+        "text-shadow:-1em 2px 3px currentColor, rgb(0 0 255) calc(1px + 1px) -2px 0",
+        "text-shadow:inherit",
+        "text-shadow:initial",
+        "text-shadow:unset",
+        "text-shadow:revert",
+    ] {
+        assert!(Stylesheet::parse(&format!(".text {{ {declaration}; }}")).is_ok());
+        assert!(InlineStyle::parse(declaration).is_ok());
+    }
+    for declaration in [
+        "text-shadow:1px",
+        "text-shadow:1px 2px -1px",
+        "text-shadow:1px 2px 3px 4px",
+        "text-shadow:red blue 1px 2px",
+        "text-shadow:none, 1px 2px",
+        "text-shadow:10% 0",
+    ] {
+        assert!(Stylesheet::parse(&format!(".text {{ {declaration}; }}")).is_err());
+        assert!(InlineStyle::parse(declaration).is_err());
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_offsets_inherit_currentcolor_and_preserve_layer_order() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { color:red; text-shadow:14px 0 currentColor; }\
+         .child { color:blue; font-size:24px; width:max-content; }\
+         .stacked { color:transparent; font-size:24px; width:max-content; text-shadow:0 0 red, 0 0 blue; }\
+         .variable { --shadow:12px 0 lime; color:transparent; font-size:24px; width:max-content; text-shadow:var(--shadow); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(20.0);
+        let mut child = egui::Rect::NOTHING;
+        let mut stacked = egui::Rect::NOTHING;
+        let mut variable = egui::Rect::NOTHING;
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                child = ui.add(egui::Label::new("W").selector(".child")).rect;
+                stacked = ui.add(egui::Label::new("M").selector(".stacked")).rect;
+                variable = ui.add(egui::Label::new("V").selector(".variable")).rect;
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = Some((child, stacked, variable));
+    })
+    .await;
+    let (child, stacked, variable) = bounds.lock().unwrap().unwrap();
+    let red_offset_pixels = pixels
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let x = index % WIDTH as usize;
+            let y = index / WIDTH as usize;
+            x as f32 >= child.right() + 2.0
+                && y as f32 >= child.top() - 2.0
+                && y as f32 <= child.bottom() + 2.0
+                && pixel[0] > pixel[1].saturating_add(8)
+                && pixel[0] > pixel[2].saturating_add(8)
+        })
+        .count();
+    assert!(red_offset_pixels > 0);
+
+    let (red_pixels, blue_pixels) = pixels
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let x = index % WIDTH as usize;
+            let y = index / WIDTH as usize;
+            x as f32 >= stacked.left() - 2.0
+                && x as f32 <= stacked.right() + 2.0
+                && y as f32 >= stacked.top() - 2.0
+                && y as f32 <= stacked.bottom() + 2.0
+                && pixel[3] > 0
+        })
+        .fold((0, 0), |(red, blue), (_, pixel)| {
+            (
+                red + usize::from(pixel[0] > pixel[2].saturating_add(8)),
+                blue + usize::from(pixel[2] > pixel[0].saturating_add(8)),
+            )
+        });
+    assert!(red_pixels > 0);
+    assert_eq!(blue_pixels, 0);
+
+    assert!(pixels.iter().enumerate().any(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        x as f32 >= variable.right() + 2.0
+            && y as f32 >= variable.top() - 2.0
+            && y as f32 <= variable.bottom() + 2.0
+            && pixel[1] > pixel[0].saturating_add(8)
+            && pixel[1] > pixel[2].saturating_add(8)
+    }));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_blur_reaches_pixels_beyond_the_unblurred_glyph_bounds() {
+    let stylesheet = Stylesheet::parse(
+        ".text { color:transparent; font-size:28px; width:max-content; text-shadow:0 0 8px blue; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(24.0);
+        *capture.lock().unwrap() = Some(ui.add(egui::Label::new("M").selector(".text")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    let fringe = pixels
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let x = index % WIDTH as usize;
+            let y = index / WIDTH as usize;
+            ((x as f32) < rect.left() - 2.0
+                || (x as f32) > rect.right() + 2.0
+                || (y as f32) < rect.top() - 2.0
+                || (y as f32) > rect.bottom() + 2.0)
+                && pixel[2] > pixel[0].saturating_add(8)
+        })
+        .count();
+    assert!(fringe > 0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadows_follow_wrapped_and_vertical_text_and_respect_clips() {
+    let stylesheet = Stylesheet::parse(
+        ".flow { width:72px; }\
+         .wrapped { color:transparent; font-size:20px; text-shadow:0 1px 2px lime; }\
+         .vertical { width:48px; height:120px; writing-mode:vertical-rl; color:transparent; font-size:20px; text-shadow:2px 0 2px lime; }\
+         .clip { width:42px; height:46px; overflow:hidden; }\
+         .clipped { color:transparent; font-size:24px; text-shadow:20px 0 red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let mut wrapped = egui::Rect::NOTHING;
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    wrapped = ui
+                        .add(egui::Label::new("one two three four five").selector(".wrapped"))
+                        .rect;
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+            let vertical = ui.add(egui::Label::new("ABC").selector(".vertical")).rect;
+            let clipped = ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new("MMMM").selector(".clipped"));
+                    ui.response()
+                })
+                .selector(".clip"),
+            );
+            *capture.lock().unwrap() = Some((wrapped, vertical, clipped.rect));
+        });
+    })
+    .await;
+    let (wrapped, vertical, clip) = bounds.lock().unwrap().unwrap();
+    let green = |pixel: &[u8; 4]| {
+        pixel[1] > pixel[0].saturating_add(8) && pixel[1] > pixel[2].saturating_add(8)
+    };
+    let wrapped_rows = (wrapped.top().floor().max(0.0) as usize
+        ..wrapped.bottom().ceil().min(HEIGHT as f32) as usize)
+        .filter(|y| {
+            (wrapped.left().floor().max(0.0) as usize
+                ..wrapped.right().ceil().min(WIDTH as f32) as usize)
+                .any(|x| green(&pixels[*y * WIDTH as usize + x]))
+        })
+        .count();
+    assert!(wrapped.height() > 40.0);
+    assert!(wrapped_rows > 20);
+
+    let vertical_pixels = pixels
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let x = index % WIDTH as usize;
+            let y = index / WIDTH as usize;
+            x as f32 >= vertical.left() - 8.0
+                && x as f32 <= vertical.right() + 8.0
+                && y as f32 >= vertical.top() - 8.0
+                && y as f32 <= vertical.bottom() + 8.0
+                && green(pixel)
+        })
+        .count();
+    assert!(vertical_pixels > 0);
+    assert!(pixels.iter().enumerate().any(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        x as f32 >= clip.left()
+            && (x as f32) < clip.right()
+            && y as f32 >= clip.top()
+            && (y as f32) < clip.bottom()
+            && pixel[0] > pixel[1].saturating_add(8)
+            && pixel[0] > pixel[2].saturating_add(8)
+    }));
+    assert!(pixels.iter().enumerate().all(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        (x as f32) < clip.right()
+            || (y as f32) < clip.top()
+            || y as f32 >= clip.bottom()
+            || pixel[0] <= pixel[1].saturating_add(8)
+            || pixel[0] <= pixel[2].saturating_add(8)
+    }));
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inline_text_continues_across_selectors_and_paints_line_fragments_test() {
