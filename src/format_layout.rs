@@ -47,14 +47,14 @@ impl Tree<'_> {
         }
         let inline = |id: &NodeId| {
             let n = &self.nodes[usize::from(*id)];
-            n.format.inline_level
+            (n.format.inline_level && !n.style.float.is_floated())
                 || n.style.position.is_out_of_flow()
                 || n.style.display == Display::None
         };
-        if !children
-            .iter()
-            .any(|id| self.nodes[usize::from(*id)].format.inline_level)
-        {
+        if !children.iter().any(|id| {
+            let n = &self.nodes[usize::from(*id)];
+            n.format.inline_level && !n.style.float.is_floated()
+        }) {
             return;
         }
         if children.iter().all(inline) {

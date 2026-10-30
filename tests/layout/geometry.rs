@@ -438,3 +438,33 @@ fn inline_text_flows_around_a_float() {
         "{text:?}"
     );
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn inline_display_float_is_removed_from_inline_flow() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; height:80px; } \
+         .float { display:inline; float:left; width:40px; height:40px; } \
+         .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut float = Rect::NOTHING;
+    let mut text = Vec::new();
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        text.clear();
+        ui.add(
+            (|ui: &mut Ui| {
+                float = ui.add(empty_response.selector(".float")).rect;
+                for _ in 0..12 {
+                    text.push(ui.add(egui::Label::new("X ").selector(".text")).rect);
+                }
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    });
+    assert_eq!(float.min, pos2(0.0, 0.0), "{float:?}");
+    assert!(text[0].left() >= float.right(), "{float:?} {text:?}");
+}
