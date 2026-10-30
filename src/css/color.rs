@@ -23,6 +23,9 @@ pub(crate) fn parse_color<'i>(
         {
             parse_functional_color(input, FunctionalColorKind::Hsl)
         }
+        Token::Function(name) if name.eq_ignore_ascii_case("hwb") => {
+            parse_functional_color(input, FunctionalColorKind::Hwb)
+        }
         _ => Err(ParseError::custom("unsupported color value")),
     }?;
     input.expect_exhausted()?;
@@ -33,6 +36,7 @@ pub(crate) fn parse_color<'i>(
 enum FunctionalColorKind {
     Rgb,
     Hsl,
+    Hwb,
 }
 
 enum FunctionalColorToken {
@@ -69,6 +73,29 @@ fn parse_functional_color<'i>(
 
     let (first, second, third, alpha) = functional_components(&values)
         .ok_or_else(|| ParseError::custom("unsupported color value"))?;
+    let legacy = values
+        .iter()
+        .any(|value| matches!(value, FunctionalColorToken::Comma));
+    if legacy {
+        let valid = match kind {
+            FunctionalColorKind::Rgb => {
+                [first, second, third]
+                    .iter()
+                    .all(|value| matches!(value, FunctionalColorToken::Number(_)))
+                    || [first, second, third]
+                        .iter()
+                        .all(|value| matches!(value, FunctionalColorToken::Percentage(_)))
+            }
+            FunctionalColorKind::Hsl => {
+                matches!(second, FunctionalColorToken::Percentage(_))
+                    && matches!(third, FunctionalColorToken::Percentage(_))
+            }
+            FunctionalColorKind::Hwb => false,
+        };
+        if !valid {
+            return Err(ParseError::custom("invalid legacy color components"));
+        }
+    }
     let alpha = match alpha {
         Some(alpha) => {
             color_alpha(alpha).ok_or_else(|| ParseError::custom("unsupported color value"))?
@@ -83,6 +110,7 @@ fn parse_functional_color<'i>(
             rgb_component(third),
         ),
         FunctionalColorKind::Hsl => hsl_components(first, second, third),
+        FunctionalColorKind::Hwb => hwb_components(first, second, third),
     };
     let (Some(red), Some(green), Some(blue)) = (red, green, blue) else {
         return Err(ParseError::custom("unsupported color value"));
@@ -152,55 +180,70 @@ fn hsl_components(
     saturation: &FunctionalColorToken,
     lightness: &FunctionalColorToken,
 ) -> (Option<f32>, Option<f32>, Option<f32>) {
-    let hue = match hue {
-        FunctionalColorToken::Number(value) => Some(*value),
-        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("deg") => {
-            Some(*value)
-        }
-        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("grad") => {
-            Some(*value * 0.9)
-        }
-        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("rad") => {
-            Some(value.to_degrees())
-        }
-        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("turn") => {
-            Some(*value * 360.0)
-        }
-        _ => None,
-    };
-    let saturation = hsl_percentage(saturation);
-    let lightness = hsl_percentage(lightness);
+    let hue = hue_degrees(hue);
+    let saturation = hundred_scale(saturation);
+    let lightness = hundred_scale(lightness);
     let (Some(hue), Some(saturation), Some(lightness)) = (hue, saturation, lightness) else {
         return (None, None, None);
     };
-    if !hue.is_finite() {
-        return (None, None, None);
-    }
-
-    let hue = hue.rem_euclid(360.0) / 60.0;
-    let saturation = saturation.clamp(0.0, 1.0);
-    let lightness = lightness.clamp(0.0, 1.0);
-    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
-    let secondary = chroma * (1.0 - (hue.rem_euclid(2.0) - 1.0).abs());
-    let (red, green, blue) = match hue as u8 {
-        0 => (chroma, secondary, 0.0),
-        1 => (secondary, chroma, 0.0),
-        2 => (0.0, chroma, secondary),
-        3 => (0.0, secondary, chroma),
-        4 => (secondary, 0.0, chroma),
-        _ => (chroma, 0.0, secondary),
-    };
-    let offset = lightness - chroma / 2.0;
-    (
-        Some(red + offset),
-        Some(green + offset),
-        Some(blue + offset),
-    )
+    let [red, green, blue] = hsl_to_rgb(hue, saturation.max(0.0), lightness);
+    (Some(red), Some(green), Some(blue))
 }
 
-fn hsl_percentage(value: &FunctionalColorToken) -> Option<f32> {
+fn hue_degrees(hue: &FunctionalColorToken) -> Option<f32> {
+    let hue = match hue {
+        FunctionalColorToken::Number(value) => f64::from(*value),
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("deg") => {
+            f64::from(*value)
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("grad") => {
+            f64::from(*value) * 0.9
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("rad") => {
+            f64::from(*value).to_degrees()
+        }
+        FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("turn") => {
+            f64::from(*value) * 360.0
+        }
+        _ => return None,
+    };
+    hue.is_finite().then(|| hue.rem_euclid(360.0) as f32)
+}
+
+fn hwb_components(
+    hue: &FunctionalColorToken,
+    white: &FunctionalColorToken,
+    black: &FunctionalColorToken,
+) -> (Option<f32>, Option<f32>, Option<f32>) {
+    let (Some(hue), Some(white), Some(black)) =
+        (hue_degrees(hue), hundred_scale(white), hundred_scale(black))
+    else {
+        return (None, None, None);
+    };
+    let white = f64::from(white);
+    let black = f64::from(black);
+    let rgb = if white + black >= 1.0 {
+        [(white / (white + black)) as f32; 3]
+    } else {
+        hsl_to_rgb(hue, 1.0, 0.5)
+            .map(|channel| (f64::from(channel) * (1.0 - white - black) + white) as f32)
+    };
+    (Some(rgb[0]), Some(rgb[1]), Some(rgb[2]))
+}
+
+fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let lightness = f64::from(lightness);
+    let amplitude = f64::from(saturation) * lightness.min(1.0 - lightness);
+    [0.0, 8.0, 4.0].map(|offset| {
+        let phase = (offset + f64::from(hue) / 30.0) % 12.0;
+        (lightness - amplitude * (phase - 3.0).min(9.0 - phase).clamp(-1.0, 1.0)) as f32
+    })
+}
+
+fn hundred_scale(value: &FunctionalColorToken) -> Option<f32> {
     match value {
         FunctionalColorToken::Percentage(value) if value.is_finite() => Some(*value),
+        FunctionalColorToken::Number(value) if value.is_finite() => Some(*value / 100.0),
         _ => None,
     }
 }

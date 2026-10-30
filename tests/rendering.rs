@@ -14,6 +14,7 @@ mod rendering {
 
     mod backgrounds;
     mod box_model;
+    mod colors;
     mod columns;
     mod layout;
     mod media;
