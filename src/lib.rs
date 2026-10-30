@@ -402,6 +402,16 @@ impl Stylesheet {
                 Declaration::FontFamily(value) => families = Some(value.clone()),
                 Declaration::FontWeight(value) => weight = *value,
                 Declaration::FontStyle(value) => italic = *value,
+                Declaration::FontShorthand(crate::css::FontShorthand::Values(value)) => {
+                    families = Some(value.families.clone());
+                    weight = value.weight;
+                    italic = value.style;
+                }
+                Declaration::FontShorthand(crate::css::FontShorthand::Wide(_)) => {
+                    families = None;
+                    weight = 400;
+                    italic = false;
+                }
                 Declaration::Layout(value) if value.name == "font-family" => families = None,
                 Declaration::Layout(value) if value.name == "font-weight" => weight = 400,
                 Declaration::Layout(value) if value.name == "font-style" => italic = false,
@@ -598,7 +608,10 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
         let load_fonts = style.declarations.iter().any(|declaration| {
             matches!(
                 declaration,
-                Declaration::FontFamily(_) | Declaration::FontWeight(_) | Declaration::FontStyle(_)
+                Declaration::FontFamily(_)
+                    | Declaration::FontWeight(_)
+                    | Declaration::FontStyle(_)
+                    | Declaration::FontShorthand(_)
             )
         });
         stylesheet.rules.push(Rule {
@@ -1019,6 +1032,7 @@ fn apply_visual_declaration(visuals: &mut WidgetVisuals, declaration: &Declarati
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_)
+        | Declaration::FontShorthand(_)
         | Declaration::Animation(_)
         | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }
@@ -1055,8 +1069,8 @@ mod tests {
             .as_ref()
             .to_vec();
         let stylesheet = Stylesheet::parse(
-            ".outfit-text { width: 250px; font-size: 48px; font-family: \"Outfit\", sans-serif; font-weight: 500; font-kerning: normal; white-space: nowrap; }\
-             .outfit-none { width: 250px; font-size: 48px; font-family: \"Outfit\", sans-serif; font-weight: 500; font-kerning: none; white-space: nowrap; }",
+            ".outfit-text { width: 250px; font: 500 48px \"Outfit\", sans-serif; font-kerning: normal; white-space: nowrap; }\
+             .outfit-none { width: 250px; font: 500 48px \"Outfit\", sans-serif; font-kerning: none; white-space: nowrap; }",
         )
         .unwrap();
 

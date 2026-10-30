@@ -18,6 +18,7 @@ use crate::CssError;
 mod background;
 pub(crate) mod cascade;
 mod color;
+mod font;
 mod media;
 mod supports;
 pub(crate) mod variables;
@@ -31,6 +32,7 @@ use background::{
     split_top_level_commas,
 };
 pub(crate) use color::parse_color;
+pub(crate) use font::{FontShorthand, FontWideKeyword};
 use media::MediaQueryList;
 
 #[derive(Clone, Debug)]
@@ -143,6 +145,7 @@ pub(crate) enum Declaration {
     FontFamily(Vec<String>),
     FontWeight(u16),
     FontStyle(bool),
+    FontShorthand(FontShorthand),
     Animation(crate::animation::Property),
     Transition(crate::transition::Property),
     CustomProperty {
@@ -1143,6 +1146,10 @@ impl Declarations {
             Some(Declaration::FontWeight(parse_font_weight(input)?))
         } else if name.eq_ignore_ascii_case("font-style") {
             Some(Declaration::FontStyle(parse_font_style(input)?))
+        } else if name.eq_ignore_ascii_case("font") {
+            let shorthand = font::parse(&value)?;
+            while input.next().is_ok() {}
+            Some(Declaration::FontShorthand(shorthand))
         } else {
             while input.next().is_ok() {}
             None
@@ -1184,6 +1191,9 @@ pub(crate) fn resolve_deferred(
 }
 
 fn invalid_computed_value(name: &str) -> Declaration {
+    if name == "font" {
+        return Declaration::FontShorthand(FontShorthand::Wide(FontWideKeyword::Unset));
+    }
     if crate::transition::is_property(name) {
         return Declaration::Transition(
             crate::transition::parse_property(name, "unset").expect("valid transition reset"),

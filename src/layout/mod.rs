@@ -199,7 +199,8 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
         Declaration::Color(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
-        | Declaration::FontStyle(_) => matches!(
+        | Declaration::FontStyle(_)
+        | Declaration::FontShorthand(_) => matches!(
             keyword,
             crate::css::AllKeyword::Inherit
                 | crate::css::AllKeyword::Unset
@@ -222,6 +223,7 @@ fn ordinarily_inherited(declaration: &Declaration) -> bool {
             | Declaration::FontFamily(_)
             | Declaration::FontWeight(_)
             | Declaration::FontStyle(_)
+            | Declaration::FontShorthand(_)
     )
 }
 
@@ -502,6 +504,9 @@ pub(crate) fn show(
     style.object_position = parent_style.object_position.clone();
     style.collapsed = parent_style.collapsed;
     style.format.writing = parent_style.format.writing;
+    style.format.font_family = parent_style.format.font_family.clone();
+    style.format.font_weight = parent_style.format.font_weight;
+    style.format.font_italic = parent_style.format.font_italic;
     style.format.font_kerning = parent_style.format.font_kerning;
     style.format.text_orientation = parent_style.format.text_orientation.clone();
     style.format.line_height = parent_style.format.line_height;
@@ -599,9 +604,6 @@ pub(crate) fn show(
     };
     let (_, active_visual_rules, _) = resolve_rules(active_state);
     let mut background_urls = Vec::new();
-    let mut font_families = None;
-    let mut font_weight = 400;
-    let mut font_italic = false;
     for declaration in resolved_rules
         .iter()
         .flat_map(|(_, declarations)| declarations)
@@ -617,18 +619,6 @@ pub(crate) fn show(
                     image.collect_urls(&mut background_urls);
                 }
             }
-            Declaration::FontFamily(families) => font_families = Some(families.clone()),
-            Declaration::FontWeight(weight) => font_weight = *weight,
-            Declaration::FontStyle(italic) => font_italic = *italic,
-            Declaration::Layout(declaration) if declaration.name == "font-family" => {
-                font_families = None;
-            }
-            Declaration::Layout(declaration) if declaration.name == "font-weight" => {
-                font_weight = 400;
-            }
-            Declaration::Layout(declaration) if declaration.name == "font-style" => {
-                font_italic = false;
-            }
             Declaration::Layout(declaration) if declaration.name.starts_with("border-image") => {
                 background_urls
                     .extend(crate::box_decoration::border_image_urls(&declaration.value));
@@ -637,21 +627,6 @@ pub(crate) fn show(
         }
     }
     stylesheet.start_background_image_load_for_urls(ui.ctx(), &background_urls);
-    let font_request = font_families
-        .map(|families| crate::fonts::FontRequest {
-            families,
-            weight: font_weight,
-            italic: font_italic,
-        })
-        .or_else(|| {
-            all_keyword
-                .is_none()
-                .then(|| stylesheet.font_request_for_target(target))
-                .flatten()
-        });
-    if let Some(request) = &font_request {
-        stylesheet.start_font_load_for_request(request.clone(), ui.ctx());
-    }
     let mut animation_properties = Vec::new();
     for (_, declarations) in &resolved_rules {
         for declaration in declarations {
@@ -679,6 +654,15 @@ pub(crate) fn show(
                 declaration
                     .apply_with_parent(&mut style, &parent_style, units)
                     .expect("validated font-size declaration");
+            } else if let Declaration::FontShorthand(shorthand) = declaration {
+                crate::layout_style::apply_font_shorthand(
+                    shorthand,
+                    &mut style,
+                    &parent_style,
+                    units,
+                    true,
+                )
+                .expect("validated font shorthand declaration");
             }
         }
     }
@@ -714,6 +698,25 @@ pub(crate) fn show(
                 }
                 Declaration::Transition(property) => {
                     style.transitions.apply(property, &parent_style.transitions)
+                }
+                Declaration::FontShorthand(shorthand) => {
+                    crate::layout_style::apply_font_shorthand(
+                        shorthand,
+                        &mut style,
+                        &parent_style,
+                        units,
+                        false,
+                    )
+                    .expect("validated font shorthand declaration");
+                }
+                Declaration::FontFamily(families) => {
+                    style.format.font_family = Some(families.clone());
+                }
+                Declaration::FontWeight(weight) => {
+                    style.format.font_weight = *weight;
+                }
+                Declaration::FontStyle(italic) => {
+                    style.format.font_italic = *italic;
                 }
                 Declaration::Layout(declaration) => {
                     if declaration.name == "font-size" {
@@ -807,6 +810,18 @@ pub(crate) fn show(
     if transition.layout_sampled {
         let mut frame = active.0.borrow_mut();
         frame.layout_animation_active = true;
+    }
+    let font_request = style
+        .format
+        .font_family
+        .clone()
+        .map(|families| crate::fonts::FontRequest {
+            families,
+            weight: style.format.font_weight,
+            italic: style.format.font_italic,
+        });
+    if let Some(request) = &font_request {
+        stylesheet.start_font_load_for_request(request.clone(), ui.ctx());
     }
     let mut computed_declarations = if all_keyword.is_none() {
         parent_style
@@ -980,6 +995,12 @@ pub(crate) fn show(
     }
     if style.padding_set {
         content_ui.spacing_mut().button_padding = Vec2::ZERO;
+    }
+    let default_text_styles = egui::Style::default().text_styles;
+    for (text_style, font) in content_ui.style_mut().text_styles.iter_mut() {
+        if let Some(default) = default_text_styles.get(text_style) {
+            font.family = default.family.clone();
+        }
     }
     if let Some(request) = font_request
         && let Some(family) = stylesheet.fonts.read().ok().and_then(|fonts| {
@@ -1442,6 +1463,7 @@ pub(crate) fn show(
                                 | Declaration::FontFamily(_)
                                 | Declaration::FontWeight(_)
                                 | Declaration::FontStyle(_)
+                                | Declaration::FontShorthand(_)
                                 | Declaration::Transition(_)
                                 | Declaration::CustomProperty { .. }
                                 | Declaration::Deferred { .. }

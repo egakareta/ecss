@@ -604,6 +604,45 @@ async fn font_size_resizes_text_and_inherits_through_nested_selectors_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn font_shorthand_changes_font_metrics_and_line_height_in_rendered_text_test() {
+    let stylesheet = Stylesheet::parse(
+        ".small { font:10px/20px sans-serif; color:red; }\
+         .large { font:italic bold 28px/40px sans-serif; color:red; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let small = ui.add(egui::Label::new("MMMM").selector(".small")).rect;
+        let large = ui.add(egui::Label::new("MMMM").selector(".large")).rect;
+        *capture.lock().unwrap() = vec![small, large];
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    assert!((bounds[0].height() - 20.0).abs() < 0.5, "{bounds:?}");
+    assert!((bounds[1].height() - 40.0).abs() < 0.5, "{bounds:?}");
+    let ink_height = |rect: egui::Rect| {
+        let top = rect.top().floor().max(0.0) as usize;
+        let bottom = rect.bottom().ceil().min(HEIGHT as f32) as usize;
+        let left = rect.left().floor().max(0.0) as usize;
+        let right = rect.right().ceil().min(WIDTH as f32) as usize;
+        let mut ink = None;
+        for y in top..bottom {
+            if (left..right).any(|x| pixel(&pixels, x as f32, y as f32)[..3] == [255, 0, 0]) {
+                ink = Some(ink.map_or((y, y), |(top, _)| (top, y)));
+            }
+        }
+        ink.map_or(0, |(top, bottom)| bottom - top + 1)
+    };
+    assert!(
+        ink_height(bounds[1]) > ink_height(bounds[0]) * 2,
+        "{bounds:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn vertical_text_positions_lines_and_honors_text_orientation_test() {
     let stylesheet = Stylesheet::parse(".row {display:flex; width:200px; gap:10px;} .rl {writing-mode:vertical-rl; white-space:pre; width:32px; height:60px; color:red;} .lr {writing-mode:vertical-lr; white-space:pre; width:32px; height:60px; color:red;} .upright {writing-mode:vertical-lr; text-orientation:upright; width:20px; height:20px; color:red;} .sideways {writing-mode:vertical-lr; text-orientation:sideways; width:20px; height:20px; color:red;}").unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));

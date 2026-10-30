@@ -1113,6 +1113,64 @@ fn inherited(name: &str) -> bool {
     )
 }
 
+pub(crate) fn apply_font_shorthand(
+    shorthand: &crate::css::FontShorthand,
+    output: &mut BoxStyle,
+    parent: &BoxStyle,
+    units: Units,
+    size_only: bool,
+) -> Result<(), &'static str> {
+    match shorthand {
+        crate::css::FontShorthand::Values(values) => {
+            if size_only {
+                return Declaration {
+                    name: "font-size".into(),
+                    value: values.size.clone(),
+                }
+                .apply_with_parent(output, parent, units);
+            }
+
+            output.format.font_family = Some(values.families.clone());
+            output.format.font_weight = values.weight;
+            output.format.font_italic = values.style;
+            output.format.line_height = None;
+            if let Some(line_height) = &values.line_height {
+                let _ = crate::formatting::apply("line-height", line_height, output, units)?;
+            }
+        }
+        crate::css::FontShorthand::Wide(keyword) => {
+            if size_only {
+                output.format.em =
+                    match keyword {
+                        crate::css::FontWideKeyword::Inherit
+                        | crate::css::FontWideKeyword::Unset => parent.format.em,
+                        crate::css::FontWideKeyword::Initial
+                        | crate::css::FontWideKeyword::Revert => BoxStyle::default().format.em,
+                    };
+                output.format.font_size_set = true;
+                return Ok(());
+            }
+
+            match keyword {
+                crate::css::FontWideKeyword::Inherit | crate::css::FontWideKeyword::Unset => {
+                    output.format.font_family = parent.format.font_family.clone();
+                    output.format.font_weight = parent.format.font_weight;
+                    output.format.font_italic = parent.format.font_italic;
+                    output.format.line_height = parent.format.line_height;
+                }
+                crate::css::FontWideKeyword::Initial | crate::css::FontWideKeyword::Revert => {
+                    let default = BoxStyle::default();
+                    output.format.font_family = default.format.font_family;
+                    output.format.font_weight = default.format.font_weight;
+                    output.format.font_italic = default.format.font_italic;
+                    output.format.line_height = default.format.line_height;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
     if name == "opacity" {
         out.opacity = source.opacity;

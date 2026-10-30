@@ -1312,7 +1312,8 @@ fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declarat
         | Declaration::BackgroundSize(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
-        | Declaration::FontStyle(_) => None,
+        | Declaration::FontStyle(_)
+        | Declaration::FontShorthand(_) => None,
         Declaration::Layout(layout) => Some((layout.name.clone(), declaration.clone())),
         Declaration::BorderRadius(_) => Some(("border-radius".to_owned(), declaration.clone())),
         Declaration::Animation(_)

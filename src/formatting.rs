@@ -134,6 +134,9 @@ impl TextOverflow {
 pub(crate) struct Formatting {
     pub em: f32,
     pub font_size_set: bool,
+    pub font_family: Option<Vec<String>>,
+    pub font_weight: u16,
+    pub font_italic: bool,
     pub font_kerning: FontKerning,
     pub writing: Writing,
     pub display: DisplayKind,
@@ -199,6 +202,9 @@ impl Default for Formatting {
         Self {
             em: 16.0,
             font_size_set: false,
+            font_family: None,
+            font_weight: 400,
+            font_italic: false,
             font_kerning: FontKerning::Auto,
             writing: Writing::Horizontal,
             display: DisplayKind::Normal,
@@ -533,10 +539,13 @@ pub(crate) fn apply(
             f.vertical_align = value.into();
         }
         "line-height" => {
-            f.line_height = if value == "normal" {
+            f.line_height = if value.eq_ignore_ascii_case("normal") {
                 None
             } else if let Ok(Some(n)) = crate::math::number(value, units) {
-                Some(n.max(0.0) * units.font)
+                if !n.is_finite() || n < 0.0 {
+                    return Err("invalid line-height");
+                }
+                Some(n * units.font)
             } else if let Ok(n) = value.parse::<f32>() {
                 if !n.is_finite() || n < 0.0 {
                     return Err("invalid line-height");

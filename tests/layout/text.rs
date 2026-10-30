@@ -369,6 +369,109 @@ fn text_align_last_inherits_and_honors_css_wide_keywords() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_resolves_relative_sizes_line_heights_and_later_font_sizes() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { font-size:12px; }\
+         .relative { font: italic 1.5em/2 sans-serif; }\
+         .overridden { font: 20px/1.5 sans-serif; font-size:30px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        ui.add(
+            (|ui: &mut Ui| {
+                rects.push(
+                    ui.add(egui::Label::new("relative").selector(".relative"))
+                        .rect,
+                );
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        let overridden = ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Label::new("overridden"));
+                ui.response()
+            })
+            .selector(".overridden"),
+        );
+        rects.push(overridden.rect);
+    });
+
+    assert_eq!(rects.len(), 2);
+    assert!((rects[0].height() - 36.0).abs() < 0.5, "{rects:?}");
+    assert!((rects[1].height() - 45.0).abs() < 0.5, "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_css_wide_keywords_and_variables_keep_font_components_together() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { font: italic bold 20px/30px sans-serif; }\
+         .inherited { font: inherit; }\
+         .initial { font: initial; }\
+         .variable { --font-value: italic 18px/27px sans-serif; font: var(--font-value); }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        ui.add(
+            (|ui: &mut Ui| {
+                for selector in [".inherited", ".initial"] {
+                    let response = ui.add(
+                        (|ui: &mut Ui| {
+                            ui.add(egui::Label::new("font"));
+                            ui.response()
+                        })
+                        .selector(selector),
+                    );
+                    rects.push(response.rect);
+                }
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        let variable = ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Label::new("font"));
+                ui.response()
+            })
+            .selector(".variable"),
+        );
+        rects.push(variable.rect);
+    });
+
+    assert_eq!(rects.len(), 3);
+    assert!((rects[0].height() - 30.0).abs() < 0.5, "{rects:?}");
+    assert!(rects[1].height() < rects[0].height() * 0.7, "{rects:?}");
+    assert!((rects[2].height() - 27.0).abs() < 0.5, "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_rejects_unsupported_optional_and_system_font_forms() {
+    for value in [
+        "small-caps 20px sans-serif",
+        "condensed 20px sans-serif",
+        "menu",
+        "italic 20px/ sans-serif",
+        "italic 20px",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".text {{ font:{value}; }}")).is_err(),
+            "font shorthand should reject {value}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn text_align_last_maps_rtl_and_vertical_writing_axes() {
     let rtl_start = aligned_text_rows(
         "white-space:pre; direction:rtl; text-align-last:start;",
