@@ -7,7 +7,10 @@ use std::{
 use crate::layout_style::Units;
 use cssparser::{ParseError, Parser, Token};
 
-thread_local! { static VALUES:RefCell<HashMap<usize,Expression>>=RefCell::default(); }
+thread_local! {
+    static VALUES: RefCell<HashMap<usize, Expression>> = RefCell::default();
+    static FREE: RefCell<Vec<usize>> = RefCell::default();
+}
 static NEXT: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Debug, Default)]
@@ -16,9 +19,14 @@ impl Drop for Arena {
     fn drop(&mut self) {
         VALUES.with(|values| {
             let mut values = values.borrow_mut();
-            for key in self.0.get_mut() {
-                values.remove(key);
-            }
+            FREE.with(|free| {
+                let mut free = free.borrow_mut();
+                for key in self.0.get_mut() {
+                    if values.remove(key).is_some() {
+                        free.push(*key);
+                    }
+                }
+            });
         });
     }
 }
@@ -389,10 +397,14 @@ impl Arena {
     }
 
     fn store(&self, expression: Expression) -> *const () {
-        let key = NEXT
-            .fetch_add(1, Ordering::Relaxed)
-            .checked_mul(8)
-            .expect("CSS expression handle overflow");
+        // Taffy treats this aligned integer as an opaque handle, never as a pointer to dereference.
+        let key = FREE
+            .with(|free| free.borrow_mut().pop())
+            .unwrap_or_else(|| {
+                NEXT.fetch_add(1, Ordering::Relaxed)
+                    .checked_mul(8)
+                    .expect("CSS expression handle overflow")
+            });
         VALUES.with(|values| values.borrow_mut().insert(key, expression));
         self.0.borrow_mut().push(key);
         key as *const ()
@@ -537,14 +549,7 @@ pub(crate) fn length(
             value: Value::Clamp(Box::new(result)),
         };
     }
-    // Taffy treats the aligned pointer as an opaque handle; no pointer is dereferenced.
-    let key = NEXT
-        .fetch_add(1, Ordering::Relaxed)
-        .checked_mul(8)
-        .expect("CSS expression handle overflow");
-    VALUES.with(|values| values.borrow_mut().insert(key, result));
-    units.math.0.borrow_mut().push(key);
-    Ok(Some(key as *const ()))
+    Ok(Some(units.math.store(result)))
 }
 
 pub(crate) fn number(value: &str, units: Units<'_>) -> Result<Option<f32>, &'static str> {
@@ -585,13 +590,7 @@ pub(crate) fn percentage(
             value: Value::Clamp(Box::new(result)),
         };
     }
-    let key = NEXT
-        .fetch_add(1, Ordering::Relaxed)
-        .checked_mul(8)
-        .expect("CSS expression handle overflow");
-    VALUES.with(|values| values.borrow_mut().insert(key, result));
-    units.math.0.borrow_mut().push(key);
-    Ok(Some(key as *const ()))
+    Ok(Some(units.math.store(result)))
 }
 
 type ResultExpr = Result<Expression, ParseError<&'static str>>;

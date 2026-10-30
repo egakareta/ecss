@@ -183,3 +183,50 @@ fn transitions_bound_large_percentage_calculations_after_resolving_the_basis() {
         );
     }
 }
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn interleaved_contexts_preserve_computed_math_transition_endpoints() {
+    let first = Context::default();
+    let second = Context::default();
+    Stylesheet::parse(
+        ".box { width:calc(25% + 10px); height:20px; transition:width 1s linear; } \
+         .box.changed { width:calc(50% + 20px); }",
+    )
+    .unwrap()
+    .install(&first);
+    Stylesheet::parse(".box { width:calc(75% + 7px); height:calc(10px + 2%); }")
+        .unwrap()
+        .install(&second);
+    let changed = std::cell::Cell::new(false);
+    let width = std::cell::Cell::new(0.0);
+    let mut build = |ui: &mut Ui| {
+        width.set(
+            ui.add(empty_response.selector(if changed.get() {
+                ".box.changed"
+            } else {
+                ".box"
+            }))
+            .rect
+            .width(),
+        );
+    };
+    frame(&first, 200.0, 0.0, vec![], &mut build);
+    assert!((width.get() - 60.0).abs() < 0.05);
+    changed.set(true);
+    frame(&first, 200.0, 1.0, vec![], &mut build);
+    for step in 1..=10 {
+        let time = 1.0 + f64::from(step) / 10.0;
+        frame(&second, 300.0, time, vec![], |ui| {
+            let other = ui.add(empty_response.selector(".box")).rect;
+            assert!((other.width() - 232.0).abs() < 0.05);
+        });
+        frame(&first, 200.0, time, vec![], &mut build);
+        let expected = 60.0 + step as f32 * 6.0;
+        assert!(
+            (width.get() - expected).abs() < 0.1,
+            "{step}: {} expected {expected}",
+            width.get()
+        );
+    }
+}
