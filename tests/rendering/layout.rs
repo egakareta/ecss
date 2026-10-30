@@ -825,7 +825,7 @@ async fn text_justify_modes_select_word_character_and_script_specific_spacing_te
     assert_ne!(plain_last, justified_last);
 
     let justify = render_widget("inter-word", "justify", "auto", last_line_words).await;
-    let justify_all = render_widget("inter-word", "justify-all", "auto", last_line_words).await;
+    let justify_all = render_widget("inter-word", "justify-all", "justify", last_line_words).await;
     assert_ne!(justify, justify_all);
 }
 

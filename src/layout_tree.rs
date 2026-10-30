@@ -578,23 +578,20 @@ impl<'a> Tree<'a> {
                 format.text_align.as_str()
             };
             let free = (content_width - line_width - line_indent).max(0.0);
-            let rtl = style.direction == taffy::Direction::Rtl;
-            let align = match (line_align, rtl) {
-                ("center", _) => free * 0.5,
-                ("right" | "end", false) => free,
-                ("left" | "end", true) => -free,
-                _ => 0.0,
-            };
-            let align = if line_align == "justify" && !last_line {
-                0.0
-            } else {
-                align
-            };
-            let justify = matches!(line_align, "justify" | "justify-all")
-                && (!last_line || line_align == "justify-all");
+            let align = crate::formatting::text_alignment_offset(
+                line_align,
+                free,
+                style.direction,
+                format.writing,
+            );
+            let justify = format.text_justify != "none"
+                && matches!(line_align, "justify" | "justify-all")
+                && (!last_line
+                    || line_align == "justify-all"
+                    || format.text_align_last == "justify");
             let box_left = region.left() + margin.left;
             let content_left = box_left + initial.border.left + initial.padding.left;
-            let text_x = if rtl {
+            let text_x = if style.direction == taffy::Direction::Rtl {
                 content_left + content_width - line_width - line_indent + align
             } else {
                 content_left + line_indent + align

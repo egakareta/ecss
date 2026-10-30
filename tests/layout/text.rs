@@ -195,6 +195,205 @@ fn text_align_match_parent_resolves_using_the_parents_direction() {
     );
 }
 
+fn text_rows(context: &Context, layer: egui::LayerId) -> Vec<Rect> {
+    fn collect(shape: &egui::Shape, rows: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Text(text) => rows.extend(
+                text.galley
+                    .rows
+                    .iter()
+                    .filter(|row| !row.row.glyphs.is_empty())
+                    .map(|row| {
+                        row.rect_without_leading_space()
+                            .translate(text.pos.to_vec2())
+                    }),
+            ),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, rows);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    context.graphics(|layers| {
+        let mut rows = Vec::new();
+        if let Some(list) = layers.get(layer) {
+            for entry in list.all_entries() {
+                collect(&entry.shape, &mut rows);
+            }
+        }
+        rows.sort_by(|a, b| {
+            a.top()
+                .total_cmp(&b.top())
+                .then(a.left().total_cmp(&b.left()))
+        });
+        rows
+    })
+}
+
+fn aligned_text_rows(style: &str, text: &str) -> Vec<Rect> {
+    let context = Context::default();
+    Stylesheet::parse(&format!(
+        ".box {{ width:100px; height:40px; color:red; {style} }} .text {{ display:inline; }}"
+    ))
+    .unwrap()
+    .install(&context);
+    let mut rows = Vec::new();
+    frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+        let layer = ui.layer_id();
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Label::new(text).selector(".text"));
+                ui.response()
+            })
+            .selector(".box"),
+        );
+        rows = text_rows(ui.ctx(), layer);
+    });
+    rows
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_align_last_applies_to_forced_break_lines() {
+    let rows = aligned_text_rows(
+        "white-space:pre; text-align:left; text-align-last:center;",
+        "a\nb",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(
+        (rows[0].center().x - rows[1].center().x).abs() < 0.05,
+        "{rows:?}"
+    );
+    assert!(rows[0].left() > 35.0, "{rows:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_align_shorthand_resets_text_align_last() {
+    let rows = aligned_text_rows(
+        "white-space:pre; text-align-last:center; text-align:left;",
+        "a\nb",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows.iter().all(|row| row.left() < 5.0), "{rows:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_align_last_maps_supported_values_to_the_inline_axis() {
+    let row = |value| {
+        aligned_text_rows(
+            &format!("white-space:pre; text-align:start; text-align-last:{value};"),
+            "a",
+        )
+        .remove(0)
+    };
+    let start = row("auto");
+    let end = row("end");
+    let left = row("left");
+    let right = row("right");
+    let center = row("center");
+    let justify = row("justify");
+    assert!(start.left() < 5.0 && left.left() < 5.0 && justify.left() < 5.0);
+    assert!((end.right() - 100.0).abs() < 1.0, "{end:?}");
+    assert!((right.right() - 100.0).abs() < 1.0, "{right:?}");
+    assert!((center.center().x - 50.0).abs() < 1.0, "{center:?}");
+    for candidate in [end, left, right, center, justify] {
+        assert!((candidate.width() - start.width()).abs() < 0.05);
+        assert!((candidate.height() - start.height()).abs() < 0.05);
+    }
+    assert!(Stylesheet::parse(".text { text-align-all:justify-all; }").is_err());
+    assert!(Stylesheet::parse(".text { text-align-last:justify-all; }").is_err());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_align_last_inherits_and_honors_css_wide_keywords() {
+    fn render(child_style: &str) -> Rect {
+        let context = Context::default();
+        Stylesheet::parse(&format!(
+            ".parent {{ width:100px; height:40px; white-space:pre; text-align:start; text-align-last:center; }}\
+             .child {{ display:block; width:100px; height:40px; {child_style} }}\
+             .text {{ display:inline; }}"
+        ))
+        .unwrap()
+        .install(&context);
+        let mut rows = Vec::new();
+        frame(&context, 120.0, 0.0, Vec::new(), |ui| {
+            let layer = ui.layer_id();
+            ui.add(
+                (|ui: &mut Ui| {
+                    ui.add(
+                        (|ui: &mut Ui| {
+                            ui.add(egui::Label::new("a").selector(".text"));
+                            ui.response()
+                        })
+                        .selector(".child"),
+                    );
+                    ui.response()
+                })
+                .selector(".parent"),
+            );
+            rows = text_rows(ui.ctx(), layer);
+        });
+        rows.into_iter().next().expect("text row")
+    }
+
+    let inherited = render("text-align-last:inherit;");
+    let unset = render("text-align-last:unset;");
+    let initial = render("text-align-last:initial;");
+    assert!((inherited.center().x - 50.0).abs() < 1.0, "{inherited:?}");
+    assert!((unset.center().x - 50.0).abs() < 1.0, "{unset:?}");
+    assert!(initial.left() < 5.0, "{initial:?}");
+
+    let shorthand_initial = render("text-align-last:center; text-align:initial;");
+    assert!(shorthand_initial.left() < 5.0, "{shorthand_initial:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn text_align_last_maps_rtl_and_vertical_writing_axes() {
+    let rtl_start = aligned_text_rows(
+        "white-space:pre; direction:rtl; text-align-last:start;",
+        "a",
+    )
+    .remove(0);
+    let rtl_end =
+        aligned_text_rows("white-space:pre; direction:rtl; text-align-last:end;", "a").remove(0);
+    assert!((rtl_start.right() - 100.0).abs() < 1.0, "{rtl_start:?}");
+    assert!(rtl_end.left() < 5.0, "{rtl_end:?}");
+
+    let vertical_top = aligned_text_rows(
+        "white-space:pre; writing-mode:vertical-rl; text-align-last:left;",
+        "a",
+    )
+    .remove(0);
+    let vertical_bottom = aligned_text_rows(
+        "white-space:pre; writing-mode:vertical-rl; text-align-last:right;",
+        "a",
+    )
+    .remove(0);
+    let vertical_center = aligned_text_rows(
+        "white-space:pre; writing-mode:vertical-rl; text-align-last:center;",
+        "a",
+    )
+    .remove(0);
+    assert!(vertical_top.top() < 5.0, "{vertical_top:?}");
+    assert!(
+        vertical_bottom.bottom() > vertical_top.bottom(),
+        "{vertical_bottom:?}"
+    );
+    assert!(
+        (vertical_center.center().y - (vertical_top.center().y + vertical_bottom.center().y) * 0.5)
+            .abs()
+            < 0.05,
+        "{vertical_center:?}"
+    );
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn text_overflow_ellipsis_truncates_and_paints_a_marker_at_the_inline_end() {

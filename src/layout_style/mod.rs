@@ -457,17 +457,33 @@ impl Declaration {
                 return Ok(());
             }
         }
-        if matches!(self.name.as_str(), "text-align" | "text-align-all")
-            && keyword.eq_ignore_ascii_case("match-parent")
+        if keyword.eq_ignore_ascii_case("match-parent")
+            && matches!(
+                self.name.as_str(),
+                "text-align" | "text-align-all" | "text-align-last"
+            )
         {
-            output.format.text_align = match parent.format.text_align.as_str() {
-                "start" if parent.layout.direction == taffy::Direction::Ltr => "left",
-                "start" => "right",
-                "end" if parent.layout.direction == taffy::Direction::Ltr => "right",
-                "end" => "left",
-                value => value,
+            let resolve = |value: &str| match value {
+                "start" if parent.layout.direction == taffy::Direction::Ltr => "left".into(),
+                "start" => "right".into(),
+                "end" if parent.layout.direction == taffy::Direction::Ltr => "right".into(),
+                "end" => "left".into(),
+                "match-parent" => "start".into(),
+                value => value.to_owned(),
+            };
+            match self.name.as_str() {
+                "text-align" => {
+                    output.format.text_align = resolve(&parent.format.text_align).into();
+                    output.format.text_align_last = resolve(&parent.format.text_align_last).into();
+                }
+                "text-align-all" => {
+                    output.format.text_align = resolve(&parent.format.text_align).into();
+                }
+                "text-align-last" => {
+                    output.format.text_align_last = resolve(&parent.format.text_align_last).into();
+                }
+                _ => unreachable!(),
             }
-            .into();
             return Ok(());
         }
         if keyword.eq_ignore_ascii_case("inherit")
@@ -2216,7 +2232,11 @@ fn copy_format_property(
         "empty-cells" => to.hide_empty = from.hide_empty,
         "vertical-align" => to.vertical_align = from.vertical_align.clone(),
         "line-height" => to.line_height = from.line_height,
-        "text-align" | "text-align-all" => to.text_align = from.text_align.clone(),
+        "text-align" => {
+            to.text_align = from.text_align.clone();
+            to.text_align_last = from.text_align_last.clone();
+        }
+        "text-align-all" => to.text_align = from.text_align.clone(),
         "text-align-last" => to.text_align_last = from.text_align_last.clone(),
         "text-justify" => to.text_justify = from.text_justify.clone(),
         "text-overflow" => to.text_overflow = from.text_overflow.clone(),

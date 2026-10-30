@@ -1719,7 +1719,7 @@ impl Tree<'_> {
         }
         maximum = maximum.max(line_width);
         lines.push(line);
-        let rtl = self.nodes[usize::from(id)].style.direction == taffy::Direction::Rtl;
+        let direction = self.nodes[usize::from(id)].style.direction;
         let last_line = lines.len().saturating_sub(1);
         let mut content_height = 0.0_f32;
         for (line_index, mut line) in lines.into_iter().enumerate() {
@@ -1770,20 +1770,32 @@ impl Tree<'_> {
                 line_end
             };
             let free = (used_width - line_end).max(0.0);
-            let align = match (format.text_align.as_str(), rtl) {
-                ("center", true) => -free * 0.5,
-                ("center", false) => free * 0.5,
-                ("right" | "end", false) => free,
-                ("left" | "end", true) => -free,
-                _ => 0.0,
+            let forced_break = line
+                .items
+                .last()
+                .is_some_and(|(index, _)| tokens[*index].newline);
+            let last_line = line_index == last_line || forced_break;
+            let line_align = if last_line && format.text_align_last != "auto" {
+                format.text_align_last.as_str()
+            } else {
+                format.text_align.as_str()
             };
+            let align = crate::formatting::text_alignment_offset(
+                line_align,
+                free,
+                direction,
+                format.writing,
+            );
             let spaces = line
                 .items
                 .iter()
                 .take(line.items.len().saturating_sub(1))
                 .filter(|(index, _)| tokens[*index].gap > 0.0)
                 .count();
-            let justify = if format.text_align == "justify" && line_index != last_line && spaces > 0
+            let justify = if format.text_justify != "none"
+                && line_align == "justify"
+                && (!last_line || format.text_align_last == "justify")
+                && spaces > 0
             {
                 free / spaces as f32
             } else {
@@ -1794,7 +1806,11 @@ impl Tree<'_> {
                 let token = &tokens[index];
                 let node = &mut self.nodes[usize::from(token.node)];
                 let x = x + added;
-                let x = if rtl { used_width - x - token.width } else { x };
+                let x = if direction == taffy::Direction::Rtl {
+                    used_width - x - token.width
+                } else {
+                    x
+                };
                 let offset = match node.format.vertical_align.as_str() {
                     "top" | "text-top" => 0.0,
                     "middle" => (height - token.height) * 0.5,

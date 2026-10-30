@@ -564,20 +564,26 @@ pub(crate) fn apply(
             ) {
                 return Err("invalid text-align");
             }
-            f.text_align = value;
+            match value.as_str() {
+                "justify-all" => {
+                    f.text_align = "justify".into();
+                    f.text_align_last = "justify".into();
+                }
+                "match-parent" => {
+                    f.text_align = value.clone();
+                    f.text_align_last = value;
+                }
+                _ => {
+                    f.text_align = value;
+                    f.text_align_last = "auto".into();
+                }
+            }
         }
         "text-align-all" => {
             let value = value.to_ascii_lowercase();
             if !matches!(
                 value.as_str(),
-                "start"
-                    | "end"
-                    | "left"
-                    | "right"
-                    | "center"
-                    | "justify"
-                    | "justify-all"
-                    | "match-parent"
+                "start" | "end" | "left" | "right" | "center" | "justify" | "match-parent"
             ) {
                 return Err("invalid text-align-all");
             }
@@ -587,7 +593,7 @@ pub(crate) fn apply(
             let value = value.to_ascii_lowercase();
             if !matches!(
                 value.as_str(),
-                "auto" | "start" | "end" | "left" | "right" | "center" | "justify"
+                "auto" | "start" | "end" | "left" | "right" | "center" | "justify" | "match-parent"
             ) {
                 return Err("invalid text-align-last");
             }
@@ -796,6 +802,45 @@ pub(crate) fn apply(
     }
     Ok(true)
 }
+
+pub(crate) fn text_alignment_offset(
+    value: &str,
+    free: f32,
+    direction: taffy::Direction,
+    writing: Writing,
+) -> f32 {
+    let rtl = direction == taffy::Direction::Rtl;
+    match value {
+        "center" => {
+            if rtl {
+                -free * 0.5
+            } else {
+                free * 0.5
+            }
+        }
+        "left" | "right" => {
+            let line_left_is_low = writing != Writing::SidewaysLr;
+            let line_left = value == "left";
+            let low = line_left == line_left_is_low;
+            if rtl {
+                if low { -free } else { 0.0 }
+            } else if low {
+                0.0
+            } else {
+                free
+            }
+        }
+        "end" => {
+            if rtl {
+                -free
+            } else {
+                free
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 fn matches_ignore_ascii_case(value: &str, expected: &str) -> bool {
     value.eq_ignore_ascii_case(expected)
 }
