@@ -189,7 +189,7 @@ fn parse_declaration(input: &mut CssParser<'_>) -> Result<bool, ParseError<Parse
     }
     let mut declarations = CssParser::new(source);
     Ok(parse_declarations(&mut declarations, true)
-        .map(|declarations| declarations.len() == 1)
+        .map(|declarations| declarations.declarations.len() == 1)
         .unwrap_or(false))
 }
 
@@ -200,7 +200,7 @@ fn property_supported(name: &str) -> bool {
     let source = format!("{name}: initial");
     let mut input = CssParser::new(&source);
     parse_declarations(&mut input, true)
-        .map(|declarations| declarations.len() == 1)
+        .map(|declarations| declarations.declarations.len() == 1)
         .unwrap_or(false)
 }
 
