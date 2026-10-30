@@ -459,6 +459,7 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
             .add_pixels(style.padding.bottom.into_raw(), gutter.bottom);
         // Unspecified leaf display preserves egui's intrinsic widget sizing.
         if (node.parent.is_none() || node.style.inline)
+            && !style.float.is_floated()
             && !node.style.display_set
             && node.children.is_empty()
             && style.size.width.is_auto()
@@ -469,7 +470,11 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
                 length(node.measured.x)
             };
         }
-        if node.style.inline && style.size.width.is_auto() && node.children.is_empty() {
+        if node.style.inline
+            && !style.float.is_floated()
+            && style.size.width.is_auto()
+            && node.children.is_empty()
+        {
             style.size.width = length(node.measured.x);
         }
         if node.style.format.display == crate::formatting::DisplayKind::Inline
@@ -512,6 +517,15 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
         tree.nodes[usize::from(id)].intrinsic_adjustment = intrinsic_adjustment;
         tree.nodes[usize::from(id)].visibility_collapsed = node.style.collapsed;
         tree.nodes[usize::from(id)].format.inline_level = node.style.inline;
+        if node.style.layout.float.is_floated() && !node.style.layout.position.is_out_of_flow() {
+            tree.nodes[usize::from(id)].format.inline_level = false;
+            if !matches!(
+                tree.nodes[usize::from(id)].format.display,
+                crate::formatting::DisplayKind::Normal | crate::formatting::DisplayKind::Table
+            ) {
+                tree.nodes[usize::from(id)].format.display = crate::formatting::DisplayKind::Normal;
+            }
+        }
         tree.nodes[usize::from(id)].edges =
             std::array::from_fn(|side| crate::formatting::CollapsedBorder {
                 width: if matches!(
@@ -719,14 +733,29 @@ pub(super) fn solve(frame: &mut Frame, context: &Context) -> Cache {
                     measurement.and_then(|measurement| measurement.1.as_ref())
                 {
                     let mut job = job.clone();
+                    let float_width = if style.float.is_floated()
+                        && style.size.width.is_auto()
+                        && input.known_dimensions.width.is_none()
+                        && let AvailableSpace::Definite(width) = available.width
+                    {
+                        let mut unwrapped = job.clone();
+                        unwrapped.wrap.max_width = f32::INFINITY;
+                        let maximum = context
+                            .fonts_mut(|fonts| fonts.layout_job(unwrapped).size().x)
+                            + extra.x;
+                        Some(width.max(*minimum + extra.x).min(maximum))
+                    } else {
+                        None
+                    };
                     job.wrap.max_width = match available.width {
-                        AvailableSpace::Definite(width) => {
-                            (width - extra.x).max(if *nowrap { *minimum } else { 0.0 })
-                        }
+                        AvailableSpace::Definite(width) => (float_width.unwrap_or(width) - extra.x)
+                            .max(if *nowrap { *minimum } else { 0.0 }),
                         AvailableSpace::MinContent => *minimum,
                         AvailableSpace::MaxContent => f32::INFINITY,
                     };
-                    context.fonts_mut(|fonts| fonts.layout_job(job).size()) + *extra
+                    let mut size = context.fonts_mut(|fonts| fonts.layout_job(job).size()) + *extra;
+                    size.x = float_width.unwrap_or(size.x);
+                    size
                 } else {
                     measured
                 };

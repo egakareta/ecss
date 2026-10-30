@@ -504,6 +504,198 @@ fn floated_inline_container_types_keep_their_used_box_size() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn auto_width_inline_floats_shrink_to_fit_the_containing_block() {
+    for display in ["inline", "inline-block"] {
+        let context = Context::default();
+        Stylesheet::parse(&format!(
+            ".flow {{ display:flow-root; width:100px; }} \
+             .float {{ display:{display}; float:left; }} \
+             .reference {{ width:max-content; }}"
+        ))
+        .unwrap()
+        .install(&context);
+        let mut reference = Rect::NOTHING;
+        let mut floated = Rect::NOTHING;
+        frame(&context, 200.0, 0.0, vec![], |ui| {
+            reference = ui
+                .add(egui::Label::new("longestword short").selector(".reference"))
+                .rect;
+            ui.add(
+                (|ui: &mut Ui| {
+                    floated = ui
+                        .add(egui::Label::new("longestword short").selector(".float"))
+                        .rect;
+                    ui.response()
+                })
+                .selector(".flow"),
+            );
+        });
+        assert!(reference.width() > 100.0, "{reference:?}");
+        assert!(
+            (floated.width() - 100.0).abs() < 0.5,
+            "{display}: {floated:?}"
+        );
+        assert!(
+            floated.height() > reference.height(),
+            "{display}: {floated:?} {reference:?}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn inline_floats_contribute_to_intrinsic_container_widths() {
+    for side in ["left", "right"] {
+        for sizing in ["min-content", "max-content"] {
+            let context = Context::default();
+            Stylesheet::parse(&format!(
+                ".flow {{ display:flow-root; width:{sizing}; }} \
+                 .float {{ display:inline; float:{side}; width:40px; height:40px; }} \
+                 .text {{ display:inline; }} .reference {{ width:max-content; }}"
+            ))
+            .unwrap()
+            .install(&context);
+            let mut reference = Rect::NOTHING;
+            let mut flow = Rect::NOTHING;
+            frame(&context, 200.0, 0.0, vec![], |ui| {
+                reference = ui.add(egui::Label::new("X").selector(".reference")).rect;
+                flow = ui
+                    .add(
+                        (|ui: &mut Ui| {
+                            ui.add(empty_response.selector(".float"));
+                            ui.add(egui::Label::new("X").selector(".text"));
+                            ui.response()
+                        })
+                        .selector(".flow"),
+                    )
+                    .rect;
+            });
+            let expected = if sizing == "max-content" {
+                40.0 + reference.width()
+            } else {
+                40.0
+            };
+            assert!(
+                (flow.width() - expected).abs() < 0.5,
+                "{side} {sizing}: {flow:?}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn inline_content_moves_below_a_float_when_no_item_fits() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:100px; } \
+         .float { float:left; width:95px; height:40px; } \
+         .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut floated = Rect::NOTHING;
+    let mut text = Rect::NOTHING;
+    frame(&context, 200.0, 0.0, vec![], |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                floated = ui.add(empty_response.selector(".float")).rect;
+                text = ui.add(egui::Label::new("X").selector(".text")).rect;
+                ui.response()
+            })
+            .selector(".flow"),
+        );
+    });
+    assert!(text.top() >= floated.bottom(), "{text:?} {floated:?}");
+    assert!(
+        (text.left() - floated.left()).abs() < 0.5,
+        "{text:?} {floated:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn vertically_separated_floats_do_not_sum_their_intrinsic_widths() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:max-content; white-space:pre; } \
+         .float { float:left; width:40px; height:1px; } \
+         .text { display:inline; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut flow = Rect::NOTHING;
+    let mut floated = [Rect::NOTHING; 2];
+    frame(&context, 200.0, 0.0, vec![], |ui| {
+        flow = ui
+            .add(
+                (|ui: &mut Ui| {
+                    floated[0] = ui.add(empty_response.selector(".float")).rect;
+                    ui.add(egui::Label::new("\n").selector(".text"));
+                    floated[1] = ui.add(empty_response.selector(".float")).rect;
+                    ui.response()
+                })
+                .selector(".flow"),
+            )
+            .rect;
+    });
+    assert!(floated[1].top() >= floated[0].bottom(), "{floated:?}");
+    assert!((flow.width() - 40.0).abs() < 0.5, "{flow:?} {floated:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn floating_table_parts_compute_to_block_display() {
+    let render = |display| {
+        let context = Context::default();
+        Stylesheet::parse(&format!(
+            ".table {{ display:table; }} \
+             .float {{ display:{display}; float:left; width:30px; height:20px; }} \
+             .row {{ display:table-row; }} .cell {{ display:table-cell; width:40px; height:10px; }}"
+        ))
+        .unwrap()
+        .install(&context);
+        let mut bounds = [Rect::NOTHING; 3];
+        frame(&context, 200.0, 0.0, vec![], |ui| {
+            bounds[0] = ui
+                .add(
+                    (|ui: &mut Ui| {
+                        bounds[1] = ui.add(empty_response.selector(".float")).rect;
+                        bounds[2] = ui
+                            .add(
+                                (|ui: &mut Ui| {
+                                    ui.add(empty_response.selector(".cell"));
+                                    ui.response()
+                                })
+                                .selector(".row"),
+                            )
+                            .rect;
+                        ui.response()
+                    })
+                    .selector(".table"),
+                )
+                .rect;
+        });
+        bounds
+    };
+    let reference = render("block");
+    assert_eq!(reference[1].size(), vec2(30.0, 20.0));
+    for display in [
+        "table-row",
+        "table-cell",
+        "table-row-group",
+        "table-header-group",
+        "table-footer-group",
+        "table-column",
+        "table-column-group",
+        "table-caption",
+    ] {
+        assert_eq!(render(display), reference, "{display}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn floats_preserve_inline_text_flow_and_clear_left_and_both() {
     let context = Context::default();
     Stylesheet::parse(
@@ -555,7 +747,11 @@ fn floats_preserve_inline_text_flow_and_clear_left_and_both() {
         );
     });
     assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
-    assert!(before.top() < float.top(), "{before:?} {float:?}");
+    assert!(
+        (before.top() - float.top()).abs() < 0.5,
+        "{before:?} {float:?}"
+    );
+    assert!(before.left() >= float.right(), "{before:?} {float:?}");
     assert!(after[0].left() >= float.right(), "{float:?} {after:?}");
     assert!(
         after
@@ -647,4 +843,91 @@ fn nested_float_in_an_inline_box_affects_following_block_content() {
     });
     assert_eq!(float.size(), vec2(40.0, 40.0), "{float:?}");
     assert!(sibling.top() < float.bottom(), "{float:?} {sibling:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn changing_a_nested_float_updates_wrapping_and_its_click_target() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".flow { display:flow-root; width:120px; height:60px; } \
+         .parent, .text { display:inline; } \
+         .float { display:inline; float:left; width:40px; height:40px; } \
+         .float.right { float:right; }",
+    )
+    .unwrap()
+    .install(&context);
+    let right = std::cell::Cell::new(false);
+    let bounds = std::cell::Cell::new([Rect::NOTHING; 3]);
+    let clicks = std::cell::Cell::new(0);
+    let mut build = |ui: &mut Ui| {
+        let mut floated = Rect::NOTHING;
+        let mut text = Rect::NOTHING;
+        let flow = ui
+            .add(
+                (|ui: &mut Ui| {
+                    ui.add(
+                        (|ui: &mut Ui| {
+                            let response = ui.add(
+                                (|ui: &mut Ui| {
+                                    ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::click())
+                                        .1
+                                })
+                                .selector(if right.get() {
+                                    ".float.right"
+                                } else {
+                                    ".float"
+                                }),
+                            );
+                            floated = response.rect;
+                            clicks.set(clicks.get() + usize::from(response.clicked()));
+                            text = ui.add(egui::Label::new("X").selector(".text")).rect;
+                            ui.response()
+                        })
+                        .selector(".parent"),
+                    );
+                    ui.response()
+                })
+                .selector(".flow"),
+            )
+            .rect;
+        bounds.set([flow, floated, text]);
+    };
+    frame(&context, 200.0, 0.0, vec![], &mut build);
+    let [_, floated, text] = bounds.get();
+    assert!(text.left() >= floated.right());
+    right.set(true);
+    frame(&context, 200.0, 1.0, vec![], &mut build);
+    let [flow, floated, text] = bounds.get();
+    assert!((floated.right() - flow.right()).abs() < 0.5);
+    assert!(text.right() <= floated.left());
+    let position = floated.center();
+    frame(
+        &context,
+        200.0,
+        1.1,
+        vec![
+            Event::PointerMoved(position),
+            Event::PointerButton {
+                pos: position,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        &mut build,
+    );
+    frame(
+        &context,
+        200.0,
+        1.2,
+        vec![Event::PointerButton {
+            pos: position,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        &mut build,
+    );
+    assert_eq!(clicks.get(), 1);
 }

@@ -47,7 +47,8 @@ impl Tree<'_> {
         }
         let inline = |id: &NodeId| {
             let n = &self.nodes[usize::from(*id)];
-            (n.format.inline_level && !n.style.float.is_floated())
+            n.format.inline_level
+                || n.style.float.is_floated()
                 || n.style.position.is_out_of_flow()
                 || n.style.display == Display::None
         };
@@ -1475,7 +1476,6 @@ impl Tree<'_> {
             .border
             .map(|v| raw(v.into_raw(), basis).unwrap_or(0.0));
         let inset = vec2(padding.left + border.left, padding.top + border.top);
-        let block = block.as_deref();
         let content_inset = padding.top + padding.bottom + border.top + border.bottom;
         let height = input
             .known_dimensions
@@ -1507,7 +1507,16 @@ impl Tree<'_> {
                 width: matches!(available.width, AvailableSpace::Definite(_)).then_some(width),
                 height,
             };
-            self.inline_content(id, input, width, parent_size, inset, block)
+            if let Some(block) = block {
+                block.apply_content_box_inset([inset.x, padding.right + border.right]);
+                self.inline_content(id, input, width, parent_size, inset, block)
+            } else {
+                let mut local = taffy::BlockFormattingContext::new();
+                let mut root = local.root_block_context();
+                root.set_width(width + padding.left + padding.right + border.left + border.right);
+                root.apply_content_box_inset([inset.x, padding.right + border.right]);
+                self.inline_content(id, input, width, parent_size, inset, &mut root)
+            }
         })
     }
 
@@ -1518,7 +1527,7 @@ impl Tree<'_> {
         width: f32,
         parent_size: Size<Option<f32>>,
         inset: Vec2,
-        block: Option<&taffy::BlockContext<'_>>,
+        block: &mut taffy::BlockContext<'_>,
     ) -> Size<f32> {
         struct Token {
             node: NodeId,
@@ -1534,6 +1543,7 @@ impl Tree<'_> {
             text_offset: Vec2,
             text_size: Vec2,
             marker: Option<String>,
+            floating: bool,
         }
         let mut tokens = Vec::new();
         let mut stack: Vec<_> = self.nodes[usize::from(id)]
@@ -1552,12 +1562,18 @@ impl Tree<'_> {
             if node.style.position.is_out_of_flow() {
                 continue;
             }
-            if node.format.display == DisplayKind::Inline && !node.children.is_empty() {
+            if node.format.display == DisplayKind::Inline
+                && !node.style.float.is_floated()
+                && !node.children.is_empty()
+            {
                 wrappers.push(child);
                 stack.extend(node.children.iter().rev().copied());
                 continue;
             }
-            if node.format.display == DisplayKind::Inline && !node.runs.is_empty() {
+            if node.format.display == DisplayKind::Inline
+                && !node.style.float.is_floated()
+                && !node.runs.is_empty()
+            {
                 let padding = node
                     .parent_style
                     .padding
@@ -1601,9 +1617,25 @@ impl Tree<'_> {
                         text_offset: vec2(left, top),
                         text_size: vec2(run.width, run.height),
                         marker: None,
+                        floating: false,
                     });
                 }
             } else {
+                let floating = node.style.float.is_floated();
+                let margin = node
+                    .parent_style
+                    .margin
+                    .resolve_or_zero(parent_size.width, crate::math::resolve);
+                let available_space = if floating && width.is_finite() {
+                    Size {
+                        width: AvailableSpace::Definite(
+                            (width - margin.left - margin.right).max(0.0),
+                        ),
+                        height: AvailableSpace::MaxContent,
+                    }
+                } else {
+                    Size::MAX_CONTENT
+                };
                 let output = self.compute_child_layout(
                     child,
                     LayoutInput {
@@ -1613,15 +1645,11 @@ impl Tree<'_> {
                             width: false,
                             height: false,
                         },
-                        available_space: Size::MAX_CONTENT,
+                        available_space,
                         vertical_margins_are_collapsible: taffy::Line::FALSE,
                         ..input
                     },
                 );
-                let margin = self.nodes[usize::from(child)]
-                    .parent_style
-                    .margin
-                    .resolve_or_zero(parent_size.width, crate::math::resolve);
                 tokens.push(Token {
                     node: child,
                     range: None,
@@ -1636,6 +1664,7 @@ impl Tree<'_> {
                     text_offset: Vec2::ZERO,
                     text_size: vec2(output.size.width, output.size.height),
                     marker: None,
+                    floating,
                 });
             }
             self.nodes[usize::from(child)].fragments.clear();
@@ -1648,24 +1677,14 @@ impl Tree<'_> {
             y: f32,
             width: f32,
         }
-        let make_line = |y: f32| {
-            block.map_or(
-                Line {
-                    items: Vec::new(),
-                    x: 0.0,
-                    y,
-                    width,
-                },
-                |block| {
-                    let slot = block.find_content_slot(y, taffy::Clear::None, None);
-                    Line {
-                        items: Vec::new(),
-                        x: slot.x,
-                        y: slot.y.max(y),
-                        width: width.min(slot.width),
-                    }
-                },
-            )
+        let make_line = |block: &taffy::BlockContext<'_>, y: f32| {
+            let slot = block.find_content_slot(y, taffy::Clear::None, None);
+            Line {
+                items: Vec::new(),
+                x: slot.x - inset.x,
+                y: slot.y.max(y),
+                width: width.min(slot.width),
+            }
         };
         fn line_height(line: &Line, tokens: &[Token], base: f32) -> f32 {
             line.items
@@ -1675,11 +1694,63 @@ impl Tree<'_> {
         }
         let default_line_height = format.used_line_height().unwrap_or(0.0);
         let mut lines = Vec::new();
-        let mut line = make_line(inset.y);
+        let mut line = make_line(block, inset.y);
         let mut line_width = 0.0;
         let mut gap = 0.0_f32;
         let mut maximum = 0.0_f32;
+        let mut float_bands = Vec::new();
         for (index, token) in tokens.iter().enumerate() {
+            if token.floating {
+                let node = &mut self.nodes[usize::from(token.node)];
+                let direction = node.style.float.float_direction().unwrap();
+                let min_y = if !line.items.is_empty() && line_width + token.width > line.width {
+                    line.y + line_height(&line, &tokens, default_line_height)
+                } else {
+                    line.y
+                };
+                let location = block.place_floated_box(
+                    Size {
+                        width: token.width,
+                        height: token.height,
+                    },
+                    min_y,
+                    direction,
+                    node.style.clear,
+                    line.items.is_empty() && lines.is_empty(),
+                );
+                float_bands.push((location.y, location.y + token.height, token.width));
+                let updated = make_line(block, line.y);
+                line.x = updated.x;
+                line.width = updated.width;
+                if line.items.is_empty() {
+                    line.y = updated.y;
+                }
+                if input.run_mode == RunMode::PerformLayout {
+                    node.layout.location = taffy::Point {
+                        x: location.x + token.offset.x,
+                        y: location.y + token.offset.y,
+                    };
+                    node.layout.size = Size {
+                        width: token.size.x,
+                        height: token.size.y,
+                    };
+                    node.layout.padding = node
+                        .parent_style
+                        .padding
+                        .resolve_or_zero(parent_size.width, crate::math::resolve);
+                    node.layout.border = node
+                        .parent_style
+                        .border
+                        .resolve_or_zero(parent_size.width, crate::math::resolve);
+                    node.layout.margin = node
+                        .parent_style
+                        .margin
+                        .resolve_or_zero(parent_size.width, crate::math::resolve);
+                    node.layout_parent = Some(id);
+                    node.layout_axes = self.axes.last().copied().unwrap_or_default();
+                }
+                continue;
+            }
             if token.range.as_ref().is_some_and(|range| range.is_empty())
                 && !token.newline
                 && token.width == 0.0
@@ -1699,9 +1770,29 @@ impl Tree<'_> {
                 maximum = maximum.max(line_width);
                 let next_y = line.y + line_height(&line, &tokens, default_line_height);
                 lines.push(line);
-                line = make_line(next_y);
+                line = make_line(block, next_y);
                 line_width = 0.0;
                 gap = 0.0;
+            }
+            if line.items.is_empty() && token.width > line.width && block.has_active_floats(line.y)
+            {
+                let mut slot = block.find_content_slot(line.y, taffy::Clear::None, None);
+                while width.min(slot.width) < token.width {
+                    let Some(segment) = slot.segment_id else {
+                        break;
+                    };
+                    slot = block.find_content_slot(line.y, taffy::Clear::None, Some(segment));
+                    if slot.segment_id.is_none() {
+                        slot.y = line.y.max(
+                            block
+                                .cleared_threshold(taffy::Clear::Both)
+                                .unwrap_or(line.y),
+                        );
+                    }
+                }
+                line.x = slot.x - inset.x;
+                line.y = slot.y;
+                line.width = width.min(slot.width);
             }
             line.items.push((index, line_width + gap));
             line_width += gap + token.width;
@@ -1715,7 +1806,7 @@ impl Tree<'_> {
                 maximum = maximum.max(line_width);
                 let next_y = line.y + line_height(&line, &tokens, default_line_height);
                 lines.push(line);
-                line = make_line(next_y);
+                line = make_line(block, next_y);
                 line_width = 0.0;
                 gap = 0.0;
             }
@@ -1767,6 +1858,14 @@ impl Tree<'_> {
             let height = line_height(&line, &tokens, default_line_height);
             content_height = content_height.max(line.y + height - inset.y);
             let line_end = line.items.last().map_or(0.0, |(i, x)| x + tokens[*i].width);
+            if input.available_space.width != AvailableSpace::MinContent {
+                let occupied: f32 = float_bands
+                    .iter()
+                    .filter(|(top, bottom, _)| *top < line.y + height && *bottom > line.y)
+                    .map(|(_, _, width)| *width)
+                    .sum();
+                maximum = maximum.max(line_end + occupied);
+            }
             let used_width = if line.width.is_finite() {
                 line.width
             } else {
@@ -1846,7 +1945,11 @@ impl Tree<'_> {
             }
         }
         if input.run_mode == RunMode::PerformLayout {
-            let mut nodes: Vec<_> = tokens.iter().map(|token| token.node).collect();
+            let mut nodes: Vec<_> = tokens
+                .iter()
+                .filter(|token| !token.floating)
+                .map(|token| token.node)
+                .collect();
             nodes.dedup();
             for node_id in nodes {
                 let node = &mut self.nodes[usize::from(node_id)];
@@ -1912,6 +2015,7 @@ impl Tree<'_> {
                     .collect();
                 let bounds = children
                     .iter()
+                    .filter(|child| !self.nodes[usize::from(**child)].style.float.is_floated())
                     .map(|child| self.nodes[usize::from(*child)].layout)
                     .fold(Rect::NOTHING, |bounds, l| {
                         bounds.union(Rect::from_min_size(
@@ -1946,9 +2050,32 @@ impl Tree<'_> {
                 }
             }
         }
+        let widest_float = float_bands
+            .iter()
+            .map(|(_, _, width)| *width)
+            .fold(0.0, f32::max);
+        if input.available_space.width != AvailableSpace::MinContent {
+            let mut edges = Vec::with_capacity(float_bands.len() * 2);
+            for (top, bottom, width) in float_bands {
+                if bottom > top {
+                    edges.push((top, width));
+                    edges.push((bottom, -width));
+                }
+            }
+            edges.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            let mut occupied = 0.0;
+            for (_, delta) in edges {
+                occupied += delta;
+                maximum = maximum.max(occupied);
+            }
+        }
         Size {
-            width: maximum,
-            height: content_height,
+            width: maximum.max(widest_float),
+            height: if block.is_bfc_root() {
+                content_height.max(block.floated_content_height_contribution() - inset.y)
+            } else {
+                content_height
+            },
         }
     }
 }

@@ -478,6 +478,69 @@ async fn floats_and_clear_position_selector_boxes_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn nested_inline_floats_paint_their_box_and_displace_text_and_clearance() {
+    for side in ["left", "right"] {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".flow {{ display:flow-root; width:100px; padding:6px; border:2px solid #777; background:white; }} \
+             .parent, .text {{ display:inline; }} \
+             .float {{ display:inline; float:{side}; width:40px; height:30px; padding:3px; border:2px solid blue; margin:4px; background:red; }} \
+             .clear {{ clear:both; height:8px; background:black; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let mut floated = egui::Rect::NOTHING;
+            let mut text = egui::Rect::NOTHING;
+            let mut cleared = egui::Rect::NOTHING;
+            let flow = ui
+                .add(
+                    (|ui: &mut egui::Ui| {
+                        ui.add(
+                            (|ui: &mut egui::Ui| {
+                                floated = ui.add(empty_response.selector(".float")).rect;
+                                text = ui.add(egui::Label::new("X").selector(".text")).rect;
+                                ui.response()
+                            })
+                            .selector(".parent"),
+                        );
+                        cleared = ui.add(empty_response.selector(".clear")).rect;
+                        ui.response()
+                    })
+                    .selector(".flow"),
+                )
+                .rect;
+            *capture.lock().unwrap() = Some((flow, floated, text, cleared));
+        })
+        .await;
+        let (flow, floated, text, cleared) = bounds.lock().unwrap().unwrap();
+        assert_eq!(floated.size(), egui::vec2(50.0, 40.0));
+        near(floated.top() - flow.top(), 12.0);
+        if side == "left" {
+            near(floated.left() - flow.left(), 12.0);
+            assert!(text.left() >= floated.right() + 3.5, "{text:?} {floated:?}");
+        } else {
+            near(flow.right() - floated.right(), 12.0);
+            assert!(text.right() <= floated.left() - 3.5, "{text:?} {floated:?}");
+        }
+        near(cleared.top() - floated.bottom(), 4.0);
+        assert_eq!(
+            pixel(&pixels, floated.left() + 1.0, floated.center().y),
+            [0, 0, 255, 255]
+        );
+        assert_eq!(
+            pixel(&pixels, floated.center().x, floated.center().y),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            pixel(&pixels, cleared.center().x, cleared.center().y),
+            [0, 0, 0, 255]
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn flex_order_wrap_and_contents_use_only_selector_composition_test() {
     let stylesheet = Stylesheet::parse(
         ".flex { display: flex; flex-wrap: wrap; width: 100px; gap: 5px; }\
