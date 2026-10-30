@@ -456,6 +456,61 @@ fn font_shorthand_accepts_optional_order_resets_and_inherits_unitless_line_heigh
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn all_inherit_uses_computed_relative_font_and_preserves_unitless_line_height() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".outer { font-size:12px; }\
+         .parent { font:2em/1.5 monospace; }\
+         .all-inherited { all:inherit; }\
+         .font-inherited { font:inherit; font-size:10px; }\
+         .absolute-line-height { font:inherit; font-size:10px; line-height:15px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(
+                    (|ui: &mut Ui| {
+                        for selector in [
+                            ".parent-text",
+                            ".all-inherited",
+                            ".font-inherited",
+                            ".absolute-line-height",
+                        ] {
+                            rects.push(ui.add(egui::Label::new("MMMM").selector(selector)).rect);
+                        }
+                        ui.response()
+                    })
+                    .selector(".parent"),
+                );
+                ui.response()
+            })
+            .selector(".outer"),
+        );
+    });
+
+    assert_eq!(rects.len(), 4);
+    assert!((rects[0].height() - 36.0).abs() < 0.5, "{rects:?}");
+    assert!(
+        (rects[1].height() - rects[0].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!((rects[2].height() - 15.0).abs() < 0.5, "{rects:?}");
+    assert!(
+        (rects[3].height() - rects[2].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!(
+        (rects[3].width() - rects[2].width()).abs() < 0.1,
+        "{rects:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn font_shorthand_selects_generic_families_and_uses_the_later_generic_fallback() {
     let context = Context::default();
     Stylesheet::parse(
@@ -561,6 +616,8 @@ fn font_shorthand_rejects_unsupported_optional_and_system_font_forms() {
         "20 sans-serif",
         "950 20px sans-serif",
         "450 20px sans-serif",
+        "bolder 20px sans-serif",
+        "lighter 20px sans-serif",
         "italic italic 20px sans-serif",
         "normal normal normal normal normal 20px sans-serif",
     ] {

@@ -196,11 +196,11 @@ fn inherited_by_all(declaration: &Declaration, keyword: crate::css::AllKeyword) 
         Declaration::All(_) | Declaration::CustomProperty { .. } | Declaration::Deferred { .. } => {
             false
         }
+        Declaration::FontShorthand(_) => false,
         Declaration::Color(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
-        | Declaration::FontStyle(_)
-        | Declaration::FontShorthand(_) => matches!(
+        | Declaration::FontStyle(_) => matches!(
             keyword,
             crate::css::AllKeyword::Inherit
                 | crate::css::AllKeyword::Unset

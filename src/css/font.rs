@@ -81,6 +81,9 @@ pub(crate) fn parse(value: &str) -> Result<FontShorthand, ParseError<&'static st
                     }
                     continue;
                 }
+                if name.eq_ignore_ascii_case("bolder") || name.eq_ignore_ascii_case("lighter") {
+                    return Err(ParseError::custom("relative font weights are unsupported"));
+                }
                 if name.eq_ignore_ascii_case("small-caps") {
                     return Err(ParseError::custom(
                         "font variants are unsupported in shorthand",
