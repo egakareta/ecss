@@ -21,16 +21,20 @@
     _~~`speak`~~_, _~~`speak-header`~~_, _~~`speak-numeral`~~_, _~~`speak-punctuation`~~_, _~~`speech-rate`~~_, _~~`stress`~~_, `table-layout`,
     `text-align`, ~~`text-decoration`~~, `text-indent`, `text-transform`, `top`, `unicode-bidi`, ~~`vertical-align`~~,
     ~~`visibility`~~, _~~`voice-family`~~_, _~~`volume`~~_, `white-space`, `widows`, ~~`width`~~, `word-spacing`, `z-index`. **Not planned:** aural/speech properties.
-- **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Supported.**
+- **[CSS Cascading and Inheritance Level 3](https://www.w3.org/TR/css3-cascade/) - Partial.**
   - CSS properties: ~~`all`~~.
-- **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Supported.**
+  - Complete declaration priority and computed shorthand/reset semantics remain under audit; implemented `all` behavior does not establish full module conformance.
+- **[CSS Cascading and Inheritance Level 4](https://www.w3.org/TR/css-cascade-4/) - Partial.**
   - CSS properties: ~~`all`~~.
+  - Inherits the remaining cascade limitations above.
 - **[CSS Cascading and Inheritance Level 5](https://www.w3.org/TR/css-cascade-5/) - Unsupported.**
   - CSS properties: `all`.
 - **[CSS Cascading and Inheritance Level 6](https://www.w3.org/TR/css-cascade-6/) - Unsupported.**
 - **[CSS Generated and Replaced Content](https://www.w3.org/TR/css3-content/) - Unsupported.**
   - CSS properties: `bookmark-label`, `bookmark-level`, `bookmark-state`, `content`, `quotes`, `string-set`.
-- **CSS Math - Supported.**
+- **CSS Math - Partial.**
+  - Length/percentage and number calculations support arithmetic, comparison, rounding, trigonometric and exponential functions. General dimensional algebra, time/resolution calculations, and math inside color components remain incomplete.
+  - Math expressions have a 128-operand budget (nested functions and unary operators also consume it); excessively complex inputs return a parse error.
 - **[CSS style Attribute Syntax](https://www.w3.org/TR/css-style-attr/) - Supported.**
 - **[CSS Syntax](https://www.w3.org/TR/css3-syntax/) - Unsupported.**
 - **[CSS Values and Units Level 3](https://www.w3.org/TR/css3-values/) - Partial.**
@@ -63,17 +67,21 @@
 
 ## Selectors, queries, and scoping
 
-- **[Media Queries Level 3](https://www.w3.org/TR/mediaqueries-3/) - Unsupported.**
-- **[Media Queries Level 4](https://www.w3.org/TR/mediaqueries-4/) - Unsupported.**
+- **[Media Queries Level 3](https://www.w3.org/TR/mediaqueries-3/) - Partial.**
+  - Viewport width, height, aspect ratio, orientation, query lists and nested rules work; device/output capability features remain incomplete.
+- **[Media Queries Level 4](https://www.w3.org/TR/mediaqueries-4/) - Partial.**
+  - Adds range comparisons and logical conditions to the viewport features above; this does not establish support for every Level 4 media feature.
 - **[Selectors Level 3](https://www.w3.org/TR/css3-selectors/) - Partial.**
 - **[Selectors Level 4](https://www.w3.org/TR/selectors4/) - Partial.**
 - **[Selectors Level 5](https://www.w3.org/TR/selectors-5/) - Unsupported.**
 - **[CSS Namespaces](https://www.w3.org/TR/css3-namespace/) - Unsupported.**
 - **[CSS Scoping](https://www.w3.org/TR/css-scoping-1/) - Unsupported.**
-- **[CSS Conditional Rules](https://www.w3.org/TR/css3-conditional/) - Unsupported.**
+- **[CSS Conditional Rules](https://www.w3.org/TR/css3-conditional/) - Partial.**
+  - `@supports` declaration/logical conditions and nested media/keyframe rules are implemented. General-enclosed handling, variable grammar, unknown nested rules and multiline diagnostics have outstanding review findings tracked in `EXECUTION.md`.
 - **[Non-element Selectors Module Level 1](https://www.w3.org/TR/selectors-nonelement-1/) - Unsupported.**
 - **[CSS Shadow Parts](https://www.w3.org/TR/css-shadow-parts-1/) - Unsupported.**
-- **[CSS Conditional Rules Level 4](https://www.w3.org/TR/css-conditional-4/) - Unsupported.**
+- **[CSS Conditional Rules Level 4](https://www.w3.org/TR/css-conditional-4/) - Partial.**
+  - `selector()` queries the existing selector subset; inherits the conditional-rule limitations above.
 - **[CSS Conditional Rules Level 5](https://www.w3.org/TR/css-conditional-5/) - Unsupported.**
   - CSS properties: `container`, `container-name`, `container-type`.
 - **[Media Queries Level 5](https://www.w3.org/TR/mediaqueries-5/) - Unsupported.**
@@ -240,10 +248,12 @@
 - **[CSS Basic User Interface](https://www.w3.org/TR/css3-ui/) - Partial.**
   - CSS properties: `box-sizing`, `caret-color`, `cursor`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-offset`~~, ~~`outline-style`~~,
     ~~`outline-width`~~, `resize`, ~~`text-overflow`~~.
-- **[CSS Color](https://www.w3.org/TR/css3-color/) - Unsupported.**
+- **[CSS Color](https://www.w3.org/TR/css3-color/) - Partial.**
   - CSS properties: ~~`color`~~, ~~`opacity`~~.
-- **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Unsupported.**
+  - Named/hex/RGB/HSL colors and group opacity are implemented. System-color and complete contextual-color behavior remain incomplete.
+- **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Partial.**
   - CSS properties: ~~`color`~~, ~~`opacity`~~.
+  - Modern RGB/HSL and HWB values support numeric/percentage channels and alpha; legacy comma syntax validates channel types. Output is 8-bit sRGB. Missing components (`none`), component math, additional color spaces, gamut mapping and color-space-aware interpolation remain incomplete.
 - **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Partial.**
   - CSS properties: `image-orientation`, `image-rendering`, ~~`object-fit`~~, ~~`object-position`~~.
 - **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Partial.**
@@ -305,8 +315,9 @@
     `voice-stress`, `voice-volume`.
 - **[CSS Text](https://www.w3.org/TR/css3-text/) - Partial.**
   - CSS properties: `hanging-punctuation`, `hyphens`, ~~`letter-spacing`~~, `line-break`, ~~`overflow-wrap`~~, ~~`tab-size`~~,
-    ~~`text-align`~~, ~~`text-align-all`~~, `text-align-last`, ~~`text-indent`~~, ~~`text-justify`~~, ~~`text-transform`~~,
+    ~~`text-align`~~, ~~`text-align-all`~~, ~~`text-align-last`~~, ~~`text-indent`~~, ~~`text-justify`~~, ~~`text-transform`~~,
     ~~`white-space`~~, ~~`word-break`~~, ~~`word-spacing`~~.
+  - Last-line alignment applies to final and forced-break lines, including logical direction mapping; `text-align` resets both alignment longhands and `justify-all` justifies the final line.
 - **[CSS Writing Modes](https://www.w3.org/TR/css3-writing-modes/) - Partial.**
   - CSS properties: ~~`direction`~~, `glyph-orientation-vertical`, `text-combine-upright`, ~~`text-orientation`~~, `unicode-bidi`,
     ~~`writing-mode`~~.
