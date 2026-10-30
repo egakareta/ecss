@@ -1442,7 +1442,7 @@ pub(super) fn clear_previous_label_selection(context: &Context) {
         .clear_selection();
 }
 
-pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
+pub(super) fn reorder_paint(frame: &Frame, context: &Context) -> Vec<usize> {
     type Part = (i32, i32, usize);
     type Path = smallvec::SmallVec<[Part; 4]>;
     let count = frame.nodes.len();
@@ -1468,7 +1468,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
     }) && frame.nodes.iter().all(|node| node.style.order == 0)
         && border_clips.iter().all(Option::is_none)
     {
-        return;
+        return (0..count).collect();
     }
     let mut contexts: Vec<Path> = vec![Path::new(); count];
     let mut groups = contexts.clone();
@@ -1574,7 +1574,7 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
     let mut order: Vec<_> = (0..count).collect();
     order.sort_by(|a, b| keys[*a].cmp(&keys[*b]));
     let Some(root) = frame.nodes[0].paint.as_ref() else {
-        return;
+        return order;
     };
     let layer = root.ui.layer_id();
     let entries = context.graphics(|layers| {
@@ -1893,4 +1893,5 @@ pub(super) fn reorder_paint(frame: &Frame, context: &Context) {
         cache.paint_order = ids;
         data.insert_temp(frame.nodes[0].id, cache);
     });
+    order
 }

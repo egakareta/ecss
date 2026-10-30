@@ -208,6 +208,80 @@ fn cursor_z_order_prefers_front_sibling_over_a_deeper_back_descendant() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn cursor_paint_order_keeps_nested_z_index_inside_its_stacking_context() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".root { position:relative; width:100px; height:50px; }\
+         .front { position:absolute; inset:0; z-index:2; cursor:crosshair; }\
+         .back { position:absolute; inset:0; z-index:1; }\
+         .back-child { position:absolute; inset:0; z-index:999; cursor:copy; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Button::new("Front").selector(".front"));
+                ui.add(
+                    (|ui: &mut Ui| {
+                        ui.add(egui::Button::new("Back").selector(".back-child"));
+                        ui.response()
+                    })
+                    .selector(".back"),
+                );
+                ui.response()
+            })
+            .selector(".root"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    let hovered = frame(
+        &context,
+        200.0,
+        0.1,
+        vec![Event::PointerMoved(pos2(20.0, 20.0))],
+        &mut build,
+    );
+
+    assert_eq!(
+        hovered.platform_output.cursor_icon,
+        egui::CursorIcon::Crosshair
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn cursor_paint_order_places_nested_child_over_parent_without_stacking_contexts() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { position:relative; width:100px; height:50px; cursor:crosshair; }\
+         .child { position:absolute; inset:0; cursor:copy; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                ui.add(egui::Button::new("Child").selector(".child"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+    let hovered = frame(
+        &context,
+        200.0,
+        0.1,
+        vec![Event::PointerMoved(pos2(20.0, 20.0))],
+        &mut build,
+    );
+
+    assert_eq!(hovered.platform_output.cursor_icon, egui::CursorIcon::Copy);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn cursor_keywords_map_to_egui_cursor_icons() {
     let values = [
         ("default", egui::CursorIcon::Default),
@@ -305,7 +379,61 @@ fn cursor_auto_preserves_egui_widget_cursor() {
         .cursor_icon
     }
 
-    assert_eq!(output(Some(".button { cursor:auto; }")), output(None));
+    let host_cursor = output(None);
+    assert_eq!(output(Some(".button { cursor:auto; }")), host_cursor);
+    assert_eq!(output(Some(".button { cursor:revert; }")), host_cursor);
+    assert_eq!(output(Some(".button { all:revert; }")), host_cursor);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn cursor_revert_and_all_revert_inherit_for_generic_elements() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { position:relative; width:100px; height:50px; cursor:crosshair; }\
+         .child-revert { position:absolute; inset:0; cursor:revert; }\
+         .child-all-revert { position:absolute; inset:0; all:revert; }",
+    )
+    .unwrap()
+    .install(&context);
+    let selector = std::cell::Cell::new(false);
+    let mut build = |ui: &mut Ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                let child_class = if selector.get() {
+                    ".child-all-revert"
+                } else {
+                    ".child-revert"
+                };
+                ui.add(
+                    (|ui: &mut Ui| {
+                        ui.allocate_exact_size(vec2(100.0, 50.0), egui::Sense::hover())
+                            .1
+                    })
+                    .selector(child_class),
+                );
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    };
+    frame(&context, 200.0, 0.0, Vec::new(), &mut build);
+
+    for (index, all_revert) in [false, true].into_iter().enumerate() {
+        selector.set(all_revert);
+        let output = frame(
+            &context,
+            200.0,
+            0.1 + index as f64 * 0.1,
+            vec![Event::PointerMoved(pos2(20.0, 20.0))],
+            &mut build,
+        );
+        assert_eq!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::Crosshair,
+            "all:revert={all_revert}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -348,7 +476,7 @@ fn cursor_inheritance_wide_keywords_and_nested_overrides_work() {
         ("child-unset", Some(egui::CursorIcon::Crosshair)),
         ("child-auto", Some(egui::CursorIcon::Default)),
         ("child-initial", Some(egui::CursorIcon::Default)),
-        ("child-revert", Some(egui::CursorIcon::Default)),
+        ("child-revert", Some(egui::CursorIcon::Crosshair)),
         ("child-copy", Some(egui::CursorIcon::Copy)),
         ("child-all-inherit", Some(egui::CursorIcon::Crosshair)),
         ("child-all-unset", Some(egui::CursorIcon::Crosshair)),

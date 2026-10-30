@@ -78,15 +78,18 @@ impl Value {
     pub(crate) fn from_all(keyword: AllKeyword) -> Self {
         match keyword {
             AllKeyword::Initial => Self::Initial,
-            AllKeyword::Inherit | AllKeyword::Unset | AllKeyword::Revert => Self::Inherit,
+            AllKeyword::Inherit => Self::Inherit,
+            AllKeyword::Unset => Self::Unset,
+            AllKeyword::Revert => Self::Revert,
         }
     }
 
     pub(crate) fn resolve(self, inherited: Computed) -> Computed {
         match self {
-            Self::Auto | Self::Initial | Self::Revert => Computed::Auto,
+            Self::Auto | Self::Initial => Computed::Auto,
             Self::Icon(icon) => Computed::Icon(icon),
             Self::Inherit | Self::Unset => inherited,
+            Self::Revert => inherited,
         }
     }
 }
@@ -94,9 +97,9 @@ impl Value {
 #[derive(Clone, Copy)]
 pub(crate) struct Candidate {
     pub(crate) cursor: Computed,
-    pub(crate) depth: usize,
-    pub(crate) z_index: i32,
-    pub(crate) order: usize,
+    pub(crate) revert: bool,
+    pub(crate) paint_order: usize,
+    pub(crate) root_order: usize,
     pub(crate) layer: egui::LayerId,
 }
 
@@ -109,7 +112,13 @@ pub(crate) fn submit(context: &Context, candidates: &[Candidate]) {
         let mut pending = data
             .get_temp::<Vec<Candidate>>(Id::unique(CANDIDATES_ID))
             .unwrap_or_default();
-        pending.extend_from_slice(candidates);
+        let root_order = pending
+            .last()
+            .map_or(0, |candidate| candidate.root_order + 1);
+        pending.extend(candidates.iter().copied().map(|mut candidate| {
+            candidate.root_order = root_order;
+            candidate
+        }));
         data.insert_temp(Id::unique(CANDIDATES_ID), pending);
     });
 }
@@ -145,15 +154,22 @@ impl egui::plugin::Plugin for Plugin {
         let winner = candidates
             .into_iter()
             .filter(|candidate| layer.is_none_or(|layer| candidate.layer == layer))
-            .max_by_key(|candidate| (candidate.depth, candidate.z_index, candidate.order));
+            .max_by_key(|candidate| (candidate.root_order, candidate.paint_order));
 
-        if let Some(Candidate {
-            cursor: Computed::Icon(icon),
-            ..
-        }) = winner
-        {
-            context.set_cursor_icon(icon);
-            self.applied = true;
+        if let Some(candidate) = winner {
+            let host_cursor = context.output(|output| output.cursor_icon);
+            if candidate.revert && host_cursor != CursorIcon::Default {
+                context.set_cursor_icon(host_cursor);
+                self.applied = true;
+                return;
+            }
+            match candidate.cursor {
+                Computed::Auto => {}
+                Computed::Icon(icon) => {
+                    context.set_cursor_icon(icon);
+                    self.applied = true;
+                }
+            }
         }
     }
 }

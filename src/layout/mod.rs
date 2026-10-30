@@ -2003,11 +2003,20 @@ pub(crate) fn show(
         }
     }
     if root {
+        if let Some(cache) = ui.ctx().data(|data| data.get_temp::<Cache>(id)) {
+            let frame = active.0.borrow();
+            paint_named_flow_texts(&frame, &cache, ui.ctx());
+        }
         let candidates = {
             let frame = active.0.borrow();
+            let paint_order = reorder_paint(&frame, ui.ctx());
+            let mut paint_ranks = vec![0; frame.nodes.len()];
+            for (rank, index) in paint_order.into_iter().enumerate() {
+                paint_ranks[index] = rank;
+            }
             let mut computed: Vec<cursor::Computed> = Vec::with_capacity(frame.nodes.len());
             let mut candidates = Vec::new();
-            for (order, node) in frame.nodes.iter().enumerate() {
+            for (index, node) in frame.nodes.iter().enumerate() {
                 let inherited = node
                     .parent
                     .map_or(cursor::Computed::Auto, |parent| computed[parent]);
@@ -2020,17 +2029,11 @@ pub(crate) fn show(
                     continue;
                 };
                 if !node.absent && !node.style.hidden && paint.response.hovered() {
-                    let mut depth = 0;
-                    let mut parent = node.parent;
-                    while let Some(index) = parent {
-                        depth += 1;
-                        parent = frame.nodes[index].parent;
-                    }
                     candidates.push(cursor::Candidate {
                         cursor: value,
-                        depth,
-                        z_index: node.style.z_index.unwrap_or_default(),
-                        order,
+                        revert: matches!(node.cursor_value, Some(cursor::Value::Revert)),
+                        paint_order: paint_ranks[index],
+                        root_order: 0,
                         layer: paint.ui.layer_id(),
                     });
                 }
@@ -2038,11 +2041,6 @@ pub(crate) fn show(
             candidates
         };
         cursor::submit(ui.ctx(), &candidates);
-        if let Some(cache) = ui.ctx().data(|data| data.get_temp::<Cache>(id)) {
-            let frame = active.0.borrow();
-            paint_named_flow_texts(&frame, &cache, ui.ctx());
-        }
-        reorder_paint(&active.0.borrow(), ui.ctx());
         let mut frame = active.0.borrow_mut();
         frame.nodes.clear();
         frame.stack.clear();
