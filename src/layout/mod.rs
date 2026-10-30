@@ -510,6 +510,7 @@ pub(crate) fn show(
     style.format.font_kerning = parent_style.format.font_kerning;
     style.format.text_orientation = parent_style.format.text_orientation.clone();
     style.format.line_height = parent_style.format.line_height;
+    style.format.line_height_multiplier = parent_style.format.line_height_multiplier;
     style.format.white_space = parent_style.format.white_space.clone();
     style.format.text_align = parent_style.format.text_align.clone();
     style.format.text_align_last = parent_style.format.text_align_last.clone();

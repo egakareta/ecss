@@ -1062,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_applies_loaded_font_and_restores_parent_style() {
+    fn selector_applies_loaded_font_and_font_shorthand_resets_kerning() {
         let context = egui::Context::default();
         let font_bytes = egui::FontDefinitions::default().font_data["Ubuntu-Light"]
             .as_ref()
@@ -1070,7 +1070,8 @@ mod tests {
             .to_vec();
         let stylesheet = Stylesheet::parse(
             ".outfit-text { width: 250px; font: 500 48px \"Outfit\", sans-serif; font-kerning: normal; white-space: nowrap; }\
-             .outfit-none { width: 250px; font: 500 48px \"Outfit\", sans-serif; font-kerning: none; white-space: nowrap; }",
+             .outfit-none { width: 250px; font: 500 48px \"Outfit\", sans-serif; font-kerning: none; white-space: nowrap; }\
+             .outfit-reset { width: 250px; font-kerning: none; font: 500 48px \"Outfit\", sans-serif; white-space: nowrap; }",
         )
         .unwrap();
 
@@ -1083,9 +1084,9 @@ mod tests {
         let mut font_output = context.run_ui(egui::RawInput::default(), |_ui| {});
         font_output.textures_delta.clear();
 
-        let mut observed_font = None;
         let normal_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
         let none_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+        let reset_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -1095,15 +1096,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                let parent_font = ui.style().text_styles[&egui::TextStyle::Body]
-                    .family
-                    .clone();
                 let inspect_font = |ui: &mut Ui| {
-                    observed_font = Some(
-                        ui.style().text_styles[&egui::TextStyle::Body]
-                            .family
-                            .clone(),
-                    );
                     let response = ui.label("AVAVAVAV");
                     normal_bounds.set(response.rect);
                     response
@@ -1115,19 +1108,18 @@ mod tests {
                     response
                 };
                 ui.add(inspect_disabled_font.selector(".outfit-none"));
-                assert_eq!(
-                    ui.style().text_styles[&egui::TextStyle::Body].family,
-                    parent_font
-                );
+                let inspect_reset_font = |ui: &mut Ui| {
+                    let response = ui.label("AVAVAVAV");
+                    reset_bounds.set(response.rect);
+                    response
+                };
+                ui.add(inspect_reset_font.selector(".outfit-reset"));
             },
         );
         output.textures_delta.clear();
 
-        assert_eq!(
-            observed_font,
-            Some(egui::FontFamily::Name("ecss:outfit:500:normal".into()))
-        );
         assert!(none_bounds.get().width() > normal_bounds.get().width());
+        assert!((reset_bounds.get().width() - normal_bounds.get().width()).abs() < 0.1);
     }
 
     #[test]

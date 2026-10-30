@@ -325,7 +325,7 @@ pub(super) fn prepare_text_job(
         if format.font_size_set {
             text_format.font_id.size = format.em;
         }
-        if let Some(height) = format.line_height {
+        if let Some(height) = format.used_line_height() {
             text_format.line_height = Some(height);
         }
         let mut output = String::new();
@@ -650,7 +650,7 @@ pub(super) fn text_runs(
             runs.push(crate::layout_tree::TextRun {
                 range,
                 width: size.x,
-                height: format.line_height.unwrap_or(size.y.max(height)),
+                height: format.used_line_height().unwrap_or(size.y.max(height)),
                 gap: if !preserve && content.len() < original.len() {
                     space
                 } else {

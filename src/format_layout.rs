@@ -1670,7 +1670,7 @@ impl Tree<'_> {
                 .map(|(index, _)| tokens[*index].height)
                 .fold(base, f32::max)
         }
-        let default_line_height = format.line_height.unwrap_or(0.0);
+        let default_line_height = format.used_line_height().unwrap_or(0.0);
         let mut lines = Vec::new();
         let mut line = make_line(inset.y);
         let mut line_width = 0.0;

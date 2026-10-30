@@ -408,12 +408,98 @@ fn font_shorthand_resolves_relative_sizes_line_heights_and_later_font_sizes() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_accepts_optional_order_resets_and_inherits_unitless_line_height() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".first { font:italic 700 18px/1.5 monospace; }\
+         .second { font:normal bold italic 18px/1.5 monospace; }\
+         .parent { font:italic bold 20px/1.5 monospace; }\
+         .reset { font:12px monospace; }\
+         .normal { font:12px/normal monospace; }\
+         .inherited { font:inherit; font-size:10px; }\
+         .absolute { font:inherit; font-size:10px; line-height:15px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        for selector in [".first", ".second", ".normal"] {
+            rects.push(ui.add(egui::Label::new("same").selector(selector)).rect);
+        }
+        ui.add(
+            (|ui: &mut Ui| {
+                for selector in [".reset", ".inherited", ".absolute"] {
+                    rects.push(ui.add(egui::Label::new("same").selector(selector)).rect);
+                }
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    });
+
+    assert!((rects[0].height() - 27.0).abs() < 0.5, "{rects:?}");
+    assert!(
+        (rects[1].height() - rects[0].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!(
+        (rects[2].height() - rects[3].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!((rects[4].height() - 15.0).abs() < 0.5, "{rects:?}");
+    assert!(
+        (rects[5].height() - rects[4].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_selects_generic_families_and_uses_the_later_generic_fallback() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".mono { width:max-content; font:16px monospace; }\
+         .fallback { width:max-content; font:16px \"missing-font\", monospace; }\
+         .proportional { width:max-content; font:16px sans-serif; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.clear();
+        for (selector, text) in [
+            (".mono", "iiii"),
+            (".mono", "WWWW"),
+            (".fallback", "iiii"),
+            (".proportional", "iiii"),
+            (".proportional", "WWWW"),
+        ] {
+            rects.push(ui.add(egui::Label::new(text).selector(selector)).rect);
+        }
+    });
+
+    assert!(
+        (rects[0].width() - rects[1].width()).abs() < 0.1,
+        "{rects:?}"
+    );
+    assert!(
+        (rects[0].width() - rects[2].width()).abs() < 0.1,
+        "{rects:?}"
+    );
+    assert!(rects[3].width() < rects[4].width(), "{rects:?}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn font_shorthand_css_wide_keywords_and_variables_keep_font_components_together() {
     let context = Context::default();
     Stylesheet::parse(
         ".parent { font: italic bold 20px/30px sans-serif; }\
          .inherited { font: inherit; }\
+         .unset { font: unset; }\
          .initial { font: initial; }\
+         .invalid { font: var(--missing-font); }\
          .variable { --font-value: italic 18px/27px sans-serif; font: var(--font-value); }",
     )
     .unwrap()
@@ -423,7 +509,7 @@ fn font_shorthand_css_wide_keywords_and_variables_keep_font_components_together(
         rects.clear();
         ui.add(
             (|ui: &mut Ui| {
-                for selector in [".inherited", ".initial"] {
+                for selector in [".inherited", ".unset", ".initial", ".invalid"] {
                     let response = ui.add(
                         (|ui: &mut Ui| {
                             ui.add(egui::Label::new("font"));
@@ -447,10 +533,18 @@ fn font_shorthand_css_wide_keywords_and_variables_keep_font_components_together(
         rects.push(variable.rect);
     });
 
-    assert_eq!(rects.len(), 3);
+    assert_eq!(rects.len(), 5);
     assert!((rects[0].height() - 30.0).abs() < 0.5, "{rects:?}");
-    assert!(rects[1].height() < rects[0].height() * 0.7, "{rects:?}");
-    assert!((rects[2].height() - 27.0).abs() < 0.5, "{rects:?}");
+    assert!(
+        (rects[1].height() - rects[0].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!(rects[2].height() < rects[0].height() * 0.7, "{rects:?}");
+    assert!(
+        (rects[3].height() - rects[0].height()).abs() < 0.5,
+        "{rects:?}"
+    );
+    assert!((rects[4].height() - 27.0).abs() < 0.5, "{rects:?}");
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -459,9 +553,16 @@ fn font_shorthand_rejects_unsupported_optional_and_system_font_forms() {
     for value in [
         "small-caps 20px sans-serif",
         "condensed 20px sans-serif",
+        "ultra-condensed 20px sans-serif",
         "menu",
+        "status-bar",
         "italic 20px/ sans-serif",
         "italic 20px",
+        "20 sans-serif",
+        "950 20px sans-serif",
+        "450 20px sans-serif",
+        "italic italic 20px sans-serif",
+        "normal normal normal normal normal 20px sans-serif",
     ] {
         assert!(
             Stylesheet::parse(&format!(".text {{ font:{value}; }}")).is_err(),

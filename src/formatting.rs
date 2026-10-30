@@ -168,6 +168,7 @@ pub(crate) struct Formatting {
     pub hide_empty: bool,
     pub vertical_align: String,
     pub line_height: Option<f32>,
+    pub line_height_multiplier: Option<f32>,
     pub text_align: String,
     pub text_align_last: String,
     pub text_justify: String,
@@ -236,6 +237,7 @@ impl Default for Formatting {
             hide_empty: false,
             vertical_align: "baseline".into(),
             line_height: None,
+            line_height_multiplier: None,
             text_align: "start".into(),
             text_align_last: "auto".into(),
             text_justify: "auto".into(),
@@ -539,23 +541,38 @@ pub(crate) fn apply(
             f.vertical_align = value.into();
         }
         "line-height" => {
-            f.line_height = if value.eq_ignore_ascii_case("normal") {
-                None
+            if value.eq_ignore_ascii_case("normal") {
+                f.line_height = None;
+                f.line_height_multiplier = None;
             } else if let Ok(Some(n)) = crate::math::number(value, units) {
-                if !n.is_finite() || n < 0.0 {
+                let used = n * units.font;
+                if !n.is_finite() || n < 0.0 || !used.is_finite() {
                     return Err("invalid line-height");
                 }
-                Some(n * units.font)
+                f.line_height = None;
+                f.line_height_multiplier = Some(n);
             } else if let Ok(n) = value.parse::<f32>() {
-                if !n.is_finite() || n < 0.0 {
+                let used = n * units.font;
+                if !n.is_finite() || n < 0.0 || !used.is_finite() {
                     return Err("invalid line-height");
                 }
-                Some(n * units.font)
+                f.line_height = None;
+                f.line_height_multiplier = Some(n);
             } else if let Some(handle) = crate::math::length(value, units, false, true)? {
-                Some(crate::math::resolve(handle, units.font))
+                let length = crate::math::resolve(handle, units.font);
+                if !length.is_finite() || length < 0.0 {
+                    return Err("invalid line-height");
+                }
+                f.line_height = Some(length);
+                f.line_height_multiplier = None;
             } else {
                 let (n, p) = crate::layout_style::length_value(value, units, false)?;
-                Some(if p { n * units.font } else { n })
+                let length = if p { n * units.font } else { n };
+                if !length.is_finite() || length < 0.0 {
+                    return Err("invalid line-height");
+                }
+                f.line_height = Some(length);
+                f.line_height_multiplier = None;
             }
         }
         "text-align" => {
@@ -810,6 +827,13 @@ pub(crate) fn apply(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+impl Formatting {
+    pub(crate) fn used_line_height(&self) -> Option<f32> {
+        self.line_height
+            .or_else(|| self.line_height_multiplier.map(|value| value * self.em))
+    }
 }
 
 pub(crate) fn text_alignment_offset(

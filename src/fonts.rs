@@ -186,6 +186,9 @@ impl FontAssets {
             }) {
                 return Some(FontFamily::Name(font_family_id(variant).into()));
             }
+            if let Some(family) = generic_family(candidate) {
+                return Some(family);
+            }
         }
         None
     }
@@ -957,6 +960,14 @@ fn unquote(value: &str) -> Option<String> {
 
 pub(crate) fn normalize_family(family: &str) -> String {
     family.trim().to_ascii_lowercase()
+}
+
+fn generic_family(name: &str) -> Option<FontFamily> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "monospace" => Some(FontFamily::Monospace),
+        "serif" | "sans-serif" | "cursive" | "fantasy" => Some(FontFamily::Proportional),
+        _ => None,
+    }
 }
 
 fn font_family_id(font: &LoadedFont) -> String {

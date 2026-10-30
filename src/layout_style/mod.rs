@@ -1134,6 +1134,8 @@ pub(crate) fn apply_font_shorthand(
             output.format.font_weight = values.weight;
             output.format.font_italic = values.style;
             output.format.line_height = None;
+            output.format.line_height_multiplier = None;
+            output.format.font_kerning = crate::formatting::FontKerning::Auto;
             if let Some(line_height) = &values.line_height {
                 let _ = crate::formatting::apply("line-height", line_height, output, units)?;
             }
@@ -1157,6 +1159,8 @@ pub(crate) fn apply_font_shorthand(
                     output.format.font_weight = parent.format.font_weight;
                     output.format.font_italic = parent.format.font_italic;
                     output.format.line_height = parent.format.line_height;
+                    output.format.line_height_multiplier = parent.format.line_height_multiplier;
+                    output.format.font_kerning = parent.format.font_kerning;
                 }
                 crate::css::FontWideKeyword::Initial | crate::css::FontWideKeyword::Revert => {
                     let default = BoxStyle::default();
@@ -1164,6 +1168,8 @@ pub(crate) fn apply_font_shorthand(
                     output.format.font_weight = default.format.font_weight;
                     output.format.font_italic = default.format.font_italic;
                     output.format.line_height = default.format.line_height;
+                    output.format.line_height_multiplier = default.format.line_height_multiplier;
+                    output.format.font_kerning = default.format.font_kerning;
                 }
             }
         }
@@ -2295,7 +2301,10 @@ fn copy_format_property(
         "caption-side" => to.caption_bottom = from.caption_bottom,
         "empty-cells" => to.hide_empty = from.hide_empty,
         "vertical-align" => to.vertical_align = from.vertical_align.clone(),
-        "line-height" => to.line_height = from.line_height,
+        "line-height" => {
+            to.line_height = from.line_height;
+            to.line_height_multiplier = from.line_height_multiplier;
+        }
         "text-align" => {
             to.text_align = from.text_align.clone();
             to.text_align_last = from.text_align_last.clone();

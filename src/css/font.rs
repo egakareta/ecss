@@ -37,6 +37,7 @@ pub(crate) fn parse(value: &str) -> Result<FontShorthand, ParseError<&'static st
     let mut style_seen = false;
     let mut weight = 400;
     let mut weight_seen = false;
+    let mut optional_components = 0;
     let size = loop {
         input.skip_whitespace();
         let start = input.position();
@@ -46,34 +47,52 @@ pub(crate) fn parse(value: &str) -> Result<FontShorthand, ParseError<&'static st
             .clone();
         match token {
             Token::Ident(name) => {
-                if name.eq_ignore_ascii_case("normal") && !style_seen && !weight_seen {
-                    if next_token_is_style(&mut input) {
-                        weight_seen = true;
-                    } else {
-                        style_seen = true;
+                if is_font_size_keyword(&name) {
+                    break input.slice_from(start).trim().to_owned();
+                }
+                if name.eq_ignore_ascii_case("normal") {
+                    optional_components += 1;
+                    if optional_components > 4 {
+                        return Err(ParseError::custom("too many optional font components"));
                     }
                     continue;
                 }
-                if !style_seen
-                    && (name.eq_ignore_ascii_case("italic") || name.eq_ignore_ascii_case("oblique"))
-                {
-                    style = !name.eq_ignore_ascii_case("normal");
+                if name.eq_ignore_ascii_case("italic") || name.eq_ignore_ascii_case("oblique") {
+                    if style_seen {
+                        return Err(ParseError::custom("duplicate font style"));
+                    }
+                    style = true;
                     style_seen = true;
+                    optional_components += 1;
+                    if optional_components > 4 {
+                        return Err(ParseError::custom("too many optional font components"));
+                    }
                     continue;
                 }
-                if !weight_seen
-                    && (name.eq_ignore_ascii_case("normal") || name.eq_ignore_ascii_case("bold"))
-                {
-                    weight = if name.eq_ignore_ascii_case("bold") {
-                        700
-                    } else {
-                        400
-                    };
+                if name.eq_ignore_ascii_case("bold") {
+                    if weight_seen {
+                        return Err(ParseError::custom("duplicate font weight"));
+                    }
+                    weight = 700;
                     weight_seen = true;
+                    optional_components += 1;
+                    if optional_components > 4 {
+                        return Err(ParseError::custom("too many optional font components"));
+                    }
                     continue;
                 }
-                if is_font_size_keyword(&name) {
-                    break input.slice_from(start).trim().to_owned();
+                if name.eq_ignore_ascii_case("small-caps") {
+                    return Err(ParseError::custom(
+                        "font variants are unsupported in shorthand",
+                    ));
+                }
+                if is_font_stretch_keyword(&name) {
+                    return Err(ParseError::custom(
+                        "font stretch is unsupported in shorthand",
+                    ));
+                }
+                if is_system_font_keyword(&name) {
+                    return Err(ParseError::custom("system font forms are unsupported"));
                 }
                 return Err(ParseError::custom(
                     "font shorthand supports only style, weight, size, line-height, and family",
@@ -82,9 +101,13 @@ pub(crate) fn parse(value: &str) -> Result<FontShorthand, ParseError<&'static st
             Token::Number {
                 int_value: Some(value),
                 ..
-            } if !weight_seen && (1..=1000).contains(&value) => {
+            } if !weight_seen && (100..=900).contains(&value) && value % 100 == 0 => {
                 weight = value as u16;
                 weight_seen = true;
+                optional_components += 1;
+                if optional_components > 4 {
+                    return Err(ParseError::custom("too many optional font components"));
+                }
                 continue;
             }
             Token::Dimension { .. }
@@ -184,16 +207,25 @@ fn is_font_size_keyword(value: &str) -> bool {
     )
 }
 
-fn next_token_is_style(input: &mut Parser<'_>) -> bool {
-    let state = input.state();
-    input.skip_whitespace();
-    let is_style = matches!(
-        input.next().ok(),
-        Some(Token::Ident(name))
-            if name.eq_ignore_ascii_case("italic") || name.eq_ignore_ascii_case("oblique")
-    );
-    input.reset(&state);
-    is_style
+fn is_font_stretch_keyword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "ultra-condensed"
+            | "extra-condensed"
+            | "condensed"
+            | "semi-condensed"
+            | "semi-expanded"
+            | "expanded"
+            | "extra-expanded"
+            | "ultra-expanded"
+    )
+}
+
+fn is_system_font_keyword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
+    )
 }
 
 fn parse_component(

@@ -390,7 +390,7 @@ impl PropertyId {
             Self::BorderWidth(side) => Value::Number(style.border_widths[side]),
             Self::Length(property) => return property.get(style),
             Self::Number(property) => property.get(style),
-            Self::LineHeight => Value::Number(style.format.line_height?),
+            Self::LineHeight => Value::Number(style.format.used_line_height()?),
             Self::ColumnWidth => Value::Number(style.format.column_width?),
             Self::ColumnCount => Value::Number(style.format.column_count? as f32),
             Self::TabSize if style.format.tab_size_length => {
@@ -426,7 +426,8 @@ impl PropertyId {
             (Self::Length(property), Value::Length(value)) => property.set(style, value, arena),
             (Self::Number(property), Value::Number(value)) => property.set(style, *value),
             (Self::LineHeight, Value::Number(value)) => {
-                style.format.line_height = Some(value.max(0.0))
+                style.format.line_height = Some(value.max(0.0));
+                style.format.line_height_multiplier = None;
             }
             (Self::ColumnWidth, Value::Number(value)) => {
                 style.format.column_width = Some(value.max(0.0))
