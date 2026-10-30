@@ -528,6 +528,13 @@ pub(crate) fn parse(source: &str) -> Result<ParsedStylesheet, CssError> {
 }
 
 fn parse_rules(input: &mut CssParser<'_>) -> Result<ParsedStylesheet, ParseError<ParseIssue>> {
+    parse_rules_with_options(input, false)
+}
+
+fn parse_rules_with_options(
+    input: &mut CssParser<'_>,
+    ignore_unknown_at_rules: bool,
+) -> Result<ParsedStylesheet, ParseError<ParseIssue>> {
     let mut rule_parser = StylesheetRuleParser;
     let mut rules = Vec::new();
     let mut imports = Vec::new();
@@ -549,6 +556,11 @@ fn parse_rules(input: &mut CssParser<'_>) -> Result<ParsedStylesheet, ParseError
                 keyframes.append(&mut parsed.keyframes);
             }
             Err((error, _, location)) => {
+                if ignore_unknown_at_rules
+                    && matches!(&error.kind, ParseErrorKind::Custom(issue) if issue.message == "unsupported at-rule")
+                {
+                    continue;
+                }
                 let mut issue = match error.kind {
                     ParseErrorKind::Custom(issue) => issue,
                     ParseErrorKind::Basic(_) => ParseIssue::new("invalid CSS syntax"),
@@ -713,7 +725,7 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
                 })
             }),
             AtRulePrelude::Media(query) => {
-                let mut parsed = parse_rules(input)?;
+                let mut parsed = parse_rules_with_options(input, true)?;
                 if !parsed.imports.is_empty() {
                     return Err(ParseError::custom(ParseIssue::new(
                         "invalid nested import rule",
@@ -728,7 +740,7 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
                 Ok(ParsedRule::Media(parsed))
             }
             AtRulePrelude::Supports(enabled) => {
-                let parsed = parse_rules(input)?;
+                let parsed = parse_rules_with_options(input, true)?;
                 if !parsed.imports.is_empty() {
                     return Err(ParseError::custom(ParseIssue::new(
                         "invalid nested import rule",
@@ -988,6 +1000,9 @@ impl Declarations {
         let value = input.slice_from(start.position()).trim().to_owned();
 
         if name.starts_with("--") {
+            if name == "--" {
+                return Err(ParseError::custom("invalid custom property name"));
+            }
             let stripped = strip_important(&value);
             return Ok(Some(Declaration::CustomProperty {
                 name: name.to_string(),

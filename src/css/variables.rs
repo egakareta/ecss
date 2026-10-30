@@ -188,7 +188,7 @@ fn parse_name(source: &str) -> Option<String> {
     let mut parser = Parser::new(source);
     let name = parser.expect_ident().ok()?.to_string();
     parser.expect_exhausted().ok()?;
-    name.starts_with("--").then_some(name)
+    (name.starts_with("--") && name != "--").then_some(name)
 }
 
 fn substitute_inner(

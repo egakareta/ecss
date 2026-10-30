@@ -126,10 +126,18 @@ fn supports_selector_queries_and_unknown_conditions_do_not_match() {
         ".box { width:10px; height:10px; }
          @supports selector(.box) { .box { width:20px; } }
          @supports (selector(.box) and (display:flex)) { .box { width:25px; } }
-         @supports selector(div) { .box { width:30px; } }
-         @supports made-up(feature) { .box { width:40px; } }
-         @supports (--custom: value !bogus) { .box { width:50px; } }
          @supports (width:var(--value) unknown()) { .box { width:60px; } }
+         @supports selector(div) { .box { width:30px; } }
+         @supports future-feature(foo) { .box { width:40px; } }
+         @supports (future-feature(foo)) { .box { width:45px; } }
+         @supports (future-feature) { .box { width:47px; } }
+         @supports not() { .box { width:50px; } }
+         @supports not(display:flex) { .box { width:52px; } }
+         @supports and() { .box { width:55px; } }
+         @supports or() { .box { width:65px; } }
+         @supports (--: value) { .box { width:70px; } }
+         @supports (width:var(--)) { .box { height:20px; } }
+         @supports (--custom: value !bogus) { .box { width:50px; } }
          @supports (width:var(foo)) { .box { height:20px; } }",
     )
     .unwrap()
@@ -139,7 +147,28 @@ fn supports_selector_queries_and_unknown_conditions_do_not_match() {
     frame(&context, 100.0, 0.0, Vec::new(), |ui| {
         rect = ui.add(empty_response.selector(".box")).rect;
     });
-    assert_eq!(rect.size(), vec2(25.0, 10.0));
+    assert_eq!(rect.size(), vec2(60.0, 10.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn supports_ignores_unknown_nested_at_rules_and_continues_applying_the_group() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".box { width:10px; height:10px; }
+         @supports (display:flex) {
+             @future-rule feature { .box { width:90px; } }
+             .box { height:30px; }
+         }",
+    )
+    .unwrap()
+    .install(&context);
+
+    let mut rect = Rect::NOTHING;
+    frame(&context, 100.0, 0.0, Vec::new(), |ui| {
+        rect = ui.add(empty_response.selector(".box")).rect;
+    });
+    assert_eq!(rect.size(), vec2(10.0, 30.0));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -151,13 +180,29 @@ fn malformed_supports_conditions_report_source_lines() {
         "(display: flex) xor (color:red)",
         "(display: flex; color:red)",
         "not",
-        "not(display:flex)",
         "(display:flex) or (color:red) and (width:1px)",
     ] {
         let error = Stylesheet::parse(&format!("\n@supports {query} {{ .box {{ width:10px; }} }}"))
             .unwrap_err();
         assert_eq!(error.line(), 2, "{query}");
     }
+
+    let error = Stylesheet::parse(
+        "@supports (display:flex)\n and\n or (color:red) { .box { width:10px; } }",
+    )
+    .unwrap_err();
+    assert_eq!(error.line(), 3);
+
+    let error =
+        Stylesheet::parse("@supports (display:flex) {\n .box { width:invalid; }\n}").unwrap_err();
+    assert_eq!(error.line(), 2);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn reserved_custom_property_name_is_a_parse_error() {
+    let error = Stylesheet::parse(".box { --: value; }").unwrap_err();
+    assert_eq!(error.line(), 1);
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

@@ -1,16 +1,41 @@
 use super::{
-    CssParser, ParseError, ParseIssue, Token, parse_declarations, parse_selectors, strip_important,
-    variables,
+    CssParser, ParseError, ParseErrorKind, ParseIssue, Token, parse_declarations, parse_selectors,
+    strip_important,
 };
 
 pub(super) fn parse(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIssue>> {
-    let condition = parse_condition(input)?;
-    input.expect_exhausted().map_err(|_| invalid())?;
+    let condition = parse_condition(input).map_err(|error| with_source_line(error, input))?;
+    if input.expect_exhausted().is_err() {
+        return Err(invalid_at(input));
+    }
     Ok(condition)
 }
 
-fn invalid() -> ParseError<ParseIssue> {
-    ParseError::custom(ParseIssue::new("invalid supports condition"))
+fn invalid_at_line(line: u32) -> ParseError<ParseIssue> {
+    let mut issue = ParseIssue::new("invalid supports condition");
+    issue.line = Some(line);
+    ParseError::custom(issue)
+}
+
+fn invalid_at(input: &CssParser<'_>) -> ParseError<ParseIssue> {
+    invalid_at_line(input.current_source_location().line)
+}
+
+fn with_source_line(
+    error: ParseError<ParseIssue>,
+    input: &CssParser<'_>,
+) -> ParseError<ParseIssue> {
+    match error.kind {
+        ParseErrorKind::Custom(mut issue) => {
+            issue
+                .line
+                .get_or_insert(input.current_source_location().line);
+            ParseError::custom(issue)
+        }
+        ParseErrorKind::Basic(kind) => ParseError {
+            kind: ParseErrorKind::Basic(kind),
+        },
+    }
 }
 
 fn parse_condition(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIssue>> {
@@ -19,7 +44,9 @@ fn parse_condition(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIs
         .is_ok()
     {
         let condition = parse_in_parens(input)?;
-        input.expect_exhausted().map_err(|_| invalid())?;
+        if input.expect_exhausted().is_err() {
+            return Err(invalid_at(input));
+        }
         return Ok(!condition);
     }
 
@@ -28,16 +55,19 @@ fn parse_condition(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIs
         return Ok(first);
     }
 
-    let operator = input.expect_ident_cloned().map_err(|_| invalid())?;
+    let operator = match input.expect_ident_cloned() {
+        Ok(operator) => operator,
+        Err(_) => return Err(invalid_at(input)),
+    };
     let operator = operator.to_ascii_lowercase();
     if operator != "and" && operator != "or" {
-        return Err(invalid());
+        return Err(invalid_at(input));
     }
     let mut conditions = vec![first, parse_in_parens(input)?];
     while !input.is_exhausted() {
-        input
-            .expect_ident_matching(&operator)
-            .map_err(|_| invalid())?;
+        if input.expect_ident_matching(&operator).is_err() {
+            return Err(invalid_at(input));
+        }
         conditions.push(parse_in_parens(input)?);
     }
     Ok(if operator == "and" {
@@ -48,16 +78,25 @@ fn parse_condition(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIs
 }
 
 fn parse_in_parens(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIssue>> {
-    match input.next().map_err(|_| invalid())?.clone() {
+    let token = match input.next() {
+        Ok(token) => token.clone(),
+        Err(_) => return Err(invalid_at(input)),
+    };
+    match token {
         Token::ParenthesisBlock => input.parse_nested_block(|input| {
             let start = input.state();
-            let first = input.next().map_err(|_| invalid())?.clone();
+            let first = match input.next() {
+                Ok(token) => token.clone(),
+                Err(_) => return Err(invalid_at(input)),
+            };
             input.reset(&start);
             let grouped = match &first {
                 Token::ParenthesisBlock => true,
                 Token::Function(_) => true,
                 Token::Ident(name) if name.eq_ignore_ascii_case("not") => {
-                    input.expect_ident_matching("not").map_err(|_| invalid())?;
+                    if input.expect_ident_matching("not").is_err() {
+                        return Err(invalid_at(input));
+                    }
                     let declaration = input.try_parse(|input| input.expect_colon()).is_ok();
                     input.reset(&start);
                     !declaration
@@ -67,20 +106,19 @@ fn parse_in_parens(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIs
             let condition = if grouped {
                 parse_condition(input)?
             } else {
-                parse_declaration(input)?
+                parse_declaration(input).unwrap_or(false)
             };
-            input.expect_exhausted().map_err(|_| invalid())?;
+            if input.expect_exhausted().is_err() {
+                return Err(invalid_at(input));
+            }
             Ok(condition)
         }),
         Token::Function(name) => parse_function(input, name.as_ref()),
-        _ => Err(invalid()),
+        _ => Err(invalid_at(input)),
     }
 }
 
 fn parse_function(input: &mut CssParser<'_>, name: &str) -> Result<bool, ParseError<ParseIssue>> {
-    if matches!(name.to_ascii_lowercase().as_str(), "not" | "and" | "or") {
-        return Err(invalid());
-    }
     if name.eq_ignore_ascii_case("selector") {
         return input.parse_nested_block(|selector| {
             let start = selector.position();
@@ -101,21 +139,23 @@ fn parse_function(input: &mut CssParser<'_>, name: &str) -> Result<bool, ParseEr
 
 fn parse_declaration(input: &mut CssParser<'_>) -> Result<bool, ParseError<ParseIssue>> {
     let start = input.position();
+    let declaration_line = input.current_source_location().line;
     let mut contains_bang = false;
     while let Ok(token) = input.next().cloned() {
         match token {
-            Token::Semicolon => return Err(invalid()),
+            Token::Semicolon => return Err(invalid_at(input)),
             Token::Delim('!') => contains_bang = true,
             Token::Function(_)
             | Token::ParenthesisBlock
             | Token::SquareBracketBlock
             | Token::CurlyBracketBlock => {
+                let line = input.current_source_location().line;
                 input
                     .parse_nested_block(|input| {
                         while input.next().is_ok() {}
                         Ok::<_, ParseError<()>>(())
                     })
-                    .map_err(|_| invalid())?;
+                    .map_err(|_| invalid_at_line(line))?;
             }
             _ => {}
         }
@@ -125,14 +165,18 @@ fn parse_declaration(input: &mut CssParser<'_>) -> Result<bool, ParseError<Parse
         return Ok(false);
     }
     let mut syntax = CssParser::new(source);
-    let name = syntax.expect_ident_cloned().map_err(|_| invalid())?;
-    syntax.expect_colon().map_err(|_| invalid())?;
+    let syntax_line =
+        declaration_line.saturating_add(syntax.current_source_location().line.saturating_sub(1));
+    let name = syntax
+        .expect_ident_cloned()
+        .map_err(|_| invalid_at_line(syntax_line))?;
+    let syntax_line =
+        declaration_line.saturating_add(syntax.current_source_location().line.saturating_sub(1));
+    syntax
+        .expect_colon()
+        .map_err(|_| invalid_at_line(syntax_line))?;
     let name = name.as_ref();
-    let contains_var = variables::contains_var(source);
-    if !property_supported(name)
-        || !valid_var_functions(source)
-        || (contains_var && !name.starts_with("--") && !valid_supported_functions(source))
-    {
+    if !property_supported(name) || !valid_var_functions(source) {
         return Ok(false);
     }
     let mut declarations = CssParser::new(source);
@@ -143,7 +187,7 @@ fn parse_declaration(input: &mut CssParser<'_>) -> Result<bool, ParseError<Parse
 
 fn property_supported(name: &str) -> bool {
     if name.starts_with("--") {
-        return true;
+        return name != "--";
     }
     let source = format!("{name}: initial");
     let mut input = CssParser::new(&source);
@@ -154,37 +198,25 @@ fn property_supported(name: &str) -> bool {
 
 fn valid_var_functions(source: &str) -> bool {
     let mut input = CssParser::new(source);
-    valid_tokens(&mut input, false)
+    valid_tokens(&mut input)
 }
 
-fn valid_supported_functions(source: &str) -> bool {
-    let mut input = CssParser::new(source);
-    valid_tokens(&mut input, true)
-}
-
-fn valid_tokens(input: &mut CssParser<'_>, reject_unknown: bool) -> bool {
+fn valid_tokens(input: &mut CssParser<'_>) -> bool {
     while let Ok(token) = input.next().cloned() {
         let valid = match token {
-            Token::Function(name) => {
-                if reject_unknown && !supported_function(name.as_ref()) {
-                    return false;
-                }
-                input
-                    .parse_nested_block(|input| {
-                        let valid = if name.eq_ignore_ascii_case("var") {
-                            valid_var_contents(input, reject_unknown)
-                        } else {
-                            valid_tokens(input, reject_unknown)
-                        };
-                        Ok::<_, ParseError<()>>(valid)
-                    })
-                    .ok()
-                    .unwrap_or(false)
-            }
-            Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => input
+            Token::Function(name) => input
                 .parse_nested_block(|input| {
-                    Ok::<_, ParseError<()>>(valid_tokens(input, reject_unknown))
+                    let valid = if name.eq_ignore_ascii_case("var") {
+                        valid_var_contents(input)
+                    } else {
+                        valid_tokens(input)
+                    };
+                    Ok::<_, ParseError<()>>(valid)
                 })
+                .ok()
+                .unwrap_or(false),
+            Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => input
+                .parse_nested_block(|input| Ok::<_, ParseError<()>>(valid_tokens(input)))
                 .ok()
                 .unwrap_or(false),
             _ => true,
@@ -196,11 +228,11 @@ fn valid_tokens(input: &mut CssParser<'_>, reject_unknown: bool) -> bool {
     true
 }
 
-fn valid_var_contents(input: &mut CssParser<'_>, reject_unknown: bool) -> bool {
+fn valid_var_contents(input: &mut CssParser<'_>) -> bool {
     let Ok(name) = input.expect_ident_cloned() else {
         return false;
     };
-    if !name.starts_with("--") {
+    if !name.starts_with("--") || name.as_ref() == "--" {
         return false;
     }
     if input.is_exhausted() {
@@ -209,54 +241,5 @@ fn valid_var_contents(input: &mut CssParser<'_>, reject_unknown: bool) -> bool {
     if input.try_parse(|input| input.expect_comma()).is_err() {
         return false;
     }
-    valid_tokens(input, reject_unknown)
-}
-
-fn supported_function(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "var"
-            | "calc"
-            | "min"
-            | "max"
-            | "clamp"
-            | "round"
-            | "mod"
-            | "rem"
-            | "hypot"
-            | "sign"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "asin"
-            | "acos"
-            | "atan"
-            | "atan2"
-            | "sqrt"
-            | "exp"
-            | "pow"
-            | "log"
-            | "fit-content"
-            | "stripes"
-            | "superellipse"
-            | "url"
-            | "element"
-            | "linear-gradient"
-            | "repeating-linear-gradient"
-            | "radial-gradient"
-            | "repeating-radial-gradient"
-            | "conic-gradient"
-            | "repeating-conic-gradient"
-            | "cross-fade"
-            | "image"
-            | "image-set"
-            | "type"
-            | "rgb"
-            | "rgba"
-            | "hsl"
-            | "hsla"
-            | "steps"
-            | "cubic-bezier"
-            | "linear"
-    )
+    valid_tokens(input)
 }
