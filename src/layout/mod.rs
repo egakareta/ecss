@@ -322,9 +322,55 @@ fn matches_wide_property(declaration: &Declaration, name: &str) -> bool {
     }
 }
 
+fn inherited_background_property(
+    name: &str,
+    declarations: &[Declaration],
+    color: Color32,
+) -> Option<Declaration> {
+    if !matches!(
+        name,
+        "background"
+            | "background-color"
+            | "background-image"
+            | "background-attachment"
+            | "background-clip"
+            | "background-origin"
+            | "background-position"
+            | "background-repeat"
+            | "background-size"
+    ) {
+        return None;
+    }
+    let background = background_from_declarations(declarations.iter());
+    Some(match name {
+        "background" => Declaration::BackgroundShorthand(crate::css::BackgroundShorthand {
+            color,
+            images: background.images.to_vec(),
+            attachments: background.attachments.to_vec(),
+            clips: background.clips.to_vec(),
+            origins: background.origins.to_vec(),
+            positions: background.positions.to_vec(),
+            repeats: background.repeats.to_vec(),
+            sizes: background.sizes.to_vec(),
+        }),
+        "background-color" => Declaration::Background(color),
+        "background-image" => Declaration::BackgroundImage(background.images.to_vec()),
+        "background-attachment" => {
+            Declaration::BackgroundAttachment(background.attachments.to_vec())
+        }
+        "background-clip" => Declaration::BackgroundClip(background.clips.to_vec()),
+        "background-origin" => Declaration::BackgroundOrigin(background.origins.to_vec()),
+        "background-position" => Declaration::BackgroundPosition(background.positions.to_vec()),
+        "background-repeat" => Declaration::BackgroundRepeat(background.repeats.to_vec()),
+        "background-size" => Declaration::BackgroundSize(background.sizes.to_vec()),
+        _ => return None,
+    })
+}
+
 fn apply_all_rules(
     rules: Vec<(RuleState, Declaration)>,
     parent_declarations: &[Declaration],
+    parent_background_color: Color32,
 ) -> (
     Vec<(RuleState, Vec<Declaration>)>,
     Option<crate::css::AllKeyword>,
@@ -336,15 +382,23 @@ fn apply_all_rules(
             && should_inherit_wide_property(&layout.name, &layout.value)
         {
             let name = layout.name.clone();
-            effective.retain(|(_, previous)| !matches_wide_property(previous, &name));
             effective.push((state, declaration));
-            effective.extend(
-                parent_declarations
-                    .iter()
-                    .filter(|previous| matches_wide_property(previous, &name))
-                    .cloned()
-                    .map(|previous| (state, previous)),
-            );
+            if let Some(inherited) =
+                inherited_background_property(&name, parent_declarations, parent_background_color)
+            {
+                effective.push((state, inherited));
+            } else {
+                effective.extend(
+                    parent_declarations
+                        .iter()
+                        .filter(|previous| matches_wide_property(previous, &name))
+                        .cloned()
+                        .map(|previous| (state, previous)),
+                );
+                if name == "background" {
+                    effective.push((state, Declaration::Background(parent_background_color)));
+                }
+            }
         } else if let Declaration::All(keyword) = declaration {
             effective.retain(|(_, declaration)| survives_all(declaration));
             all_keyword = Some(keyword);
@@ -508,8 +562,11 @@ pub(crate) fn show(
                     .map(|declaration| (rule_state, declaration))
             })
             .collect::<Vec<_>>();
-        let (resolved, all_keyword) =
-            apply_all_rules(resolved, &parent_style.computed_declarations);
+        let (resolved, all_keyword) = apply_all_rules(
+            resolved,
+            &parent_style.computed_declarations,
+            parent_style.background_color,
+        );
         (custom_properties, resolved, all_keyword)
     };
     let (custom_properties, resolved_rules, all_keyword) = resolve_rules(state);

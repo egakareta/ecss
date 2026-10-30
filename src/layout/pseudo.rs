@@ -262,7 +262,11 @@ pub(super) fn pseudo_decoration_style(
                 .map(|declaration| (state, declaration))
         })
         .collect();
-    let (rules, all_keyword) = super::apply_all_rules(resolved, &parent.computed_declarations);
+    let (rules, all_keyword) = super::apply_all_rules(
+        resolved,
+        &parent.computed_declarations,
+        parent.background_color,
+    );
     match all_keyword {
         Some(crate::css::AllKeyword::Inherit) => {
             style = parent.clone();

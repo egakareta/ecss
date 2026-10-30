@@ -33,7 +33,7 @@ pub(super) fn resolved_background<'a>(
     background_from_declarations(ordered.into_iter().map(|(_, declaration)| declaration))
 }
 
-fn background_from_declarations<'a>(
+pub(super) fn background_from_declarations<'a>(
     declarations: impl Iterator<Item = &'a Declaration>,
 ) -> BackgroundPaint<'a> {
     fn reset(background: &mut BackgroundPaint<'_>) {
@@ -898,7 +898,7 @@ pub(super) fn resolved_pseudo_border_image_source(
 ) -> crate::css::BackgroundImage {
     let mut source = crate::css::BackgroundImage::None;
     let rules = matching_pseudo_rules(stylesheet, selector, pseudo, state, viewport);
-    let ordered = crate::css::cascade::ordered(rules.into_iter());
+    let ordered = crate::css::cascade::ordered(rules);
     for (_, declaration) in ordered {
         match declaration {
             Declaration::All(_) => source = crate::css::BackgroundImage::None,

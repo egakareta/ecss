@@ -1018,13 +1018,23 @@ impl Declarations {
                 return Err(ParseError::custom("invalid custom property name"));
             }
             let stripped = strip_important(&value);
+            if !self.allow_important && stripped.is_some() {
+                return Err(ParseError::custom("important is not allowed here"));
+            }
+            let value = stripped.unwrap_or(&value);
+            if has_top_level_bang(value) {
+                return Err(ParseError::custom("invalid custom property value"));
+            }
+            if value.trim().eq_ignore_ascii_case("revert-layer") {
+                return Err(ParseError::custom("cascade layers are unsupported"));
+            }
             return Ok(Some((
                 Declaration::CustomProperty {
                     name: name.to_string(),
-                    value: stripped.unwrap_or(&value).trim().to_owned(),
-                    important: important || stripped.is_some(),
+                    value: value.trim().to_owned(),
+                    important,
                 },
-                important || stripped.is_some(),
+                important,
             )));
         }
         if variables::contains_var(&value) {
@@ -1463,6 +1473,31 @@ fn strip_important(source: &str) -> Option<&str> {
         }
     }
     None
+}
+
+fn has_top_level_bang(source: &str) -> bool {
+    let mut input = CssParser::new(source);
+    while let Ok(token) = input.next_including_whitespace_and_comments() {
+        match token {
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => {
+                if input
+                    .parse_nested_block(|nested| {
+                        while nested.next().is_ok() {}
+                        Ok::<_, ParseError<()>>(())
+                    })
+                    .is_err()
+                {
+                    return true;
+                }
+            }
+            Token::Delim('!') => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn parse_length<'i>(

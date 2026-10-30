@@ -188,6 +188,10 @@ fn important_declarations_beat_normal_specificity_and_inline_styles() {
          .same { width:80px !important; }\
          .specific { width:40px !important; height:10px; }\
          .specific.extra { width:80px; }\
+         .same-important { width:40px !important; height:10px; }\
+         .same-important { width:80px !important; }\
+         .specific-important { width:40px !important; height:10px; }\
+         .specific-important.extra { width:80px !important; }\
          .inline { width:40px !important; height:10px; }\
          .inline-important { width:40px !important; height:10px; }",
     )
@@ -197,6 +201,11 @@ fn important_declarations_beat_normal_specificity_and_inline_styles() {
     frame(&context, 300.0, 0.0, Vec::new(), |ui| {
         rects.push(ui.add(empty_response.selector(".same")).rect);
         rects.push(ui.add(empty_response.selector(".specific.extra")).rect);
+        rects.push(ui.add(empty_response.selector(".same-important")).rect);
+        rects.push(
+            ui.add(empty_response.selector(".specific-important.extra"))
+                .rect,
+        );
         rects.push(
             ui.add(
                 empty_response
@@ -217,8 +226,10 @@ fn important_declarations_beat_normal_specificity_and_inline_styles() {
 
     assert_eq!(rects[0].width(), 80.0);
     assert_eq!(rects[1].width(), 40.0);
-    assert_eq!(rects[2].width(), 40.0);
-    assert_eq!(rects[3].width(), 90.0);
+    assert_eq!(rects[2].width(), 80.0);
+    assert_eq!(rects[3].width(), 80.0);
+    assert_eq!(rects[4].width(), 40.0);
+    assert_eq!(rects[5].width(), 90.0);
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -354,6 +365,83 @@ fn custom_properties_inherit_resolve_fallbacks_and_reject_cycles() {
     assert_eq!(rects[5].size(), rects[6].size());
     assert_eq!(rects[6].size(), rects[7].size());
     assert_eq!(inline_rect.size(), vec2(38.0, 10.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn custom_property_revert_inherits_and_initial_uses_the_fallback() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".parent { --size:72px; }\
+         .reverted { --size:20px; --size:revert; width:var(--size); height:10px; }\
+         .initial { --size:20px; --size:initial; width:var(--size, 36px); height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 200.0, 0.0, Vec::new(), |ui| {
+        ui.add(
+            (|ui: &mut Ui| {
+                rects = [".reverted", ".initial"]
+                    .into_iter()
+                    .map(|selector| ui.add(empty_response.selector(selector)).rect)
+                    .collect();
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    });
+
+    assert_eq!(rects[0].size(), vec2(72.0, 10.0));
+    assert_eq!(rects[1].size(), vec2(36.0, 10.0));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn custom_property_importance_annotation_is_removed_from_its_value() {
+    Stylesheet::parse(
+        ".valid { --value:fn(!token); --width:40px !important; width:var(--width); height:10px; }",
+    )
+    .unwrap();
+    assert!(Stylesheet::parse(".invalid { --value:token ! other; }").is_err());
+    assert!(Stylesheet::parse(".invalid { --value:revert-layer; }").is_err());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn important_custom_properties_follow_selector_and_inline_cascade_priority() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".priority { --width:70px !/**/IMPORTANT/**/; width:var(--width); height:10px; }\
+         .priority.specific { --width:90px; }\
+         .inline { --width:60px !important; width:var(--width); height:10px; }",
+    )
+    .unwrap()
+    .install(&context);
+    let mut rects = Vec::new();
+    frame(&context, 300.0, 0.0, Vec::new(), |ui| {
+        rects.push(ui.add(empty_response.selector(".priority.specific")).rect);
+        rects.push(
+            ui.add(
+                empty_response
+                    .selector(".inline")
+                    .inline_style(InlineStyle::parse("--width:90px;").unwrap()),
+            )
+            .rect,
+        );
+        rects.push(
+            ui.add(
+                empty_response
+                    .selector(".inline")
+                    .inline_style(InlineStyle::parse("--width:100px !important;").unwrap()),
+            )
+            .rect,
+        );
+    });
+
+    assert_eq!(rects[0].size(), vec2(70.0, 10.0));
+    assert_eq!(rects[1].size(), vec2(60.0, 10.0));
+    assert_eq!(rects[2].size(), vec2(100.0, 10.0));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

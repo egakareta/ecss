@@ -34,14 +34,14 @@ pub(crate) fn compute(
         }
         priorities.insert(name.clone(), *important);
         match value.trim().to_ascii_lowercase().as_str() {
-            "inherit" | "unset" => {
+            "inherit" | "unset" | "revert" => {
                 if let Some(inherited) = parent.get(name) {
                     values.insert(name.clone(), inherited.clone());
                 } else {
                     values.remove(name);
                 }
             }
-            "initial" | "revert" | "revert-layer" => {
+            "initial" | "revert-layer" => {
                 values.remove(name);
             }
             _ => {

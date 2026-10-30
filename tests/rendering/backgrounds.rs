@@ -38,6 +38,99 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn important_background_shorthands_reset_components_and_keep_longhand_cascade_test() {
+    let stylesheet = Stylesheet::parse(
+        ".reset { width:60px; height:30px; background-image:linear-gradient(#f00, #f00); }\
+         .reset { background:#0f0 !important; }\
+         .reset.specific { background-color:#00f; }\
+         .longhand { width:60px; height:30px; background:#f00 !important; background-color:#00f !important; }\
+         .initial { width:60px; height:30px; background-image:linear-gradient(#f00, #f00); background:initial !important; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        for selector in [".reset.specific", ".longhand", ".initial"] {
+            capture
+                .lock()
+                .unwrap()
+                .push(ui.add(empty_response.selector(selector)).rect);
+        }
+    })
+    .await;
+
+    let bounds = bounds.lock().unwrap();
+    for (rect, expected) in bounds
+        .iter()
+        .zip([[0, 255, 0, 255], [0, 0, 255, 255], [255; 4]])
+    {
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.center().y),
+            expected,
+            "pixel at {:?}",
+            rect.center()
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inherited_background_current_color_uses_the_parents_computed_color_test() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { width:120px; height:70px; color:#f00; background-color:currentColor; }\
+         .child { display:block; width:60px; height:30px; color:#00f; }\
+         .longhand { background-color:inherit; }\
+         .shorthand { background:inherit; }\
+         .image-parent { width:60px; height:30px; background:linear-gradient(transparent, transparent) #f00; }\
+         .image-child { display:block; width:60px; height:30px; background-color:#00f; background-image:inherit; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                for selector in [".longhand", ".shorthand"] {
+                    capture
+                        .lock()
+                        .unwrap()
+                        .push(ui.add(empty_response.selector(selector)).rect);
+                }
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                capture
+                    .lock()
+                    .unwrap()
+                    .push(ui.add(empty_response.selector(".image-child")).rect);
+                ui.response()
+            })
+            .selector(".image-parent"),
+        );
+    })
+    .await;
+
+    for (rect, expected) in
+        bounds
+            .lock()
+            .unwrap()
+            .iter()
+            .zip([[255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255]])
+    {
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.center().y),
+            expected,
+            "pixel at {:?}",
+            rect.center()
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn opacity_composites_overlapping_descendants_as_a_group_test() {
     let stylesheet = Stylesheet::parse(
         ".group { position:relative; width:60px; height:60px; opacity:50%; } \
