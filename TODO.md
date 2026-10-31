@@ -90,7 +90,7 @@ Property strike-throughs identify implemented behavior, not complete grammar or 
 - **[Media Queries Level 5](https://www.w3.org/TR/mediaqueries-5/) - Unsupported.**
 - **[CSS Custom Highlight API Level 1](https://www.w3.org/TR/css-highlight-api-1/) - Unsupported.**
 - **[CSS Nesting](https://www.w3.org/TR/css-nesting-1/) - Partial.**
-  - Nested-style-rule expansion is implemented. Selector matching limits and the integrated cascade/rendering behavior are under independent review; this does not establish complete nesting or Selectors conformance.
+  - Nested-style-rule expansion supports a class/ID descendant and child subset with nested media/supports. Non-leading `&` and ancestor-state matching have outstanding review findings; sibling, functional, attribute and type selectors remain unsupported. This does not establish complete nesting or Selectors conformance.
 
 ## Box model and layout
 
