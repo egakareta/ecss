@@ -44,13 +44,21 @@ async fn important_background_shorthands_reset_components_and_keep_longhand_casc
          .reset { background:#0f0 !important; }\
          .reset.specific { background-color:#00f; }\
          .longhand { width:60px; height:30px; background:#f00 !important; background-color:#00f !important; }\
-         .initial { width:60px; height:30px; background-image:linear-gradient(#f00, #f00); background:initial !important; }",
+         .initial { width:60px; height:30px; background-color:red; background-image:linear-gradient(#f00, #f00); background:initial !important; }\
+         .unset { width:60px; height:30px; background-color:red; background:unset; }\
+         .revert { width:60px; height:30px; background-color:red; background:revert; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
     let capture = bounds.clone();
     let pixels = render_ui_pixels(stylesheet, move |ui| {
-        for selector in [".reset.specific", ".longhand", ".initial"] {
+        for selector in [
+            ".reset.specific",
+            ".longhand",
+            ".initial",
+            ".unset",
+            ".revert",
+        ] {
             capture
                 .lock()
                 .unwrap()
@@ -60,10 +68,13 @@ async fn important_background_shorthands_reset_components_and_keep_longhand_casc
     .await;
 
     let bounds = bounds.lock().unwrap();
-    for (rect, expected) in bounds
-        .iter()
-        .zip([[0, 255, 0, 255], [0, 0, 255, 255], [255; 4]])
-    {
+    for (rect, expected) in bounds.iter().zip([
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255; 4],
+        [255; 4],
+        [255; 4],
+    ]) {
         assert_eq!(
             pixel(&pixels, rect.center().x, rect.center().y),
             expected,
@@ -75,12 +86,52 @@ async fn important_background_shorthands_reset_components_and_keep_longhand_casc
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn important_background_axes_and_layer_shorthand_preserve_other_animated_components() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes move { from { background-color:black; background-position-x:0%; background-position-y:0%; } \
+                           to { background-color:white; background-position-x:100%; background-position-y:100%; } } \
+         .box { width:40px; height:40px; background:red linear-gradient(lime,lime) left top / 4px 4px no-repeat; animation:move 1s linear both; } \
+         .layers { background-tbd:linear-gradient(lime,lime) left top / 4px 4px no-repeat !important; } \
+         .x { background-position-x:10px !important; } \
+         .inline { writing-mode:vertical-rl; background-position-inline:10px !important; }",
+    ).unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+        let mut capture = capture.lock().unwrap();
+        capture.clear();
+        for selector in [".box.layers", ".box.x", ".box.inline"] {
+            capture.push(ui.add(empty_response.selector(selector)).rect);
+        }
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for (rect, x, y) in [
+        (bounds[0], 1.0, 1.0),
+        (bounds[1], 11.0, 19.0),
+        (bounds[2], 19.0, 11.0),
+    ] {
+        assert_eq!(
+            pixel(&pixels, rect.left() + x, rect.top() + y),
+            [0, 255, 0, 255],
+            "{rect:?}"
+        );
+        let color = pixel(&pixels, rect.left() + 30.0, rect.top() + 30.0);
+        assert!(
+            (127..=128).contains(&color[0]) && color[0] == color[1] && color[1] == color[2],
+            "{color:?}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn inherited_background_current_color_uses_the_parents_computed_color_test() {
     let stylesheet = Stylesheet::parse(
         ".parent { width:120px; height:70px; color:#f00; background-color:currentColor; }\
          .child { display:block; width:60px; height:30px; color:#00f; }\
          .longhand { background-color:inherit; }\
-         .shorthand { background:inherit; }\
+         .shorthand { background-color:blue; background:inherit; }\
          .image-parent { width:60px; height:30px; background:linear-gradient(transparent, transparent) #f00; }\
          .image-child { display:block; width:60px; height:30px; background-color:#00f; background-image:inherit; }",
     )
@@ -1327,47 +1378,57 @@ async fn background_position_axis_start_end_keywords_follow_writing_direction_te
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn logical_background_repeat_axes_map_to_physical_tiles_test() {
-    let stylesheet = Stylesheet::parse(
+    for animated in [false, true] {
+        let animation = if animated {
+            "@keyframes inline { from,to { background-repeat:repeat-inline; } } \
+         @keyframes block { from,to { background:linear-gradient(red, red) left top / 10px 10px repeat-block; } } \
+         .horizontal-inline, .vertical-inline { animation:inline 1s linear infinite; } \
+         .vertical-block { animation:block 1s linear infinite; }"
+        } else {
+            ""
+        };
+        let stylesheet = Stylesheet::parse(&format!("{} {animation}",
         ".horizontal-inline { width:30px; height:20px; background-image:linear-gradient(red, red); background-size:10px 10px; background-repeat:repeat-inline; }\
          .vertical-inline { width:30px; height:20px; writing-mode:vertical-rl; background-image:linear-gradient(red, red); background-size:10px 10px; background-repeat:repeat-inline; }\
          .vertical-block { width:30px; height:20px; writing-mode:vertical-rl; background-image:linear-gradient(red, red); background-size:10px 10px; background-repeat:repeat-block; }\
          .vertical-longhands { width:30px; height:20px; writing-mode:vertical-rl; background-image:linear-gradient(red, red); background-size:10px 10px; background-repeat-inline:no-repeat; background-repeat-block:repeat; }",
-    )
+    ))
     .unwrap();
-    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
-    let capture = bounds.clone();
-    let pixels = render_ui_pixels(stylesheet, move |ui| {
-        for selector in [
-            ".horizontal-inline",
-            ".vertical-inline",
-            ".vertical-block",
-            ".vertical-longhands",
-        ] {
-            capture
-                .lock()
-                .unwrap()
-                .push(ui.add(empty_response.selector(selector)).rect);
-        }
-    })
-    .await;
+        let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+            for selector in [
+                ".horizontal-inline",
+                ".vertical-inline",
+                ".vertical-block",
+                ".vertical-longhands",
+            ] {
+                capture
+                    .lock()
+                    .unwrap()
+                    .push(ui.add(empty_response.selector(selector)).rect);
+            }
+        })
+        .await;
 
-    let bounds = bounds.lock().unwrap();
-    for (rect, repeat_x, repeat_y) in [
-        (bounds[0], true, false),
-        (bounds[1], false, true),
-        (bounds[2], true, false),
-        (bounds[3], true, false),
-    ] {
-        assert_eq!(
-            pixel(&pixels, rect.left() + 12.0, rect.top() + 2.0),
-            if repeat_x { [255, 0, 0, 255] } else { [255; 4] },
-            "horizontal tile at {rect:?}"
-        );
-        assert_eq!(
-            pixel(&pixels, rect.left() + 2.0, rect.top() + 12.0),
-            if repeat_y { [255, 0, 0, 255] } else { [255; 4] },
-            "vertical tile at {rect:?}"
-        );
+        let bounds = bounds.lock().unwrap();
+        for (rect, repeat_x, repeat_y) in [
+            (bounds[0], true, false),
+            (bounds[1], false, true),
+            (bounds[2], true, false),
+            (bounds[3], true, false),
+        ] {
+            assert_eq!(
+                pixel(&pixels, rect.left() + 12.0, rect.top() + 2.0),
+                if repeat_x { [255, 0, 0, 255] } else { [255; 4] },
+                "horizontal tile at {rect:?}"
+            );
+            assert_eq!(
+                pixel(&pixels, rect.left() + 2.0, rect.top() + 12.0),
+                if repeat_y { [255, 0, 0, 255] } else { [255; 4] },
+                "vertical tile at {rect:?}"
+            );
+        }
     }
 }
 

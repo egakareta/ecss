@@ -504,6 +504,25 @@ pub(crate) struct BackgroundRepeatPair {
     pub(crate) logical: Option<BackgroundRepeatLogical>,
 }
 
+impl BackgroundRepeatPair {
+    pub(crate) fn physical(
+        self,
+        writing: crate::formatting::Writing,
+    ) -> (BackgroundRepeat, BackgroundRepeat) {
+        match self.logical {
+            Some(BackgroundRepeatLogical::Inline) if writing.vertical() => {
+                (BackgroundRepeat::NoRepeat, self.x)
+            }
+            Some(BackgroundRepeatLogical::Inline) => (self.x, BackgroundRepeat::NoRepeat),
+            Some(BackgroundRepeatLogical::Block) if writing.vertical() => {
+                (self.y, BackgroundRepeat::NoRepeat)
+            }
+            Some(BackgroundRepeatLogical::Block) => (BackgroundRepeat::NoRepeat, self.y),
+            None => (self.x, self.y),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BackgroundPosition {
     pub(crate) x: BackgroundPositionAxis,

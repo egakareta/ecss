@@ -1369,17 +1369,24 @@ fn normalized_declarations(
     fn add_repeats(
         declarations: &mut Vec<(String, Declaration)>,
         repeats: &[crate::css::BackgroundRepeatPair],
+        writing: crate::formatting::Writing,
     ) {
         declarations.push((
             "background-repeat-x".to_owned(),
             Declaration::BackgroundRepeatX(BackgroundAxisValue::Values(
-                repeats.iter().map(|repeat| repeat.x).collect(),
+                repeats
+                    .iter()
+                    .map(|repeat| repeat.physical(writing).0)
+                    .collect(),
             )),
         ));
         declarations.push((
             "background-repeat-y".to_owned(),
             Declaration::BackgroundRepeatY(BackgroundAxisValue::Values(
-                repeats.iter().map(|repeat| repeat.y).collect(),
+                repeats
+                    .iter()
+                    .map(|repeat| repeat.physical(writing).1)
+                    .collect(),
             )),
         ));
     }
@@ -1396,14 +1403,16 @@ fn normalized_declarations(
                 Declaration::Background(background.color),
             ));
             add_positions(&mut declarations, &background.positions);
-            add_repeats(&mut declarations, &background.repeats);
+            add_repeats(&mut declarations, &background.repeats, axes.writing);
         }
         Declaration::BackgroundTbdShorthand(background) => {
             add_positions(&mut declarations, &background.positions);
-            add_repeats(&mut declarations, &background.repeats);
+            add_repeats(&mut declarations, &background.repeats, axes.writing);
         }
         Declaration::BackgroundPosition(positions) => add_positions(&mut declarations, positions),
-        Declaration::BackgroundRepeat(repeats) => add_repeats(&mut declarations, repeats),
+        Declaration::BackgroundRepeat(repeats) => {
+            add_repeats(&mut declarations, repeats, axes.writing)
+        }
         Declaration::BackgroundPositionX(BackgroundAxisValue::Values(_)) => {
             declarations.push(("background-position-x".to_owned(), declaration.clone()))
         }

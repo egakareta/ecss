@@ -934,6 +934,15 @@ pub(crate) fn show(
                     style.background_set = true;
                     style.background_current_color = false;
                 }
+                Declaration::BackgroundReset(keyword) => {
+                    style.background_color = if *keyword == crate::css::AllKeyword::Inherit {
+                        parent_style.background_color
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    style.background_set = true;
+                    style.background_current_color = false;
+                }
                 Declaration::Transition(property) => {
                     style.transitions.apply(property, &parent_style.transitions)
                 }

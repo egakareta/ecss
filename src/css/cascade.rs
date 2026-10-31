@@ -348,37 +348,3 @@ fn physical_side(side: &str, axes: LogicalAxes<'_>) -> &'static str {
     )
     .expect("logical side is valid")]
 }
-
-fn physical_background_axis(property: &str, writing: crate::formatting::Writing) -> &str {
-    match property {
-        "background-position-inline" => {
-            if writing.vertical() {
-                "background-position-y"
-            } else {
-                "background-position-x"
-            }
-        }
-        "background-position-block" => {
-            if writing.vertical() {
-                "background-position-x"
-            } else {
-                "background-position-y"
-            }
-        }
-        "background-repeat-inline" => {
-            if writing.vertical() {
-                "background-repeat-y"
-            } else {
-                "background-repeat-x"
-            }
-        }
-        "background-repeat-block" => {
-            if writing.vertical() {
-                "background-repeat-x"
-            } else {
-                "background-repeat-y"
-            }
-        }
-        _ => property,
-    }
-}

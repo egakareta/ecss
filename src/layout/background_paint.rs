@@ -465,30 +465,12 @@ fn set_repeat_lists(
     let mut x = Vec::with_capacity(repeats.len());
     let mut y = Vec::with_capacity(repeats.len());
     for repeat in repeats {
-        let (repeat_x, repeat_y) = normalize_repeat(*repeat, writing);
+        let (repeat_x, repeat_y) = repeat.physical(writing);
         x.push(repeat_x);
         y.push(repeat_y);
     }
     background.repeat_x = x;
     background.repeat_y = y;
-}
-
-fn normalize_repeat(
-    repeat: crate::css::BackgroundRepeatPair,
-    writing: crate::formatting::Writing,
-) -> (crate::css::BackgroundRepeat, crate::css::BackgroundRepeat) {
-    use crate::css::{BackgroundRepeat, BackgroundRepeatLogical};
-    match repeat.logical {
-        Some(BackgroundRepeatLogical::Inline) if writing.vertical() => {
-            (BackgroundRepeat::NoRepeat, repeat.x)
-        }
-        Some(BackgroundRepeatLogical::Inline) => (repeat.x, BackgroundRepeat::NoRepeat),
-        Some(BackgroundRepeatLogical::Block) if writing.vertical() => {
-            (repeat.y, BackgroundRepeat::NoRepeat)
-        }
-        Some(BackgroundRepeatLogical::Block) => (BackgroundRepeat::NoRepeat, repeat.y),
-        None => (repeat.x, repeat.y),
-    }
 }
 
 fn apply_repeat_axis(
