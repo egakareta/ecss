@@ -40,13 +40,13 @@ async fn selector_background_color_is_visible_in_rendered_widget_pixels_test() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn important_background_shorthands_reset_components_and_keep_longhand_cascade_test() {
     let stylesheet = Stylesheet::parse(
-        ".reset { width:60px; height:30px; background-image:linear-gradient(#f00, #f00); }\
+        ".reset { width:60px; height:20px; background-image:linear-gradient(#f00, #f00); }\
          .reset { background:#0f0 !important; }\
          .reset.specific { background-color:#00f; }\
-         .longhand { width:60px; height:30px; background:#f00 !important; background-color:#00f !important; }\
-         .initial { width:60px; height:30px; background-color:red; background-image:linear-gradient(#f00, #f00); background:initial !important; }\
-         .unset { width:60px; height:30px; background-color:red; background:unset; }\
-         .revert { width:60px; height:30px; background-color:red; background:revert; }",
+         .longhand { width:60px; height:20px; background:#f00 !important; background-color:#00f !important; }\
+         .initial { width:60px; height:20px; background-color:red; background-image:linear-gradient(#f00, #f00); background:initial !important; }\
+         .unset { width:60px; height:20px; background-color:red; background:unset; }\
+         .revert { width:60px; height:20px; background-color:red; background:revert; }",
     )
     .unwrap();
     let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -176,6 +176,45 @@ async fn inherited_background_current_color_uses_the_parents_computed_color_test
             expected,
             "pixel at {:?}",
             rect.center()
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn all_inherit_keeps_the_parents_computed_background_current_color() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { width:60px; height:40px; color:red; background-color:currentColor; } \
+         .child { all:inherit; color:blue; width:40px; height:20px; } \
+         .grandchild { background-color:inherit; width:20px; height:10px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new([egui::Rect::NOTHING; 2]));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                let child = ui
+                    .add(
+                        (|ui: &mut egui::Ui| {
+                            capture.lock().unwrap()[1] =
+                                ui.add(empty_response.selector(".grandchild")).rect;
+                            ui.response()
+                        })
+                        .selector(".child"),
+                    )
+                    .rect;
+                capture.lock().unwrap()[0] = child;
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    })
+    .await;
+    for rect in *bounds.lock().unwrap() {
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.center().y),
+            [255, 0, 0, 255]
         );
     }
 }
@@ -1583,6 +1622,31 @@ async fn background_axis_longhands_update_when_hover_style_changes_test() {
         hovered[0] > hovered[2],
         "hovered background position was {hovered:?}"
     );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn background_reset_on_hover_replaces_the_previous_color_in_the_same_frame() {
+    let stylesheet = Stylesheet::parse(
+        ".box { width:60px; height:30px; background:red; } \
+         .box:hover { background:initial; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_with_events(
+        stylesheet,
+        vec![
+            Vec::new(),
+            vec![egui::Event::PointerMoved(egui::pos2(20.0, 10.0))],
+        ],
+        move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
+        },
+    )
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
 }
 
 #[test]

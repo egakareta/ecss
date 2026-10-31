@@ -815,6 +815,7 @@ pub(crate) fn show(
     match all_keyword {
         Some(crate::css::AllKeyword::Inherit) => {
             style = (*parent_style).clone();
+            style.background_current_color = false;
             style.custom_properties = custom_properties.clone();
         }
         Some(crate::css::AllKeyword::Unset | crate::css::AllKeyword::Revert) => {
@@ -995,6 +996,7 @@ pub(crate) fn show(
             direction: style.layout.direction,
         },
     );
+    style.background_values.color = style.background_color;
     if !animation_properties.is_empty() {
         let (_, position_x) = crate::css::computed_background_position_axis(
             &style.background_values.position_x,
@@ -1930,14 +1932,11 @@ pub(crate) fn show(
         );
         if transition.background
             || animated_background_color
-            || resolved_rules
+            || current_state_rules
                 .iter()
                 .flat_map(|(_, declarations)| declarations)
                 .any(|declaration| {
                     matches!(
-                        declaration,
-                        Declaration::Background(_) | Declaration::BackgroundShorthand(_)
-                    ) || matches!(
                         declaration,
                         Declaration::Layout(layout)
                             if layout.name == "background" || layout.name == "background-color"
