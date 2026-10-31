@@ -109,17 +109,15 @@ fn shadow_length(value: &str, units: Units, negative: bool) -> Result<f32, &'sta
     Ok(value)
 }
 
-fn shadows(style: &DecorationStyle) -> Vec<Shadow> {
+fn shadows(style: &DecorationStyle) -> impl DoubleEndedIterator<Item = Shadow> + '_ {
     let count = style.shadow_offsets.len();
-    (0..count)
-        .map(|index| Shadow {
-            offset: style.shadow_offsets[index],
-            blur: coordinated(&style.shadow_blurs, index),
-            spread: coordinated(&style.shadow_spreads, index),
-            color: coordinated(&style.shadow_colors, index),
-            position: coordinated(&style.shadow_positions, index),
-        })
-        .collect()
+    (0..count).map(|index| Shadow {
+        offset: style.shadow_offsets[index],
+        blur: coordinated(&style.shadow_blurs, index),
+        spread: coordinated(&style.shadow_spreads, index),
+        color: coordinated(&style.shadow_colors, index),
+        position: coordinated(&style.shadow_positions, index),
+    })
 }
 
 fn coordinated<T: Copy>(values: &[T], index: usize) -> T {
@@ -247,6 +245,9 @@ pub(crate) fn shadow_shapes(
     padding: egui::epaint::MarginF32,
     margin: egui::epaint::MarginF32,
 ) -> Vec<Shape> {
+    if style.decorations.shadow_offsets.iter().all(Option::is_none) {
+        return Vec::new();
+    }
     let radii = resolved_radii(style, rect);
     let border_widths = style.layout.border.map(|value| {
         let value = value.into_raw();
@@ -263,7 +264,7 @@ pub(crate) fn shadow_shapes(
         border_widths.left,
     ];
     let mut shapes = Vec::new();
-    for shadow in shadows(&style.decorations).into_iter().rev() {
+    for shadow in shadows(&style.decorations).rev() {
         if shadow.position != position {
             continue;
         }
@@ -349,7 +350,6 @@ pub(crate) fn shadow_shapes(
 
 pub(crate) fn inset_shadow_extent(rect: Rect, style: &BoxStyle) -> f32 {
     shadows(&style.decorations)
-        .into_iter()
         .filter(|shadow| shadow.position == ShadowPosition::Inset)
         .filter_map(|shadow| {
             let offset = shadow.offset?;

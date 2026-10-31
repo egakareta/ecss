@@ -39,7 +39,7 @@ pub(super) fn measure_text(
         return None;
     }
     let (source_job, natural_size) = if let [galley] = galleys.as_slice() {
-        (galley.job.as_ref().clone(), galley.size())
+        (Cow::Borrowed(galley.job.as_ref()), galley.size())
     } else {
         let mut job = galleys[0].job.as_ref().clone();
         job.text.clear();
@@ -70,7 +70,7 @@ pub(super) fn measure_text(
                 );
         }
         let size = context.fonts_mut(|fonts| fonts.layout_job(job.clone()).size());
-        (job, size)
+        (Cow::Owned(job), size)
     };
     let source = prepare_text_job(context, &source_job, format, text_basis);
     let extra = (measured - natural_size).max(Vec2::ZERO);
@@ -281,6 +281,62 @@ pub(super) fn prepare_text_job(
     );
     let newlines = preserve || format.white_space == "pre-line";
     let mut result = job.clone();
+    let prepare_format = |text_format: &mut egui::TextFormat| {
+        text_format.font_id.family = crate::fonts::FontAssets::family_for_kerning(
+            context,
+            &text_format.font_id.family,
+            format.font_kerning == crate::formatting::FontKerning::None,
+        );
+        if format.font_size_set {
+            text_format.font_id.size = format.em;
+        }
+        if let Some(height) = format.used_line_height() {
+            text_format.line_height = Some(height);
+        }
+    };
+    let apply_wrap = |result: &mut egui::text::LayoutJob| {
+        if matches!(format.white_space.as_str(), "pre" | "nowrap") {
+            result.wrap.max_width = f32::INFINITY;
+        }
+        result.wrap.break_anywhere |=
+            matches!(format.word_break.as_str(), "break-all" | "break-word")
+                || matches!(format.overflow_wrap.as_str(), "break-word" | "anywhere")
+                || format.line_break == "anywhere";
+    };
+    let mut previous_space = false;
+    if format.text_transform == "none"
+        && format.word_spacing == 0.0
+        && format.text_indent.0 == 0.0
+        && !job.text.is_empty()
+        && job.text.chars().all(|character| {
+            if matches!(character, '\r' | '\t' | '\u{c}') || character == '\n' && !newlines {
+                return false;
+            }
+            let space = !preserve && character == ' ';
+            let unchanged = !space || !previous_space;
+            previous_space = space;
+            unchanged
+        })
+    {
+        result
+            .sections
+            .retain(|section| !section.byte_range.is_empty());
+        for section in &mut result.sections {
+            prepare_format(&mut section.format);
+            section.format.extra_letter_spacing = format.letter_spacing;
+            section.leading_space = 0.0;
+        }
+        result.sections.dedup_by(|next, previous| {
+            if next.format == previous.format {
+                previous.byte_range.end = next.byte_range.end;
+                true
+            } else {
+                false
+            }
+        });
+        apply_wrap(&mut result);
+        return result;
+    }
     result.text.clear();
     result.sections.clear();
     let mut space = false;
@@ -317,17 +373,7 @@ pub(super) fn prepare_text_job(
             space = false;
         }
         let mut text_format = job.format_at_byte(egui::text::ByteIndex(index)).clone();
-        text_format.font_id.family = crate::fonts::FontAssets::family_for_kerning(
-            context,
-            &text_format.font_id.family,
-            format.font_kerning == crate::formatting::FontKerning::None,
-        );
-        if format.font_size_set {
-            text_format.font_id.size = format.em;
-        }
-        if let Some(height) = format.used_line_height() {
-            text_format.line_height = Some(height);
-        }
+        prepare_format(&mut text_format);
         let mut output = String::new();
         let space_width = context.fonts_mut(|fonts| fonts.glyph_width(&text_format.font_id, ' '));
         let indent_spaces = if indent > 0.0 && space_width > 0.0 {
@@ -409,12 +455,7 @@ pub(super) fn prepare_text_job(
             result.append(character.encode_utf8(&mut [0; 4]), 0.0, text_format.clone());
         }
     }
-    if matches!(format.white_space.as_str(), "pre" | "nowrap") {
-        result.wrap.max_width = f32::INFINITY;
-    }
-    result.wrap.break_anywhere |= matches!(format.word_break.as_str(), "break-all" | "break-word")
-        || matches!(format.overflow_wrap.as_str(), "break-word" | "anywhere")
-        || format.line_break == "anywhere";
+    apply_wrap(&mut result);
     result
 }
 
@@ -532,9 +573,7 @@ fn galley_has_selection(galley: &egui::Galley, selection_color: Color32) -> bool
 }
 
 fn slice_job(job: &egui::text::LayoutJob, range: egui::text::ByteRange) -> egui::text::LayoutJob {
-    let mut result = job.clone();
-    result.text = job.text[range.start.0..range.end.0].to_owned();
-    result.sections = job
+    let sections = job
         .sections
         .iter()
         .filter_map(|section| {
@@ -546,8 +585,19 @@ fn slice_job(job: &egui::text::LayoutJob, range: egui::text::ByteRange) -> egui:
             })
         })
         .collect();
-    result.wrap.max_width = f32::INFINITY;
-    result
+    let mut wrap = job.wrap.clone();
+    wrap.max_width = f32::INFINITY;
+    egui::text::LayoutJob {
+        text: job.text[range.start.0..range.end.0].to_owned(),
+        sections,
+        wrap,
+        first_row_min_height: job.first_row_min_height,
+        break_on_newline: job.break_on_newline,
+        halign: job.halign,
+        justify: job.justify,
+        round_output_to_gui: job.round_output_to_gui,
+        keep_trailing_whitespace: job.keep_trailing_whitespace,
+    }
 }
 
 fn leading_space_at_byte(job: &egui::text::LayoutJob, byte: usize) -> f32 {
@@ -612,62 +662,77 @@ pub(super) fn text_runs(
     } else {
         natural_ends
     };
-    let mut minimum = 0.0_f32;
-    for &end in &intrinsic_ends {
-        let original = &job.text[start..end];
-        let content = if matches!(format.white_space.as_str(), "pre" | "break-spaces") {
-            original.trim_end_matches(['\r', '\n'])
-        } else {
-            original.trim_end_matches(|c: char| c.is_ascii_whitespace())
-        };
-        let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
-        let width = context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, range)).size().x);
-        minimum = minimum.max(width);
-        start = end;
-    }
-    start = 0;
-    for end in line_ends {
-        let original = &job.text[start..end];
-        let content = if preserve {
-            original.trim_end_matches(['\r', '\n'])
-        } else {
-            original.trim_end_matches(|c: char| c.is_ascii_whitespace())
-        };
-        let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
-        if let Some(section) = job
-            .sections
-            .iter()
-            .find(|section| section.byte_range.end.0 > start)
-        {
-            let size =
-                context.fonts_mut(|fonts| fonts.layout_job(slice_job(job, range.clone())).size());
-            let (space, height) = context.fonts_mut(|fonts| {
-                (
-                    fonts.glyph_width(&section.format.font_id, ' '),
-                    fonts.row_height(&section.format.font_id),
-                )
-            });
-            runs.push(crate::layout_tree::TextRun {
-                range,
-                width: size.x,
-                height: format.used_line_height().unwrap_or(size.y.max(height)),
-                gap: if !preserve && content.len() < original.len() {
-                    space
+    let shared_measurement = intrinsic_ends == line_ends
+        && preserve == matches!(format.white_space.as_str(), "pre" | "break-spaces");
+    context.fonts_mut(|fonts| {
+        let mut metrics: Option<(&egui::FontId, f32, f32)> = None;
+        let mut minimum = 0.0_f32;
+        if !shared_measurement {
+            for &end in &intrinsic_ends {
+                let original = &job.text[start..end];
+                let content = if matches!(format.white_space.as_str(), "pre" | "break-spaces") {
+                    original.trim_end_matches(['\r', '\n'])
                 } else {
-                    0.0
-                },
-                marker_width: format.text_overflow[1].marker().map_or(0.0, |marker| {
-                    let mut marker_job = egui::text::LayoutJob::default();
-                    marker_job.append(marker, 0.0, section.format.clone());
-                    context.fonts_mut(|fonts| fonts.layout_job(marker_job).size().x)
-                }),
-                newline: original.contains('\n'),
-                min_content_break: intrinsic_ends.binary_search(&end).is_ok(),
-            });
+                    original.trim_end_matches(|c: char| c.is_ascii_whitespace())
+                };
+                let range =
+                    egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
+                let width = fonts.layout_job(slice_job(job, range)).size().x;
+                minimum = minimum.max(width);
+                start = end;
+            }
         }
-        start = end;
-    }
-    (runs, minimum)
+        start = 0;
+        for end in line_ends {
+            let original = &job.text[start..end];
+            let content = if preserve {
+                original.trim_end_matches(['\r', '\n'])
+            } else {
+                original.trim_end_matches(|c: char| c.is_ascii_whitespace())
+            };
+            let range = egui::text::ByteIndex(start)..egui::text::ByteIndex(start + content.len());
+            if let Some(section) = job
+                .sections
+                .iter()
+                .find(|section| section.byte_range.end.0 > start)
+            {
+                let size = fonts.layout_job(slice_job(job, range.clone())).size();
+                let (space, height) = match metrics {
+                    Some((font, space, height)) if font == &section.format.font_id => {
+                        (space, height)
+                    }
+                    _ => {
+                        let space = fonts.glyph_width(&section.format.font_id, ' ');
+                        let height = fonts.row_height(&section.format.font_id);
+                        metrics = Some((&section.format.font_id, space, height));
+                        (space, height)
+                    }
+                };
+                if shared_measurement {
+                    minimum = minimum.max(size.x);
+                }
+                runs.push(crate::layout_tree::TextRun {
+                    range,
+                    width: size.x,
+                    height: format.used_line_height().unwrap_or(size.y.max(height)),
+                    gap: if !preserve && content.len() < original.len() {
+                        space
+                    } else {
+                        0.0
+                    },
+                    marker_width: format.text_overflow[1].marker().map_or(0.0, |marker| {
+                        let mut marker_job = egui::text::LayoutJob::default();
+                        marker_job.append(marker, 0.0, section.format.clone());
+                        fonts.layout_job(marker_job).size().x
+                    }),
+                    newline: original.contains('\n'),
+                    min_content_break: intrinsic_ends.binary_search(&end).is_ok(),
+                });
+            }
+            start = end;
+        }
+        (runs, minimum)
+    })
 }
 pub(super) struct FragmentedTextInput<'a> {
     pub(super) context: &'a Context,

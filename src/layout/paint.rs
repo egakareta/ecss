@@ -951,6 +951,16 @@ pub(super) fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> V
         .layout
         .border
         .map(|value| resolve(value.into_raw(), 0.0).unwrap_or(0.0));
+    let border_widths = [widths.top, widths.right, widths.bottom, widths.left];
+    if border_widths
+        .iter()
+        .zip(style.border_styles)
+        .all(|(width, style)| {
+            *width <= 0.0 || matches!(style, BorderStyle::None | BorderStyle::Hidden)
+        })
+    {
+        return Vec::new();
+    }
     let inner = rect - margin(widths);
     let outer_radii = crate::box_decoration::resolved_radii(style, rect);
     let inner_radii = [
@@ -976,7 +986,6 @@ pub(super) fn border_shapes(rect: Rect, style: &BoxStyle, current: Color32) -> V
     let mut shapes = Vec::new();
     let mut side_distance = [0.0_f32; 4];
     let mut side_lengths = [0.0_f32; 4];
-    let border_widths = [widths.top, widths.right, widths.bottom, widths.left];
     let mut segments = Vec::new();
     let points_per_corner = corner_segments + 1;
     for index in 0..corners.len() {

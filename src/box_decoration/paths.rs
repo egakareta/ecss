@@ -226,17 +226,22 @@ pub(super) fn interpolate_vertex(
     second: &egui::epaint::Vertex,
     amount: f32,
 ) -> egui::epaint::Vertex {
-    let first_color = first.color.to_array();
-    let second_color = second.color.to_array();
-    let color: [u8; 4] = std::array::from_fn(|index| {
-        (first_color[index] as f32
-            + (second_color[index] as f32 - first_color[index] as f32) * amount)
-            .round() as u8
-    });
+    let color = if first.color == second.color && amount.is_finite() {
+        first.color
+    } else {
+        let first_color = first.color.to_array();
+        let second_color = second.color.to_array();
+        let channel = |index: usize| {
+            (first_color[index] as f32
+                + (second_color[index] as f32 - first_color[index] as f32) * amount)
+                .round() as u8
+        };
+        Color32::from_rgba_premultiplied(channel(0), channel(1), channel(2), channel(3))
+    };
     egui::epaint::Vertex {
         pos: first.pos.lerp(second.pos, amount),
         uv: first.uv.lerp(second.uv, amount),
-        color: Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]),
+        color,
     }
 }
 

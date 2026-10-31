@@ -1012,18 +1012,20 @@ pub(crate) fn show(
     if style.background_current_color {
         style.background_color = style.current_color;
     }
-    style.background_values = resolved_background_from_rules(
-        &resolved_rules,
-        Some(&parent_style.background_values),
-        BackgroundContext {
-            writing: parent_style.format.writing,
-            direction: parent_style.layout.direction,
-        },
-        BackgroundContext {
-            writing: style.format.writing,
-            direction: style.layout.direction,
-        },
-    );
+    if has_background_declarations(&resolved_rules) {
+        style.background_values = resolved_background_from_rules(
+            &resolved_rules,
+            Some(&parent_style.background_values),
+            BackgroundContext {
+                writing: parent_style.format.writing,
+                direction: parent_style.layout.direction,
+            },
+            BackgroundContext {
+                writing: style.format.writing,
+                direction: style.layout.direction,
+            },
+        );
+    }
     style.background_values.color = style.background_color;
     if !animation_properties.is_empty() {
         let (_, position_x) = crate::css::computed_background_position_axis(

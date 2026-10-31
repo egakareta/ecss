@@ -8,6 +8,26 @@ pub(super) struct BackgroundContext {
     pub(super) direction: taffy::Direction,
 }
 
+pub(super) fn has_background_declarations(rules: &[(RuleState, Vec<Declaration>)]) -> bool {
+    rules
+        .iter()
+        .flat_map(|(_, declarations)| declarations)
+        .any(|declaration| match declaration {
+            Declaration::Color(_)
+            | Declaration::BorderRadius(_)
+            | Declaration::FontFamily(_)
+            | Declaration::FontWeight(_)
+            | Declaration::FontStyle(_)
+            | Declaration::FontShorthand(_)
+            | Declaration::Cursor(_)
+            | Declaration::Animation(_)
+            | Declaration::Transition(_)
+            | Declaration::CustomProperty { .. } => false,
+            Declaration::Layout(layout) => layout.name.starts_with("background"),
+            _ => true,
+        })
+}
+
 pub(super) fn resolved_background_from_rules(
     rules: &[(RuleState, Vec<Declaration>)],
     parent: Option<&BackgroundPaint>,
@@ -683,6 +703,9 @@ pub(super) fn fragment_background_shapes(
     fragment_offset: Vec2,
     background_area: Option<Rect>,
 ) -> Vec<egui::Shape> {
+    if background.images.is_empty() && background.color == Color32::TRANSPARENT {
+        return Vec::new();
+    }
     let context = resources.context;
     let images = resources.images;
     let invalid_elements = resources.invalid_elements;
@@ -716,6 +739,9 @@ pub(super) fn fragment_background_shapes(
         corner_radius,
     );
     let mut shapes = vec![color_shape];
+    if background.images.is_empty() {
+        return shapes;
+    }
     let scale = context.pixels_per_point();
     let attachment_count = background.attachments.len().max(1);
     let origin_count = background.origins.len().max(1);
