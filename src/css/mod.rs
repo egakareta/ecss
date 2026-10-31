@@ -20,6 +20,7 @@ pub(crate) mod cascade;
 mod color;
 mod font;
 mod media;
+pub(crate) mod nesting;
 mod supports;
 pub(crate) mod variables;
 
@@ -60,14 +61,70 @@ impl Rule {
 pub(crate) struct SelectorTarget {
     pub(crate) classes: Vec<String>,
     pub(crate) id: Option<String>,
+    pub(crate) ancestors: Vec<SelectorAncestor>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SelectorAncestor {
+    pub(crate) classes: Vec<String>,
+    pub(crate) id: Option<String>,
+    pub(crate) relation: SelectorRelation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SelectorRelation {
+    #[default]
+    Descendant,
+    Child,
 }
 
 impl SelectorTarget {
     pub(crate) fn is_universal(&self) -> bool {
-        self.classes.is_empty() && self.id.is_none()
+        self.classes.is_empty() && self.id.is_none() && self.ancestors.is_empty()
     }
 
     pub(crate) fn matches(&self, target: &Self) -> bool {
+        self.matches_subject(target)
+            && (self.ancestors.is_empty() || self.matches_ancestors(&target.ancestors, 0, 0))
+    }
+
+    fn matches_subject(&self, target: &Self) -> bool {
+        self.id
+            .as_ref()
+            .is_none_or(|id| target.id.as_ref() == Some(id))
+            && self
+                .classes
+                .iter()
+                .all(|class| target.classes.contains(class))
+    }
+
+    fn matches_ancestors(
+        &self,
+        actual: &[SelectorAncestor],
+        pattern_index: usize,
+        actual_start: usize,
+    ) -> bool {
+        let Some(expected) = self.ancestors.get(pattern_index) else {
+            return self.ancestors.last().is_none_or(|ancestor| {
+                ancestor.relation == SelectorRelation::Descendant || actual_start == actual.len()
+            });
+        };
+        let end = if pattern_index > 0
+            && self.ancestors[pattern_index - 1].relation == SelectorRelation::Child
+        {
+            actual_start.saturating_add(1).min(actual.len())
+        } else {
+            actual.len()
+        };
+        (actual_start..end).any(|index| {
+            expected.matches(&actual[index])
+                && self.matches_ancestors(actual, pattern_index + 1, index + 1)
+        })
+    }
+}
+
+impl SelectorAncestor {
+    fn matches(&self, target: &Self) -> bool {
         self.id
             .as_ref()
             .is_none_or(|id| target.id.as_ref() == Some(id))
@@ -688,6 +745,7 @@ pub(crate) fn selector_target(selector: &str) -> Option<SelectorTarget> {
         return Some(SelectorTarget {
             classes: vec![class.to_owned()],
             id: None,
+            ancestors: Vec::new(),
         });
     }
     let mut parser = CssParser::new(selector);
@@ -742,25 +800,7 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
         _start: &ParserState,
         input: &mut CssParser<'i>,
     ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
-        let ParsedDeclarations {
-            declarations,
-            importance,
-        } = parse_declarations(input, true).map_err(ParseError::custom)?;
-        Ok(ParsedRule::Style(
-            selectors
-                .into_iter()
-                .map(|(target, state, pseudo, specificity)| Rule {
-                    target,
-                    state,
-                    pseudo,
-                    specificity,
-                    declarations: declarations.clone(),
-                    importance: importance.clone(),
-                    source_order: 0,
-                    media: Vec::new(),
-                })
-                .collect(),
-        ))
+        nesting::parse_style_block(input, selectors).map(ParsedRule::Style)
     }
 }
 
@@ -1915,6 +1955,10 @@ struct SimpleSelectorParser;
 impl<'i> parser::Parser<'i> for SimpleSelectorParser {
     type Impl = SimpleSelectorImpl;
     type Error = parser::SelectorParseErrorKind;
+
+    fn parse_parent_selector(&self) -> bool {
+        true
+    }
 
     fn parse_non_ts_pseudo_class(
         &self,

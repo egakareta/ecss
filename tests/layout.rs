@@ -35,6 +35,7 @@ mod layout {
     mod interactions;
     mod math;
     mod media;
+    mod nesting;
     mod properties;
     mod scrolling;
     mod sizing;

@@ -19,6 +19,7 @@ mod rendering {
     mod columns;
     mod layout;
     mod media;
+    mod nesting;
     mod objects;
     mod outline;
     mod selectors;
