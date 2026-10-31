@@ -1086,6 +1086,83 @@ async fn background_tbd_inherit_copies_layer_values_without_inheriting_color_tes
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn background_tbd_initial_removes_images_and_resets_layers_without_changing_color_test() {
+    let stylesheet = Stylesheet::parse(
+        ".surface { width:43px; height:23px; background:red linear-gradient(to right, lime 50%, transparent 50%) right bottom / 10px 10px no-repeat; }\
+         .reset, .repaint, .auto-size { background-tbd:initial; }\
+         .repaint { background-image:linear-gradient(to right, lime 50%, transparent 50%); background-size:10px 10px; }\
+         .auto-size { background-image:linear-gradient(to right, lime 50%, transparent 50%); }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            ".surface",
+            ".surface.reset",
+            ".surface.repaint",
+            ".surface.auto-size",
+        ]
+        .map(|selector| ui.add(empty_response.selector(selector)).rect)
+        .to_vec();
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    let sample = |rect: egui::Rect, x, y| pixel(&pixels, rect.left() + x, rect.top() + y);
+    assert_eq!(sample(bounds[0], 35.0, 15.0), [0, 255, 0, 255]);
+    assert_eq!(sample(bounds[0], 2.0, 2.0), [255, 0, 0, 255]);
+    for (x, y) in [(35.0, 15.0), (2.0, 2.0), (28.0, 5.0)] {
+        assert_eq!(sample(bounds[1], x, y), [255, 0, 0, 255]);
+    }
+    for (x, y) in [(2.0, 2.0), (12.0, 2.0), (2.0, 12.0)] {
+        assert_eq!(sample(bounds[2], x, y), [0, 255, 0, 255]);
+    }
+    assert_eq!(sample(bounds[2], 28.0, 5.0), [255, 0, 0, 255]);
+    assert_eq!(sample(bounds[3], 16.0, 3.0), [0, 255, 0, 255]);
+    assert_eq!(sample(bounds[3], 28.0, 3.0), [255, 0, 0, 255]);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn physical_background_axis_start_and_end_follow_direction_test() {
+    let stylesheet = Stylesheet::parse(
+        ".sample { width:30px; height:20px; background:red linear-gradient(lime,lime) left top / 6px 6px no-repeat; direction:rtl; }\
+         .x-start { background-position-x:x-start 3px; }\
+         .x-end { background-position-x:x-end 3px; }\
+         .y-start, .y-end { writing-mode:vertical-rl; }\
+         .y-start { background-position-y:y-start 3px; }\
+         .y-end { background-position-y:y-end 3px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        *capture.lock().unwrap() = [
+            ".sample.x-start",
+            ".sample.x-end",
+            ".sample.y-start",
+            ".sample.y-end",
+        ]
+        .map(|selector| ui.add(empty_response.selector(selector)).rect)
+        .to_vec();
+    })
+    .await;
+    let bounds = bounds.lock().unwrap();
+    for (rect, (painted, unpainted, edge)) in bounds.iter().zip([
+        ((23.0, 2.0), (2.0, 2.0), (28.0, 2.0)),
+        ((5.0, 2.0), (23.0, 2.0), (2.0, 2.0)),
+        ((2.0, 13.0), (2.0, 2.0), (2.0, 18.0)),
+        ((2.0, 5.0), (2.0, 13.0), (2.0, 2.0)),
+    ]) {
+        let sample = |(x, y)| pixel(&pixels, rect.left() + x, rect.top() + y);
+        assert_eq!(sample(painted), [0, 255, 0, 255]);
+        assert_eq!(sample(unpainted), [255, 0, 0, 255]);
+        assert_eq!(sample(edge), [255, 0, 0, 255]);
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_axis_longhands_position_and_cycle_layer_lists_test() {
     let stylesheet = Stylesheet::parse(
         ".position { width:60px; height:40px; background-image:linear-gradient(to right, red, blue); background-size:20px 10px; background-position:left top; background-position-x:right 5px; background-position-y:bottom 3px; background-repeat-x:no-repeat; background-repeat-y:no-repeat; }\
