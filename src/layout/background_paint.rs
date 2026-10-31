@@ -715,8 +715,7 @@ pub(super) fn fragment_background_shapes(
         background.color,
         corner_radius,
     );
-    let color_clip_path = shape_clip_for(border, color_clip);
-    let mut shapes = vec![clip_background_shape(color_shape, color_clip_path.as_ref())];
+    let mut shapes = vec![color_shape];
     let scale = context.pixels_per_point();
     let attachment_count = background.attachments.len().max(1);
     let origin_count = background.origins.len().max(1);
@@ -788,7 +787,6 @@ pub(super) fn fragment_background_shapes(
             crate::css::BackgroundClip::Padding => border - stroke,
             crate::css::BackgroundClip::Content => border - stroke - padding,
         };
-        let shape_clip = shape_clip_for(border, layer_clip);
         let sample_offset = match attachment {
             crate::css::BackgroundAttachment::Local => fragment_offset - scroll,
             crate::css::BackgroundAttachment::Scroll => fragment_offset,
@@ -809,15 +807,12 @@ pub(super) fn fragment_background_shapes(
         let image_resolution = layer_image.resolution_for_scale(scale);
         let image = layer_image.for_scale(scale);
         if let crate::css::BackgroundImage::SolidColor(color) = image {
-            shapes.push(clip_background_shape(
-                box_surface_shape(
-                    background_surface,
-                    geometry,
-                    layer_clip,
-                    *color,
-                    corner_radius,
-                ),
-                shape_clip.as_ref(),
+            shapes.push(box_surface_shape(
+                background_surface,
+                geometry,
+                layer_clip,
+                *color,
+                corner_radius,
             ));
             continue;
         }
@@ -896,6 +891,7 @@ pub(super) fn fragment_background_shapes(
             image_origin.y,
             repeat.y,
         );
+        let shape_clip = shape_clip_for(border, layer_clip);
         let gradient = match image {
             crate::css::BackgroundImage::LinearGradient(gradient) => {
                 Some(GradientPaint::Linear(gradient.clone()))
