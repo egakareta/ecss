@@ -219,6 +219,7 @@ Property strike-throughs identify implemented behavior, not complete grammar or 
     ~~`background-position-x`~~, ~~`background-position-y`~~, ~~`background-repeat`~~, ~~`background-repeat-block`~~,
     ~~`background-repeat-inline`~~, ~~`background-repeat-x`~~, ~~`background-repeat-y`~~, ~~`background-size`~~, ~~`background-tbd`~~.
   - Physical/logical axes, layer-list cycling, layer-only shorthand resets, and position-axis interpolation are implemented. Integrated review corrections and final verification are tracked in `EXECUTION.md`. `background-clip` accepts only `border-box`, `padding-box`, and `content-box`, not `text` or `border-area`.
+  - Position/repeat/layer acceptance is against the current draft's stated semantics. `background-tbd` is marked Not Ready For Implementation, and shorthand-to-longhand mapping remains under discussion in W3C Issue #9690; this is not settled whole-module conformance.
 - **[CSS Borders and Box Decorations Level 4](https://www.w3.org/TR/css-borders-4/) - Partial.**
   - CSS properties: ~~`border`~~, ~~`border-block`~~, ~~`border-block-clip`~~, ~~`border-block-color`~~, ~~`border-block-end`~~,
     ~~`border-block-end-clip`~~, ~~`border-block-end-color`~~, ~~`border-block-end-radius`~~, ~~`border-block-end-style`~~,
@@ -258,7 +259,8 @@ Property strike-throughs identify implemented behavior, not complete grammar or 
   - Named/hex/RGB/HSL colors and group opacity are implemented. System-color and complete contextual-color behavior remain incomplete.
 - **[CSS Color Level 4](https://www.w3.org/TR/css-color-4/) - Partial.**
   - CSS properties: ~~`color`~~, ~~`opacity`~~.
-  - Modern RGB/HSL and HWB values support numeric/percentage channels and alpha; legacy comma syntax validates channel types. Output is 8-bit sRGB. Missing components (`none`), component math, additional color spaces, gamut mapping and color-space-aware interpolation remain incomplete.
+  - Modern RGB/HSL, HWB, Lab/LCH, Oklab/Oklch and predefined `color()` spaces are implemented, including D50/D65 adaptation. Modern literal components require whitespace separation, even where browser parsers accept adjacent signed tokens. Standalone missing components (`none`) resolve to zero; legacy comma syntax rejects them and validates channel types.
+  - Output is 8-bit sRGB with component clipping after conversion, not CSS perceptual gamut mapping or retained wide-gamut values. Missing-component preservation during interpolation, component math and color-space-aware interpolation remain incomplete.
 - **[CSS Images Level 3](https://www.w3.org/TR/css3-images/) - Partial.**
   - CSS properties: `image-orientation`, `image-rendering`, ~~`object-fit`~~, ~~`object-position`~~.
 - **[CSS Images Module Level 4](https://www.w3.org/TR/css4-images/) - Partial.**

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "color_conversion.rs"]
+mod conversion;
+
 pub(crate) fn parse_color<'i>(
     input: &mut CssParser<'i>,
 ) -> Result<Color32, ParseError<&'static str>> {
@@ -26,6 +29,19 @@ pub(crate) fn parse_color<'i>(
         Token::Function(name) if name.eq_ignore_ascii_case("hwb") => {
             parse_functional_color(input, FunctionalColorKind::Hwb)
         }
+        Token::Function(name) if name.eq_ignore_ascii_case("lab") => {
+            parse_perceptual_color(input, PerceptualColorKind::Lab)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("lch") => {
+            parse_perceptual_color(input, PerceptualColorKind::Lch)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("oklab") => {
+            parse_perceptual_color(input, PerceptualColorKind::Oklab)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("oklch") => {
+            parse_perceptual_color(input, PerceptualColorKind::Oklch)
+        }
+        Token::Function(name) if name.eq_ignore_ascii_case("color") => parse_color_function(input),
         _ => Err(ParseError::custom("unsupported color value")),
     }?;
     input.expect_exhausted()?;
@@ -39,10 +55,19 @@ enum FunctionalColorKind {
     Hwb,
 }
 
+#[derive(Clone, Copy)]
+enum PerceptualColorKind {
+    Lab,
+    Lch,
+    Oklab,
+    Oklch,
+}
+
 enum FunctionalColorToken {
     Number(f32),
     Percentage(f32),
     Dimension(f32, String),
+    Missing,
     Comma,
     Slash,
 }
@@ -51,25 +76,7 @@ fn parse_functional_color<'i>(
     input: &mut CssParser<'i>,
     kind: FunctionalColorKind,
 ) -> Result<Color32, ParseError<&'static str>> {
-    let values = input.parse_nested_block(|args| {
-        let mut values = Vec::new();
-        while !args.is_exhausted() {
-            let value = match args.next()? {
-                Token::Number { value, .. } => FunctionalColorToken::Number(*value),
-                Token::Percentage { unit_value, .. } => {
-                    FunctionalColorToken::Percentage(*unit_value)
-                }
-                Token::Dimension { value, unit, .. } => {
-                    FunctionalColorToken::Dimension(*value, unit.to_string())
-                }
-                Token::Comma => FunctionalColorToken::Comma,
-                Token::Delim('/') => FunctionalColorToken::Slash,
-                _ => return Err(ParseError::custom("unsupported color value")),
-            };
-            values.push(value);
-        }
-        Ok(values)
-    })?;
+    let values = input.parse_nested_block(collect_functional_tokens)?;
 
     let (first, second, third, alpha) = functional_components(&values)
         .ok_or_else(|| ParseError::custom("unsupported color value"))?;
@@ -77,6 +84,12 @@ fn parse_functional_color<'i>(
         .iter()
         .any(|value| matches!(value, FunctionalColorToken::Comma));
     if legacy {
+        if values
+            .iter()
+            .any(|value| matches!(value, FunctionalColorToken::Missing))
+        {
+            return Err(ParseError::custom("invalid legacy color components"));
+        }
         let valid = match kind {
             FunctionalColorKind::Rgb => {
                 [first, second, third]
@@ -124,6 +137,177 @@ fn parse_functional_color<'i>(
     ))
 }
 
+fn parse_perceptual_color<'i>(
+    input: &mut CssParser<'i>,
+    kind: PerceptualColorKind,
+) -> Result<Color32, ParseError<&'static str>> {
+    let values = input.parse_nested_block(collect_functional_tokens)?;
+    let (first, second, third, alpha) =
+        modern_components(&values).ok_or_else(|| ParseError::custom("unsupported color value"))?;
+    let alpha = match alpha {
+        Some(alpha) => {
+            color_alpha(alpha).ok_or_else(|| ParseError::custom("unsupported color value"))?
+        }
+        None => 1.0,
+    };
+    let rgb = match kind {
+        PerceptualColorKind::Lab => {
+            let lightness = scaled_component(first, 100.0)?;
+            let a = scaled_component(second, 125.0)?;
+            let b = scaled_component(third, 125.0)?;
+            conversion::lab_to_srgb([lightness.clamp(0.0, 100.0), a, b])
+        }
+        PerceptualColorKind::Lch => {
+            let lightness = scaled_component(first, 100.0)?;
+            let chroma = scaled_component(second, 150.0)?.max(0.0);
+            let hue =
+                hue_degrees(third).ok_or_else(|| ParseError::custom("unsupported color value"))?;
+            let radians = f64::from(hue).to_radians();
+            conversion::lab_to_srgb([
+                lightness.clamp(0.0, 100.0),
+                chroma * radians.cos(),
+                chroma * radians.sin(),
+            ])
+        }
+        PerceptualColorKind::Oklab => {
+            let lightness = scaled_component(first, 1.0)?;
+            let a = scaled_component(second, 0.4)?;
+            let b = scaled_component(third, 0.4)?;
+            conversion::oklab_to_srgb([lightness.clamp(0.0, 1.0), a, b])
+        }
+        PerceptualColorKind::Oklch => {
+            let lightness = scaled_component(first, 1.0)?;
+            let chroma = scaled_component(second, 0.4)?.max(0.0);
+            let hue =
+                hue_degrees(third).ok_or_else(|| ParseError::custom("unsupported color value"))?;
+            let radians = f64::from(hue).to_radians();
+            conversion::oklab_to_srgb([
+                lightness.clamp(0.0, 1.0),
+                chroma * radians.cos(),
+                chroma * radians.sin(),
+            ])
+        }
+    };
+    Ok(color_from_srgb(rgb, alpha))
+}
+
+fn parse_color_function<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Color32, ParseError<&'static str>> {
+    let (space_name, values) = input.parse_nested_block(|args| {
+        let space_name = args.expect_ident_cloned()?;
+        let values = collect_functional_tokens(args)?;
+        Ok((space_name, values))
+    })?;
+    let space = conversion::ColorSpace::from_name(&space_name)
+        .ok_or_else(|| ParseError::custom("unsupported color space"))?;
+    let (first, second, third, alpha) =
+        modern_components(&values).ok_or_else(|| ParseError::custom("unsupported color value"))?;
+    let components = [
+        scaled_component(first, 1.0)?,
+        scaled_component(second, 1.0)?,
+        scaled_component(third, 1.0)?,
+    ];
+    let alpha = match alpha {
+        Some(alpha) => {
+            color_alpha(alpha).ok_or_else(|| ParseError::custom("unsupported color value"))?
+        }
+        None => 1.0,
+    };
+    Ok(color_from_srgb(
+        conversion::predefined_to_srgb(space, components),
+        alpha,
+    ))
+}
+
+fn collect_functional_tokens<'i>(
+    args: &mut CssParser<'i>,
+) -> Result<Vec<FunctionalColorToken>, ParseError<&'static str>> {
+    let mut values = Vec::new();
+    let mut separated = true;
+    let mut previous_component = false;
+    while let Ok(token) = args.next_including_whitespace() {
+        let value = match token {
+            Token::WhiteSpace(_) => {
+                separated = true;
+                continue;
+            }
+            Token::Number { value, .. } => FunctionalColorToken::Number(*value),
+            Token::Percentage { unit_value, .. } => FunctionalColorToken::Percentage(*unit_value),
+            Token::Dimension { value, unit, .. } => {
+                FunctionalColorToken::Dimension(*value, unit.to_string())
+            }
+            Token::Ident(name) if name.eq_ignore_ascii_case("none") => {
+                FunctionalColorToken::Missing
+            }
+            Token::Comma => FunctionalColorToken::Comma,
+            Token::Delim('/') => FunctionalColorToken::Slash,
+            _ => return Err(ParseError::custom("unsupported color value")),
+        };
+        let component = !matches!(
+            value,
+            FunctionalColorToken::Comma | FunctionalColorToken::Slash
+        );
+        if component && previous_component && !separated {
+            return Err(ParseError::custom("color components require whitespace"));
+        }
+        previous_component = component;
+        separated = false;
+        values.push(value);
+    }
+    Ok(values)
+}
+
+fn modern_components(
+    values: &[FunctionalColorToken],
+) -> Option<(
+    &FunctionalColorToken,
+    &FunctionalColorToken,
+    &FunctionalColorToken,
+    Option<&FunctionalColorToken>,
+)> {
+    match values {
+        [first, second, third] => Some((first, second, third, None)),
+        [first, second, third, FunctionalColorToken::Slash, alpha] => {
+            Some((first, second, third, Some(alpha)))
+        }
+        _ => None,
+    }
+}
+
+fn scaled_component(
+    value: &FunctionalColorToken,
+    percentage_scale: f64,
+) -> Result<f64, ParseError<&'static str>> {
+    let value = match value {
+        FunctionalColorToken::Number(value) => f64::from(*value),
+        FunctionalColorToken::Percentage(value) => f64::from(*value) * percentage_scale,
+        FunctionalColorToken::Missing => 0.0,
+        _ => return Err(ParseError::custom("unsupported color value")),
+    };
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| ParseError::custom("unsupported color value"))
+}
+
+fn color_from_srgb(rgb: [f64; 3], alpha: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        color_byte_f64(rgb[0]),
+        color_byte_f64(rgb[1]),
+        color_byte_f64(rgb[2]),
+        color_byte(alpha),
+    )
+}
+
+fn color_byte_f64(value: f64) -> u8 {
+    if value.is_nan() {
+        0
+    } else {
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+}
+
 fn functional_components(
     values: &[FunctionalColorToken],
 ) -> Option<(
@@ -161,6 +345,7 @@ fn rgb_component(value: &FunctionalColorToken) -> Option<f32> {
     let channel = match value {
         FunctionalColorToken::Number(value) => value / 255.0,
         FunctionalColorToken::Percentage(value) => *value,
+        FunctionalColorToken::Missing => 0.0,
         _ => return None,
     };
     channel.is_finite().then(|| channel.clamp(0.0, 1.0))
@@ -170,6 +355,7 @@ fn color_alpha(value: &FunctionalColorToken) -> Option<f32> {
     let alpha = match value {
         FunctionalColorToken::Number(value) => *value,
         FunctionalColorToken::Percentage(value) => *value,
+        FunctionalColorToken::Missing => 0.0,
         _ => return None,
     };
     alpha.is_finite().then(|| alpha.clamp(0.0, 1.0))
@@ -193,6 +379,7 @@ fn hsl_components(
 fn hue_degrees(hue: &FunctionalColorToken) -> Option<f32> {
     let hue = match hue {
         FunctionalColorToken::Number(value) => f64::from(*value),
+        FunctionalColorToken::Missing => 0.0,
         FunctionalColorToken::Dimension(value, unit) if unit.eq_ignore_ascii_case("deg") => {
             f64::from(*value)
         }
@@ -244,6 +431,7 @@ fn hundred_scale(value: &FunctionalColorToken) -> Option<f32> {
     match value {
         FunctionalColorToken::Percentage(value) if value.is_finite() => Some(*value),
         FunctionalColorToken::Number(value) if value.is_finite() => Some(*value / 100.0),
+        FunctionalColorToken::Missing => Some(0.0),
         _ => None,
     }
 }
