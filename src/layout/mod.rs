@@ -1068,6 +1068,15 @@ pub(crate) fn show(
             )
         })
         .collect::<HashMap<_, _>>();
+    let logical_axes = crate::css::cascade::LogicalAxes {
+        direction: style.layout.direction,
+        writing: style.format.writing,
+        text_orientation: &style.format.text_orientation,
+    };
+    let animation_priority = crate::css::cascade::AnimationPriority {
+        important: &important_declarations,
+        axes: logical_axes,
+    };
     let animation = crate::animation::sample(
         ui.ctx(),
         id,
@@ -1076,7 +1085,7 @@ pub(crate) fn show(
         &keyframes,
         &underlying_declarations,
         crate::animation::SampleContext {
-            important: &important_declarations,
+            priority: animation_priority,
             position: crate::animation::PositionContext {
                 units,
                 writing: style.format.writing,

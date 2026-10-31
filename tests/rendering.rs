@@ -14,6 +14,7 @@ mod rendering {
 
     mod backgrounds;
     mod box_model;
+    mod cascade_animation;
     mod colors;
     mod columns;
     mod layout;

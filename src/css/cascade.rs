@@ -52,17 +52,30 @@ pub(crate) fn ordered_with_importance<'a>(
         .collect()
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct LogicalAxes<'a> {
+    pub(crate) direction: taffy::Direction,
+    pub(crate) writing: crate::formatting::Writing,
+    pub(crate) text_orientation: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AnimationPriority<'a> {
+    pub(crate) important: &'a [Declaration],
+    pub(crate) axes: LogicalAxes<'a>,
+}
+
 pub(crate) fn overrides_animation(
     important: &[Declaration],
     animated: &Declaration,
-    writing: crate::formatting::Writing,
+    axes: LogicalAxes<'_>,
 ) -> bool {
     let Some(property) = animated_property(animated) else {
         return false;
     };
     important
         .iter()
-        .any(|declaration| declaration_affects(declaration, property, writing))
+        .any(|declaration| declaration_affects(declaration, property, axes))
 }
 
 fn animated_property(declaration: &Declaration) -> Option<&str> {
@@ -98,83 +111,242 @@ fn animated_property(declaration: &Declaration) -> Option<&str> {
         Declaration::BackgroundSize(_) => Some("background-size"),
         Declaration::Layout(layout) => Some(&layout.name),
         Declaration::BorderRadius(_) => Some("border-radius"),
+        Declaration::FontFamily(_) => Some("font-family"),
+        Declaration::FontWeight(_) => Some("font-weight"),
+        Declaration::FontStyle(_) => Some("font-style"),
+        Declaration::FontShorthand(_) => Some("font"),
         _ => None,
     }
 }
 
-fn declaration_affects(
-    declaration: &Declaration,
-    property: &str,
-    writing: crate::formatting::Writing,
-) -> bool {
+fn declaration_affects(declaration: &Declaration, property: &str, axes: LogicalAxes<'_>) -> bool {
     if matches!(declaration, Declaration::All(_)) {
         return true;
+    }
+    if matches!(declaration, Declaration::FontShorthand(_)) {
+        return property == "font" || property.starts_with("font-") || property == "line-height";
     }
     let Some(important_property) = animated_property(declaration) else {
         return false;
     };
-    properties_overlap(important_property, property, writing)
+    properties_overlap(important_property, property, axes)
 }
 
-fn properties_overlap(first: &str, second: &str, writing: crate::formatting::Writing) -> bool {
-    let first = physical_background_axis(first, writing);
-    let second = physical_background_axis(second, writing);
-    first == second || shorthand_affects(first, second) || shorthand_affects(second, first)
+fn properties_overlap(first: &str, second: &str, axes: LogicalAxes<'_>) -> bool {
+    let first = atomic_properties(first, axes);
+    let second = atomic_properties(second, axes);
+    first.iter().any(|property| second.contains(property))
 }
 
-fn shorthand_affects(shorthand: &str, property: &str) -> bool {
-    match shorthand {
-        "background" => property.starts_with("background-"),
-        "background-tbd" => property.starts_with("background-") && property != "background-color",
-        "background-position" => property.starts_with("background-position-"),
-        "background-repeat" => property.starts_with("background-repeat-"),
-        "margin" => property.starts_with("margin-") && property != "margin-trim",
-        "padding" => property.starts_with("padding-"),
-        "inset" => matches!(
-            property,
-            "top"
-                | "right"
-                | "bottom"
-                | "left"
-                | "inset-block-start"
-                | "inset-block-end"
-                | "inset-inline-start"
-                | "inset-inline-end"
-        ),
-        "border" => {
-            property == "border-width"
-                || property == "border-color"
-                || property == "border-style"
-                || ["top", "right", "bottom", "left"].iter().any(|side| {
-                    property == format!("border-{side}")
-                        || property == format!("border-{side}-width")
-                        || property == format!("border-{side}-color")
-                        || property == format!("border-{side}-style")
-                })
+fn atomic_properties(property: &str, axes: LogicalAxes<'_>) -> Vec<String> {
+    let mut result = Vec::new();
+    for property in physical_properties(property, axes) {
+        match property.as_str() {
+            "background" | "background-tbd" => result.extend(
+                [
+                    "background-color",
+                    "background-image",
+                    "background-attachment",
+                    "background-clip",
+                    "background-origin",
+                    "background-position",
+                    "background-position-x",
+                    "background-position-y",
+                    "background-repeat",
+                    "background-repeat-x",
+                    "background-repeat-y",
+                    "background-size",
+                ]
+                .into_iter()
+                .filter(|name| property != "background-tbd" || *name != "background-color")
+                .map(str::to_owned),
+            ),
+            "background-position" => {
+                result.extend(["background-position-x", "background-position-y"].map(str::to_owned))
+            }
+            "background-repeat" => {
+                result.extend(["background-repeat-x", "background-repeat-y"].map(str::to_owned))
+            }
+            "font" => result.extend(
+                [
+                    "font-family",
+                    "font-size",
+                    "font-style",
+                    "font-weight",
+                    "font-kerning",
+                    "line-height",
+                ]
+                .map(str::to_owned),
+            ),
+            "margin" | "padding" | "inset" => {
+                let prefix = if property == "inset" { "" } else { &property };
+                result.extend(["top", "right", "bottom", "left"].map(|side| {
+                    if prefix.is_empty() {
+                        side.to_owned()
+                    } else {
+                        format!("{prefix}-{side}")
+                    }
+                }));
+            }
+            "border" => result.extend(border_properties(None)),
+            "border-width" | "border-color" | "border-style" => {
+                let suffix = property.strip_prefix("border-").unwrap();
+                result.extend(border_properties(Some(suffix)));
+            }
+            "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                let side = property.strip_prefix("border-").unwrap();
+                result.extend(border_side_properties(side));
+            }
+            "outline" => result
+                .extend(["outline-width", "outline-style", "outline-color"].map(str::to_owned)),
+            "column-rule" => result.extend(
+                [
+                    "column-rule-width",
+                    "column-rule-style",
+                    "column-rule-color",
+                ]
+                .map(str::to_owned),
+            ),
+            "columns" => result.extend(["column-width", "column-count"].map(str::to_owned)),
+            "flex" => result.extend(["flex-basis", "flex-grow", "flex-shrink"].map(str::to_owned)),
+            "gap" => result.extend(["row-gap", "column-gap"].map(str::to_owned)),
+            _ => result.push(property),
         }
-        "border-width" => ["top", "right", "bottom", "left"]
-            .iter()
-            .any(|side| property == format!("border-{side}-width")),
-        "border-color" => ["top", "right", "bottom", "left"]
-            .iter()
-            .any(|side| property == format!("border-{side}-color")),
-        "outline" => matches!(
-            property,
-            "outline-color" | "outline-width" | "outline-offset"
-        ),
-        "column-rule" => matches!(property, "column-rule-color" | "column-rule-width"),
-        "columns" => matches!(property, "column-width" | "column-count"),
-        "flex" => matches!(property, "flex-basis" | "flex-grow" | "flex-shrink"),
-        "gap" => matches!(property, "row-gap" | "column-gap"),
-        "border-top" | "border-right" | "border-bottom" | "border-left" => {
-            let side = shorthand.strip_prefix("border-").unwrap();
-            matches!(property, "border-width" | "border-color" | "border-style")
-                || property == format!("border-{side}-width")
-                || property == format!("border-{side}-color")
-                || property == format!("border-{side}-style")
-        }
-        _ => false,
     }
+    result
+}
+
+fn border_properties(component: Option<&str>) -> Vec<String> {
+    ["top", "right", "bottom", "left"]
+        .into_iter()
+        .flat_map(|side| match component {
+            Some(component) => vec![format!("border-{side}-{component}")],
+            None => border_side_properties(side),
+        })
+        .collect()
+}
+
+fn border_side_properties(side: &str) -> Vec<String> {
+    ["width", "style", "color"]
+        .map(|component| format!("border-{side}-{component}"))
+        .to_vec()
+}
+
+pub(crate) fn physical_properties(property: &str, axes: LogicalAxes<'_>) -> Vec<String> {
+    let background_axis = match property {
+        "background-position-inline" => Some(if axes.writing.vertical() {
+            "background-position-y"
+        } else {
+            "background-position-x"
+        }),
+        "background-position-block" => Some(if axes.writing.vertical() {
+            "background-position-x"
+        } else {
+            "background-position-y"
+        }),
+        "background-repeat-inline" => Some(if axes.writing.vertical() {
+            "background-repeat-y"
+        } else {
+            "background-repeat-x"
+        }),
+        "background-repeat-block" => Some(if axes.writing.vertical() {
+            "background-repeat-x"
+        } else {
+            "background-repeat-y"
+        }),
+        _ => None,
+    };
+    if let Some(property) = background_axis {
+        return vec![property.to_owned()];
+    }
+
+    for group in ["margin", "padding", "inset"] {
+        let Some(suffix) = property.strip_prefix(&format!("{group}-")) else {
+            continue;
+        };
+        let sides = match suffix {
+            "inline" => vec!["inline-start", "inline-end"],
+            "block" => vec!["block-start", "block-end"],
+            "inline-start" | "inline-end" | "block-start" | "block-end" => vec![suffix],
+            _ => Vec::new(),
+        };
+        if !sides.is_empty() {
+            return sides
+                .iter()
+                .map(|side| {
+                    let physical = physical_side(side, axes);
+                    if group == "inset" {
+                        physical.to_owned()
+                    } else {
+                        format!("{group}-{physical}")
+                    }
+                })
+                .collect();
+        }
+    }
+
+    let Some(suffix) = property.strip_prefix("border-") else {
+        return physical_size_property(property, axes);
+    };
+    for logical in [
+        "inline-start",
+        "inline-end",
+        "block-start",
+        "block-end",
+        "inline",
+        "block",
+    ] {
+        if suffix == logical || suffix.strip_prefix(&format!("{logical}-")).is_some() {
+            let tail = &suffix[logical.len()..];
+            let sides = match logical {
+                "inline-start" | "inline-end" | "block-start" | "block-end" => vec![logical],
+                "inline" => vec!["inline-start", "inline-end"],
+                _ => vec!["block-start", "block-end"],
+            };
+            return sides
+                .into_iter()
+                .map(|side| format!("border-{}{tail}", physical_side(side, axes)))
+                .collect();
+        }
+    }
+    physical_size_property(property, axes)
+}
+
+fn physical_size_property(property: &str, axes: LogicalAxes<'_>) -> Vec<String> {
+    let (prefix, axis) = if let Some(axis) = property.strip_prefix("min-") {
+        ("min-", axis)
+    } else if let Some(axis) = property.strip_prefix("max-") {
+        ("max-", axis)
+    } else {
+        ("", property)
+    };
+    let physical = match axis {
+        "inline-size" => Some(if axes.writing.vertical() {
+            "height"
+        } else {
+            "width"
+        }),
+        "block-size" => Some(if axes.writing.vertical() {
+            "width"
+        } else {
+            "height"
+        }),
+        _ => None,
+    };
+    physical.map_or_else(
+        || vec![property.to_owned()],
+        |physical| vec![format!("{prefix}{physical}")],
+    )
+}
+
+fn physical_side(side: &str, axes: LogicalAxes<'_>) -> &'static str {
+    ["top", "right", "bottom", "left"][crate::layout_style::logical_side(
+        side,
+        axes.direction,
+        axes.writing,
+        axes.text_orientation,
+    )
+    .expect("logical side is valid")]
 }
 
 fn physical_background_axis(property: &str, writing: crate::formatting::Writing) -> &str {

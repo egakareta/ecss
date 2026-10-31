@@ -37,7 +37,7 @@ pub(crate) struct PositionContext<'a> {
 }
 
 pub(crate) struct SampleContext<'a> {
-    pub(crate) important: &'a [Declaration],
+    pub(crate) priority: crate::css::cascade::AnimationPriority<'a>,
     pub(crate) position: PositionContext<'a>,
 }
 
@@ -940,10 +940,7 @@ pub(crate) fn sample(
     underlying: &[Declaration],
     sample_context: SampleContext<'_>,
 ) -> Sample {
-    let SampleContext {
-        important,
-        position,
-    } = sample_context;
+    let SampleContext { priority, position } = sample_context;
     if properties.is_empty() {
         return Sample {
             declarations: Vec::new(),
@@ -953,6 +950,7 @@ pub(crate) fn sample(
     }
 
     let configs = configs(properties);
+    let axes = priority.axes;
     let state_id = id.with("ecss.animation");
     let previous = context
         .data(|data| data.get_temp::<Vec<Clock>>(state_id))
@@ -991,9 +989,9 @@ pub(crate) fn sample(
             .iter()
             .flat_map(|frame| &frame.declarations)
             .filter(|declaration| is_interpolable(declaration))
-            .flat_map(normalized_declarations)
+            .flat_map(|declaration| normalized_declarations(declaration, axes))
             .any(|(_, declaration)| {
-                !crate::css::cascade::overrides_animation(important, &declaration, position.writing)
+                !crate::css::cascade::overrides_animation(priority.important, &declaration, axes)
             });
         if !has_unoverridden_property {
             continue;
@@ -1012,10 +1010,10 @@ pub(crate) fn sample(
         let Some(progress) = progress else {
             continue;
         };
-        let sampled = sample_keyframes(frames, progress, before, underlying, position)
+        let sampled = sample_keyframes(frames, progress, before, underlying, axes, position)
             .into_iter()
             .filter(|declaration| {
-                !crate::css::cascade::overrides_animation(important, declaration, position.writing)
+                !crate::css::cascade::overrides_animation(priority.important, declaration, axes)
             })
             .collect::<Vec<_>>();
         if active {
@@ -1242,12 +1240,13 @@ fn sample_keyframes(
     progress: f32,
     before: bool,
     underlying: &[Declaration],
+    axes: crate::css::cascade::LogicalAxes<'_>,
     position: PositionContext<'_>,
 ) -> Vec<Declaration> {
     let mut properties: Vec<(String, Vec<(f32, Declaration)>)> = Vec::new();
     for frame in frames {
         for declaration in &frame.declarations {
-            for (name, declaration) in normalized_declarations(declaration) {
+            for (name, declaration) in normalized_declarations(declaration, axes) {
                 let anchors = if let Some((_, anchors)) =
                     properties.iter_mut().find(|(key, _)| *key == name)
                 {
@@ -1273,7 +1272,7 @@ fn sample_keyframes(
         anchors.sort_by(|first, second| first.0.total_cmp(&second.0));
         let base = underlying
             .iter()
-            .flat_map(normalized_declarations)
+            .flat_map(|declaration| normalized_declarations(declaration, axes))
             .filter(|(property, _)| *property == name)
             .map(|(_, declaration)| declaration)
             .next_back();
@@ -1338,7 +1337,10 @@ fn keyframe_timing(frames: &[Keyframe], offset: f32) -> Option<TimingFunction> {
         .and_then(parse_timing)
 }
 
-fn normalized_declarations(declaration: &Declaration) -> Vec<(String, Declaration)> {
+fn normalized_declarations(
+    declaration: &Declaration,
+    axes: crate::css::cascade::LogicalAxes<'_>,
+) -> Vec<(String, Declaration)> {
     use crate::css::BackgroundAxisValue;
 
     fn add_positions(
@@ -1451,7 +1453,7 @@ fn normalized_declarations(declaration: &Declaration) -> Vec<(String, Declaratio
         | Declaration::FontShorthand(_)
         | Declaration::Cursor(_) => {}
         Declaration::Layout(layout) => {
-            declarations.push((layout.name.clone(), declaration.clone()))
+            declarations.extend(expand_layout_declaration(layout, axes));
         }
         Declaration::BorderRadius(_) => {
             declarations.push(("border-radius".to_owned(), declaration.clone()))
@@ -1462,6 +1464,358 @@ fn normalized_declarations(declaration: &Declaration) -> Vec<(String, Declaratio
         | Declaration::Deferred { .. } => {}
     }
     declarations
+}
+
+fn expand_layout_declaration(
+    layout: &crate::layout_style::Declaration,
+    axes: crate::css::cascade::LogicalAxes<'_>,
+) -> Vec<(String, Declaration)> {
+    let name = layout.name.as_str();
+    let value = layout.value.as_str();
+    if matches!(name, "margin" | "padding" | "inset") {
+        return quad_declarations(name, value, axes);
+    }
+    if matches!(name, "border-width" | "border-color" | "border-style") {
+        return border_component_declarations(name, value, axes);
+    }
+    if name == "border" {
+        return border_shorthand_declarations("border", value, ["top", "right", "bottom", "left"]);
+    }
+    if matches!(name, "outline" | "column-rule") {
+        return border_shorthand_declarations(name, value, [""]);
+    }
+    if matches!(
+        name,
+        "border-top" | "border-right" | "border-bottom" | "border-left"
+    ) {
+        let side = name.strip_prefix("border-").unwrap();
+        return border_shorthand_declarations("border", value, [side]);
+    }
+    if name == "gap" {
+        return pair_declarations(name, value, ["row-gap".to_owned(), "column-gap".to_owned()]);
+    }
+    if name == "flex" {
+        return flex_declarations(value);
+    }
+    if name == "columns" {
+        return columns_declarations(value);
+    }
+
+    if is_logical_box_pair(name) || is_logical_border_component_pair(name) {
+        return pair_declarations(
+            name,
+            value,
+            crate::css::cascade::physical_properties(name, axes),
+        );
+    }
+    if name == "border-inline" || name == "border-block" {
+        return crate::css::cascade::physical_properties(name, axes)
+            .into_iter()
+            .flat_map(|side| border_shorthand_declarations(&side, value, [""]))
+            .collect();
+    }
+
+    if name.starts_with("border-inline-") || name.starts_with("border-block-") {
+        let physical = crate::css::cascade::physical_properties(name, axes);
+        if is_logical_border_side_shorthand(name) {
+            return physical
+                .into_iter()
+                .flat_map(|side| {
+                    border_shorthand_declarations(
+                        "border",
+                        value,
+                        [side.strip_prefix("border-").unwrap_or(&side)],
+                    )
+                })
+                .collect();
+        }
+        return physical
+            .into_iter()
+            .map(|name| (name.clone(), layout_declaration(name, value)))
+            .collect();
+    }
+
+    crate::css::cascade::physical_properties(name, axes)
+        .into_iter()
+        .map(|name| (name.clone(), layout_declaration(name, value)))
+        .collect()
+}
+
+fn quad_declarations(
+    name: &str,
+    value: &str,
+    axes: crate::css::cascade::LogicalAxes<'_>,
+) -> Vec<(String, Declaration)> {
+    let Some(values) = quad_values(value) else {
+        return vec![(name.to_owned(), layout_declaration(name.to_owned(), value))];
+    };
+    ["top", "right", "bottom", "left"]
+        .into_iter()
+        .zip(values)
+        .map(|(side, value)| {
+            let physical = if name == "inset" {
+                side.to_owned()
+            } else {
+                format!("{name}-{side}")
+            };
+            (physical.clone(), layout_declaration(physical, &value))
+        })
+        .map(|(name, declaration)| {
+            let physical = crate::css::cascade::physical_properties(&name, axes)
+                .into_iter()
+                .next()
+                .unwrap_or(name);
+            (physical, declaration)
+        })
+        .collect()
+}
+
+fn pair_declarations(
+    name: &str,
+    value: &str,
+    properties: impl IntoIterator<Item = String>,
+) -> Vec<(String, Declaration)> {
+    let properties = properties.into_iter().collect::<Vec<_>>();
+    let Some(values) = pair_values(value, properties.len()) else {
+        return vec![(name.to_owned(), layout_declaration(name.to_owned(), value))];
+    };
+    properties
+        .into_iter()
+        .zip(values)
+        .map(|(name, value)| (name.clone(), layout_declaration(name, &value)))
+        .collect()
+}
+
+fn quad_values(value: &str) -> Option<[String; 4]> {
+    if is_css_wide(value) {
+        return Some(std::array::from_fn(|_| value.trim().to_owned()));
+    }
+    let components = crate::layout_style::components(value).ok()?;
+    match components.as_slice() {
+        [all] => Some([all.clone(), all.clone(), all.clone(), all.clone()]),
+        [vertical, horizontal] => Some([
+            vertical.clone(),
+            horizontal.clone(),
+            vertical.clone(),
+            horizontal.clone(),
+        ]),
+        [top, horizontal, bottom] => Some([
+            top.clone(),
+            horizontal.clone(),
+            bottom.clone(),
+            horizontal.clone(),
+        ]),
+        [top, right, bottom, left] => {
+            Some([top.clone(), right.clone(), bottom.clone(), left.clone()])
+        }
+        _ => None,
+    }
+}
+
+fn pair_values(value: &str, property_count: usize) -> Option<Vec<String>> {
+    if is_css_wide(value) {
+        return Some(vec![value.trim().to_owned(); property_count]);
+    }
+    let components = crate::layout_style::components(value).ok()?;
+    if components.is_empty() || components.len() > property_count {
+        return None;
+    }
+    if components.len() == 1 {
+        Some(vec![components[0].clone(); property_count])
+    } else {
+        Some(components)
+    }
+}
+
+fn is_logical_box_pair(name: &str) -> bool {
+    ["margin", "padding", "inset"]
+        .iter()
+        .any(|group| name == format!("{group}-inline") || name == format!("{group}-block"))
+}
+
+fn is_logical_border_component_pair(name: &str) -> bool {
+    ["inline", "block"].iter().any(|axis| {
+        ["width", "style", "color"]
+            .iter()
+            .any(|component| name == format!("border-{axis}-{component}"))
+    })
+}
+
+fn is_logical_border_side_shorthand(name: &str) -> bool {
+    [
+        "border-inline-start",
+        "border-inline-end",
+        "border-block-start",
+        "border-block-end",
+    ]
+    .contains(&name)
+}
+
+fn border_component_declarations(
+    name: &str,
+    value: &str,
+    axes: crate::css::cascade::LogicalAxes<'_>,
+) -> Vec<(String, Declaration)> {
+    let components = if is_css_wide(value) {
+        Some(vec![value.trim().to_owned(); 4])
+    } else {
+        quad_values(value).map(Vec::from)
+    };
+    let Some(components) = components else {
+        return vec![(name.to_owned(), layout_declaration(name.to_owned(), value))];
+    };
+    let suffix = name.strip_prefix("border-").unwrap();
+    ["top", "right", "bottom", "left"]
+        .into_iter()
+        .zip(components)
+        .map(|(side, value)| {
+            let property = format!("border-{side}-{suffix}");
+            (property.clone(), layout_declaration(property, &value))
+        })
+        .map(|(name, declaration)| {
+            let physical = crate::css::cascade::physical_properties(&name, axes)
+                .into_iter()
+                .next()
+                .unwrap_or(name);
+            (physical, declaration)
+        })
+        .collect()
+}
+
+fn border_shorthand_declarations<const N: usize>(
+    group: &str,
+    value: &str,
+    sides: [&str; N],
+) -> Vec<(String, Declaration)> {
+    let Some((width, style, color)) = border_components(value, group == "outline") else {
+        return vec![(
+            group.to_owned(),
+            layout_declaration(group.to_owned(), value),
+        )];
+    };
+    sides
+        .into_iter()
+        .flat_map(|side| {
+            let prefix = if group == "border" {
+                format!("border-{side}")
+            } else {
+                group.to_owned()
+            };
+            [
+                (format!("{prefix}-width"), width.clone()),
+                (format!("{prefix}-style"), style.clone()),
+                (format!("{prefix}-color"), color.clone()),
+            ]
+        })
+        .map(|(name, value)| (name.clone(), layout_declaration(name, &value)))
+        .collect()
+}
+
+fn border_components(value: &str, outline: bool) -> Option<(String, String, String)> {
+    if is_css_wide(value) {
+        let value = value.trim().to_owned();
+        return Some((value.clone(), value.clone(), value));
+    }
+    let mut width = "medium".to_owned();
+    let mut style = "none".to_owned();
+    let mut color = "currentcolor".to_owned();
+    for component in crate::layout_style::components(value).ok()? {
+        if crate::layout_style::border_style(&component).is_ok()
+            || outline && component.eq_ignore_ascii_case("auto")
+        {
+            style = component;
+        } else if component.eq_ignore_ascii_case("currentcolor")
+            || crate::css::parse_color(&mut CssParser::new(&component)).is_ok()
+        {
+            color = component;
+        } else {
+            width = component;
+        }
+    }
+    Some((width, style, color))
+}
+
+fn flex_declarations(value: &str) -> Vec<(String, Declaration)> {
+    let values = if is_css_wide(value) {
+        [
+            value.trim().to_owned(),
+            value.trim().to_owned(),
+            value.trim().to_owned(),
+        ]
+    } else {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => ["0".to_owned(), "0".to_owned(), "auto".to_owned()],
+            "auto" => ["1".to_owned(), "1".to_owned(), "auto".to_owned()],
+            "initial" => ["0".to_owned(), "1".to_owned(), "auto".to_owned()],
+            _ => {
+                let Some(parts) = crate::layout_style::components(value).ok() else {
+                    return vec![(
+                        "flex".to_owned(),
+                        layout_declaration("flex".to_owned(), value),
+                    )];
+                };
+                match parts.as_slice() {
+                    [grow] if grow.parse::<f32>().is_ok() => {
+                        [grow.clone(), "1".to_owned(), "0%".to_owned()]
+                    }
+                    [basis] => ["1".to_owned(), "1".to_owned(), basis.clone()],
+                    [grow, second] if second.parse::<f32>().is_ok() => {
+                        [grow.clone(), second.clone(), "0%".to_owned()]
+                    }
+                    [grow, basis] => [grow.clone(), "1".to_owned(), basis.clone()],
+                    [grow, shrink, basis] => [grow.clone(), shrink.clone(), basis.clone()],
+                    _ => {
+                        return vec![(
+                            "flex".to_owned(),
+                            layout_declaration("flex".to_owned(), value),
+                        )];
+                    }
+                }
+            }
+        }
+    };
+    ["flex-grow", "flex-shrink", "flex-basis"]
+        .into_iter()
+        .zip(values)
+        .map(|(name, value)| (name.to_owned(), layout_declaration(name.to_owned(), &value)))
+        .collect()
+}
+
+fn columns_declarations(value: &str) -> Vec<(String, Declaration)> {
+    let mut width = "auto".to_owned();
+    let mut count = "auto".to_owned();
+    if !is_css_wide(value) {
+        let Ok(components) = crate::layout_style::components(value) else {
+            return vec![(
+                "columns".to_owned(),
+                layout_declaration("columns".to_owned(), value),
+            )];
+        };
+        for component in components {
+            if component == "auto" {
+                continue;
+            }
+            if component.parse::<u16>().is_ok() {
+                count = component;
+            } else {
+                width = component;
+            }
+        }
+    } else {
+        width = value.trim().to_owned();
+        count = value.trim().to_owned();
+    }
+    [("column-width", width), ("column-count", count)]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), layout_declaration(name.to_owned(), &value)))
+        .collect()
+}
+
+fn layout_declaration(name: String, value: &str) -> Declaration {
+    Declaration::Layout(crate::layout_style::Declaration {
+        name,
+        value: value.to_owned(),
+    })
 }
 
 fn is_interpolable(declaration: &Declaration) -> bool {
