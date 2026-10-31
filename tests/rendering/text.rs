@@ -32,7 +32,9 @@ fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
 async fn text_shadow_offsets_inherit_currentcolor_and_preserve_layer_order() {
     let stylesheet = Stylesheet::parse(
         ".parent { color:red; text-shadow:14px 0 currentColor; }\
+         .default-parent { color:red; text-shadow:14px 0; }\
          .child { color:blue; font-size:24px; width:max-content; }\
+         .default-child { color:blue; font-size:24px; width:max-content; }\
          .stacked { color:transparent; font-size:24px; width:max-content; text-shadow:0 0 red, 0 0 blue; }\
          .variable { --shadow:12px 0 lime; color:transparent; font-size:24px; width:max-content; text-shadow:var(--shadow); }",
     )
@@ -42,22 +44,30 @@ async fn text_shadow_offsets_inherit_currentcolor_and_preserve_layer_order() {
     let pixels = render_ui_pixels(stylesheet, move |ui| {
         ui.add_space(20.0);
         let mut child = egui::Rect::NOTHING;
-        let mut stacked = egui::Rect::NOTHING;
-        let mut variable = egui::Rect::NOTHING;
+        let mut default_child = egui::Rect::NOTHING;
         ui.add(
             (|ui: &mut egui::Ui| {
                 child = ui.add(egui::Label::new("W").selector(".child")).rect;
-                stacked = ui.add(egui::Label::new("M").selector(".stacked")).rect;
-                variable = ui.add(egui::Label::new("V").selector(".variable")).rect;
                 ui.response()
             })
             .selector(".parent"),
         );
-        *capture.lock().unwrap() = Some((child, stacked, variable));
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                default_child = ui
+                    .add(egui::Label::new("W").selector(".default-child"))
+                    .rect;
+                ui.response()
+            })
+            .selector(".default-parent"),
+        );
+        let stacked = ui.add(egui::Label::new("M").selector(".stacked")).rect;
+        let variable = ui.add(egui::Label::new("V").selector(".variable")).rect;
+        *capture.lock().unwrap() = Some((child, default_child, stacked, variable));
     })
     .await;
-    let (child, stacked, variable) = bounds.lock().unwrap().unwrap();
-    let red_offset_pixels = pixels
+    let (child, default_child, stacked, variable) = bounds.lock().unwrap().unwrap();
+    let inherited_blue_pixels = pixels
         .iter()
         .enumerate()
         .filter(|(index, pixel)| {
@@ -66,11 +76,28 @@ async fn text_shadow_offsets_inherit_currentcolor_and_preserve_layer_order() {
             x as f32 >= child.right() + 2.0
                 && y as f32 >= child.top() - 2.0
                 && y as f32 <= child.bottom() + 2.0
-                && pixel[0] > pixel[1].saturating_add(8)
-                && pixel[0] > pixel[2].saturating_add(8)
+                && pixel[2] > pixel[0].saturating_add(8)
+                && pixel[2] > pixel[1].saturating_add(8)
         })
         .count();
-    assert!(red_offset_pixels > 0);
+    assert!(inherited_blue_pixels > 0);
+    assert!(pixels.iter().enumerate().all(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        (x as f32) < child.right() + 2.0
+            || (y as f32) < child.top() - 2.0
+            || (y as f32) > child.bottom() + 2.0
+            || pixel[0] <= pixel[2].saturating_add(8)
+    }));
+    assert!(pixels.iter().enumerate().any(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        x as f32 >= default_child.right() + 2.0
+            && y as f32 >= default_child.top() - 2.0
+            && y as f32 <= default_child.bottom() + 2.0
+            && pixel[2] > pixel[0].saturating_add(8)
+            && pixel[2] > pixel[1].saturating_add(8)
+    }));
 
     let (red_pixels, blue_pixels) = pixels
         .iter()
@@ -133,6 +160,66 @@ async fn text_shadow_blur_reaches_pixels_beyond_the_unblurred_glyph_bounds() {
         })
         .count();
     assert!(fringe > 0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_preserves_partial_alpha_after_blurring() {
+    async fn shadow_pixels(color: &str) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ color:transparent; font-size:28px; width:max-content; text-shadow:0 0 8px {color}; }}"
+        ))
+        .unwrap();
+        render_ui_pixels(stylesheet, |ui| {
+            ui.add_space(24.0);
+            ui.add(egui::Label::new("M").selector(".text"));
+        })
+        .await
+    }
+
+    let half_alpha = shadow_pixels("rgb(0 0 255 / 50%)").await;
+    let opaque = shadow_pixels("blue").await;
+    assert!(half_alpha.iter().zip(&opaque).any(|(half_alpha, opaque)| {
+        opaque[0] < 200
+            && half_alpha[0] > opaque[0].saturating_add(10)
+            && half_alpha[0] < 255
+            && half_alpha[2] == 255
+    }));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_rasterizes_underline_overline_and_strikethrough_geometry() {
+    async fn blue_shadow_pixels(decoration: &str) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ color:transparent; font-size:28px; width:max-content; text-shadow:0 4px blue; {decoration} }}"
+        ))
+        .unwrap();
+        render_ui_pixels(stylesheet, |ui| {
+            ui.add_space(24.0);
+            ui.add(egui::Label::new("M M").selector(".text"));
+        })
+        .await
+    }
+
+    let plain = blue_shadow_pixels("").await;
+    for decoration in [
+        "text-decoration:underline lime 2px;",
+        "text-decoration:overline lime 2px;",
+        "text-decoration:line-through lime 2px;",
+    ] {
+        let decorated = blue_shadow_pixels(decoration).await;
+        let blue_dominant = |pixel: &[u8; 4]| pixel[2] > pixel[0] && pixel[2] > pixel[1];
+        let extra_blue_pixels = decorated
+            .iter()
+            .zip(&plain)
+            .filter(|(decorated, plain)| blue_dominant(decorated) && !blue_dominant(plain))
+            .count();
+        assert!(
+            extra_blue_pixels > 0,
+            "no decoration shadow for {decoration}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
@@ -342,6 +429,59 @@ async fn first_letter_css_wide_color_and_background_reset_pseudo_decoration_test
         !pixels.contains(&[0, 0, 255, 255]),
         "pseudo background kept the earlier blue fill"
     );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn pseudo_first_letter_and_first_line_text_shadows_paint_selected_text() {
+    let stylesheet = Stylesheet::parse(
+        ".letter, .line { color:transparent; font-size:32px; width:max-content; }\
+         .letter::first-letter { text-shadow:14px 0 red; }\
+         .line::first-line { text-shadow:14px 0 blue; }",
+    )
+    .unwrap();
+    let pixels = render_ui_pixels(stylesheet, |ui| {
+        ui.add_space(20.0);
+        ui.add(egui::Label::new("AB").selector(".letter"));
+        ui.add(egui::Label::new("M N").selector(".line"));
+    })
+    .await;
+
+    assert!(pixels.contains(&[255, 0, 0, 255]));
+    assert!(pixels.contains(&[0, 0, 255, 255]));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn adjacent_sibling_text_does_not_hide_uncovered_shadow_pixels() {
+    let stylesheet = Stylesheet::parse(
+        ".first { color:transparent; font-size:28px; text-shadow:16px 0 blue; }\
+         .second { color:red; font-size:28px; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        ui.horizontal(|ui| {
+            let first = ui.add(egui::Label::new("M").selector(".first")).rect;
+            let second = ui.add(egui::Label::new("i").selector(".second")).rect;
+            *capture.lock().unwrap() = Some((first, second));
+        });
+    })
+    .await;
+    let (first, second) = bounds.lock().unwrap().unwrap();
+    assert!(second.left() < first.right() + 16.0);
+    assert!(pixels.iter().enumerate().any(|(index, pixel)| {
+        let x = index % WIDTH as usize;
+        let y = index / WIDTH as usize;
+        x as f32 >= second.left()
+            && (x as f32) < second.right()
+            && y as f32 >= second.top()
+            && (y as f32) < second.bottom()
+            && pixel[2] > pixel[0]
+            && pixel[2] > pixel[1]
+    }));
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

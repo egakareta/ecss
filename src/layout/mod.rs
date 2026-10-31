@@ -1201,7 +1201,6 @@ pub(crate) fn show(
         let mut frame = active.0.borrow_mut();
         frame.layout_animation_active = true;
     }
-    crate::text_shadow::resolve_current_color(&mut style.text_shadows, style.current_color);
     let font_request = style
         .format
         .font_family
@@ -2344,6 +2343,15 @@ pub(crate) fn show(
                 if text_rects.is_empty() {
                     continue;
                 }
+                shapes.extend(text::paint_pseudo_text_shadows(
+                    ui.ctx(),
+                    layer,
+                    start,
+                    end,
+                    &text_rects,
+                    &pseudo_style.text_shadows,
+                    color,
+                ));
                 for text_rect in text_rects {
                     shapes.extend(pseudo_decoration_shapes(PseudoDecorationInput {
                         context: ui.ctx(),

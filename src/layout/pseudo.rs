@@ -272,6 +272,7 @@ pub(super) fn pseudo_decoration_style(
         Some(crate::css::AllKeyword::Inherit) => {
             style = parent.clone();
             style.custom_properties = custom_properties.clone();
+            style.text_shadows.clear();
             color = parent.current_color;
         }
         Some(crate::css::AllKeyword::Unset) => color = parent.current_color,
@@ -352,6 +353,7 @@ pub(super) fn pseudo_decoration_property_applies(
             name.starts_with("border")
                 || name.starts_with("corner-")
                 || name.starts_with("box-shadow")
+                || name == "text-shadow"
                 || name == "box-decoration-break"
                 || name == "padding"
                 || name.starts_with("padding-")
@@ -360,6 +362,7 @@ pub(super) fn pseudo_decoration_property_applies(
         }
         crate::css::PseudoElementKind::FirstLine => {
             name.starts_with("box-shadow")
+                || name == "text-shadow"
                 || name.starts_with("border-image")
                 || name == "border-radius"
                 || name.ends_with("-radius")

@@ -12,20 +12,16 @@ use crate::layout_style::Units;
 
 const CACHE_ID: &str = "ecss.text-shadow-cache";
 const CACHE_CAPACITY: usize = 48;
+pub(crate) const MAX_MASK_PIXELS: usize = 1_048_576;
+const MAX_MASK_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ACTIVE_BYTES: usize = 48 * 1024 * 1024;
+const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shadow {
     pub(crate) offset: Vec2,
     pub(crate) blur: f32,
     pub(crate) color: Option<Color32>,
-}
-
-pub(crate) fn resolve_current_color(shadows: &mut [Shadow], color: Color32) {
-    for shadow in shadows {
-        if shadow.color.is_none() {
-            shadow.color = Some(color);
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,17 +35,21 @@ struct CachedMask {
     key: MaskKey,
     texture: egui::TextureHandle,
     bounds: Rect,
+    bytes: usize,
 }
 
 struct EvictedMask {
     frame: u64,
     texture: egui::TextureHandle,
+    bytes: usize,
 }
 
 #[derive(Default)]
 struct Cache {
     masks: VecDeque<CachedMask>,
     evicted: VecDeque<EvictedMask>,
+    active_bytes: usize,
+    retained_bytes: usize,
 }
 
 pub(crate) fn supported(name: &str) -> bool {
@@ -126,14 +126,56 @@ pub(crate) fn paint(
     shadows: &[Shadow],
     current_color: Color32,
 ) -> Shape {
+    paint_with_selection(context, text, clip, shadows, current_color, None, true)
+}
+
+pub(crate) fn paint_selected(
+    context: &Context,
+    text: &TextShape,
+    clip: Rect,
+    shadows: &[Shadow],
+    current_color: Color32,
+    selection: &[Rect],
+) -> Shape {
+    paint_with_selection(
+        context,
+        text,
+        clip,
+        shadows,
+        current_color,
+        Some(selection),
+        false,
+    )
+}
+
+fn paint_with_selection(
+    context: &Context,
+    text: &TextShape,
+    clip: Rect,
+    shadows: &[Shadow],
+    current_color: Color32,
+    selection: Option<&[Rect]>,
+    include_text: bool,
+) -> Shape {
     if shadows.is_empty() {
-        return Shape::Text(text.clone());
+        return if include_text {
+            Shape::Text(text.clone())
+        } else {
+            Shape::Noop
+        };
     }
-    let glyph_bounds = glyph_bounds(text);
-    if !glyph_bounds.is_positive() {
-        return Shape::Text(text.clone());
+    let mask_bounds = mask_bounds(text, selection);
+    if !mask_bounds.is_positive() {
+        return if include_text {
+            Shape::Text(text.clone())
+        } else {
+            Shape::Noop
+        };
     }
-    let glyphs = glyph_key(text);
+    if selection.is_some_and(<[Rect]>::is_empty) {
+        return Shape::Noop;
+    }
+    let glyphs = glyph_key(text, selection);
     let cache = cache(context);
     let mut source_meshes = None;
     let mut shapes = Vec::with_capacity(shadows.len() + 1);
@@ -147,7 +189,7 @@ pub(crate) fn paint(
         } else {
             1_000_000.0
         };
-        let output_bounds = glyph_bounds
+        let output_bounds = mask_bounds
             .expand(padding)
             .intersect(clip.translate(-(text.pos.to_vec2() + shadow.offset)));
         if !output_bounds.is_positive() {
@@ -165,11 +207,19 @@ pub(crate) fn paint(
         };
         let mask = cached_mask(&cache, key).or_else(|| {
             if source_meshes.is_none() {
-                source_meshes = Some(glyph_meshes(context, text));
+                source_meshes = Some(glyph_meshes(context, text, selection));
             }
             let meshes = source_meshes.as_ref()?;
             let (image, bounds) =
                 crate::layout::rasterize_alpha_mask(context, meshes, output_bounds, shadow.blur)?;
+            let bytes = image
+                .pixels
+                .len()
+                .checked_mul(std::mem::size_of::<Color32>() * 2)?;
+            if bytes > MAX_MASK_BYTES || !reserve_mask(&cache, bytes, context.cumulative_frame_nr())
+            {
+                return None;
+            }
             let texture = context.load_texture(
                 format!("ecss-text-shadow-{:016x}-{:08x}", key.glyphs, key.blur),
                 image.clone(),
@@ -180,16 +230,23 @@ pub(crate) fn paint(
                 key,
                 texture,
                 bounds,
+                bytes,
             };
-            insert_mask(&cache, mask, context.cumulative_frame_nr());
+            insert_reserved_mask(&cache, mask, context.cumulative_frame_nr());
             cached_mask(&cache, key)
         });
         if let Some(mask) = mask {
             shapes.push(mask_shape(mask, text.pos, shadow.offset, color));
         }
     }
-    shapes.push(Shape::Text(text.clone()));
-    Shape::Vec(shapes)
+    if include_text {
+        shapes.push(Shape::Text(text.clone()));
+    }
+    if shapes.is_empty() {
+        Shape::Noop
+    } else {
+        Shape::Vec(shapes)
+    }
 }
 
 fn mask_shape(mask: CachedMask, position: Pos2, offset: Vec2, color: Color32) -> Shape {
@@ -199,7 +256,7 @@ fn mask_shape(mask: CachedMask, position: Pos2, offset: Vec2, color: Color32) ->
     Shape::Mesh(mesh.into())
 }
 
-fn glyph_meshes(context: &Context, text: &TextShape) -> Vec<Mesh> {
+fn glyph_meshes(context: &Context, text: &TextShape, selection: Option<&[Rect]>) -> Vec<Mesh> {
     let mut glyph_text = text.clone();
     glyph_text.pos = Pos2::ZERO;
     glyph_text.underline = Stroke::NONE;
@@ -210,28 +267,51 @@ fn glyph_meshes(context: &Context, text: &TextShape) -> Vec<Mesh> {
     galley.num_indices = 0;
     galley.mesh_bounds = Rect::NOTHING;
     for placed in &mut galley.rows {
+        let position = placed.pos;
         let row = Arc::make_mut(&mut placed.row);
         let original = &row.visuals.mesh;
-        let range = row.visuals.glyph_vertex_range.clone();
-        let start = range.start.min(original.vertices.len());
-        let end = range.end.min(original.vertices.len()).max(start);
+        let ranges = selection.map_or_else(
+            || {
+                vec![
+                    row.visuals.glyph_vertex_range.clone(),
+                    row.visuals.glyph_vertex_range.end..original.vertices.len(),
+                ]
+            },
+            |selection| selected_glyph_ranges(text, position, row, selection),
+        );
         let mut mesh = Mesh::with_texture(original.texture_id);
-        mesh.vertices
-            .extend_from_slice(&original.vertices[start..end]);
-        for vertex in &mut mesh.vertices {
-            vertex.color = Color32::WHITE;
+        let mut remap = vec![None; original.vertices.len()];
+        for range in &ranges {
+            let start = range.start.min(original.vertices.len());
+            let end = range.end.min(original.vertices.len()).max(start);
+            let destination = mesh.vertices.len() as u32;
+            for (offset, vertex) in original.vertices[start..end].iter().enumerate() {
+                remap[start + offset] = Some(destination + offset as u32);
+                let mut vertex = *vertex;
+                let in_glyph_range = row.visuals.glyph_vertex_range.contains(&(start + offset));
+                vertex.color = if in_glyph_range {
+                    Color32::WHITE
+                } else {
+                    Color32::from_white_alpha(vertex.color.a())
+                };
+                mesh.vertices.push(vertex);
+            }
         }
         for &[a, b, c] in original.indices.as_chunks::<3>().0 {
             let [a, b, c] = [a as usize, b as usize, c as usize];
-            if (start..end).contains(&a) && (start..end).contains(&b) && (start..end).contains(&c) {
-                mesh.indices
-                    .extend([(a - start) as u32, (b - start) as u32, (c - start) as u32]);
+            let included = ranges
+                .iter()
+                .any(|range| range.contains(&a) && range.contains(&b) && range.contains(&c));
+            if included && let (Some(a), Some(b), Some(c)) = (remap[a], remap[b], remap[c]) {
+                mesh.indices.extend([a, b, c]);
             }
         }
         for glyph in &mut row.glyphs {
-            glyph.first_vertex = (glyph.first_vertex as usize)
-                .saturating_sub(start)
-                .min(mesh.vertices.len()) as u32;
+            glyph.first_vertex = remap
+                .get(glyph.first_vertex as usize)
+                .copied()
+                .flatten()
+                .unwrap_or(0);
         }
         row.visuals.glyph_vertex_range = 0..mesh.vertices.len();
         row.visuals.glyph_index_start = 0;
@@ -240,7 +320,7 @@ fn glyph_meshes(context: &Context, text: &TextShape) -> Vec<Mesh> {
         galley.num_indices += mesh.indices.len();
         galley.mesh_bounds = galley
             .mesh_bounds
-            .union(row.visuals.mesh_bounds.translate(placed.pos.to_vec2()));
+            .union(row.visuals.mesh_bounds.translate(position.to_vec2()));
         row.visuals.mesh = mesh;
     }
     context
@@ -259,16 +339,64 @@ fn glyph_meshes(context: &Context, text: &TextShape) -> Vec<Mesh> {
         .collect()
 }
 
-fn glyph_bounds(text: &TextShape) -> Rect {
+fn selected_glyph_ranges(
+    text: &TextShape,
+    position: Pos2,
+    row: &egui::epaint::text::Row,
+    selection: &[Rect],
+) -> Vec<std::ops::Range<usize>> {
+    let glyph_range = row.visuals.glyph_vertex_range.clone();
+    let rotation = egui::emath::Rot2::from_angle(text.angle);
+    row.glyphs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, glyph)| {
+            let start = (glyph.first_vertex as usize).max(glyph_range.start);
+            let end = row
+                .glyphs
+                .get(index + 1)
+                .map_or(glyph_range.end, |next| next.first_vertex as usize)
+                .min(glyph_range.end)
+                .min(row.visuals.mesh.vertices.len());
+            if start >= end {
+                return None;
+            }
+            let bounds = row.visuals.mesh.vertices[start..end]
+                .iter()
+                .map(|vertex| text.pos + rotation * (position.to_vec2() + vertex.pos.to_vec2()))
+                .fold(Rect::NOTHING, |bounds, point| {
+                    bounds.union(Rect::from_min_max(point, point))
+                });
+            selection
+                .iter()
+                .any(|rect| rect.contains(bounds.center()))
+                .then_some(start..end)
+        })
+        .collect()
+}
+
+fn mask_bounds(text: &TextShape, selection: Option<&[Rect]>) -> Rect {
     let rotation = egui::emath::Rot2::from_angle(text.angle);
     text.galley
         .rows
         .iter()
         .flat_map(|placed| {
-            let range = placed.row.visuals.glyph_vertex_range.clone();
-            placed.row.visuals.mesh.vertices[range]
-                .iter()
-                .map(move |vertex| rotation * (placed.pos.to_vec2() + vertex.pos.to_vec2()))
+            let row = &placed.row;
+            let ranges = selection.map_or_else(
+                || {
+                    vec![
+                        row.visuals.glyph_vertex_range.clone(),
+                        row.visuals.glyph_vertex_range.end..row.visuals.mesh.vertices.len(),
+                    ]
+                },
+                |selection| selected_glyph_ranges(text, placed.pos, row, selection),
+            );
+            let vertices = &row.visuals.mesh.vertices;
+            ranges.into_iter().flat_map(move |range| {
+                vertices[range]
+                    .iter()
+                    .map(move |vertex| rotation * (placed.pos.to_vec2() + vertex.pos.to_vec2()))
+            })
         })
         .fold(Rect::NOTHING, |bounds, point| {
             let point = Pos2::ZERO + point;
@@ -276,31 +404,46 @@ fn glyph_bounds(text: &TextShape) -> Rect {
         })
 }
 
-fn glyph_key(text: &TextShape) -> u64 {
+fn glyph_key(text: &TextShape, selection: Option<&[Rect]>) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.angle.to_bits().hash(&mut hasher);
     text.opacity_factor.to_bits().hash(&mut hasher);
     text.galley.pixels_per_point.to_bits().hash(&mut hasher);
     text.galley.rows.len().hash(&mut hasher);
+    if let Some(selection) = selection {
+        for rect in selection {
+            rect.min.x.to_bits().hash(&mut hasher);
+            rect.min.y.to_bits().hash(&mut hasher);
+            rect.max.x.to_bits().hash(&mut hasher);
+            rect.max.y.to_bits().hash(&mut hasher);
+        }
+    }
     for placed in &text.galley.rows {
         placed.pos.x.to_bits().hash(&mut hasher);
         placed.pos.y.to_bits().hash(&mut hasher);
         let row = &placed.row;
-        let range = row.visuals.glyph_vertex_range.clone();
-        range.start.hash(&mut hasher);
-        range.end.hash(&mut hasher);
         row.visuals.mesh.texture_id.hash(&mut hasher);
-        for vertex in &row.visuals.mesh.vertices[range.clone()] {
-            vertex.pos.x.to_bits().hash(&mut hasher);
-            vertex.pos.y.to_bits().hash(&mut hasher);
-            vertex.uv.x.to_bits().hash(&mut hasher);
-            vertex.uv.y.to_bits().hash(&mut hasher);
+        let ranges = [
+            row.visuals.glyph_vertex_range.clone(),
+            row.visuals.glyph_vertex_range.end..row.visuals.mesh.vertices.len(),
+        ];
+        for range in &ranges {
+            range.start.hash(&mut hasher);
+            range.end.hash(&mut hasher);
+            for vertex in &row.visuals.mesh.vertices[range.clone()] {
+                vertex.pos.x.to_bits().hash(&mut hasher);
+                vertex.pos.y.to_bits().hash(&mut hasher);
+                vertex.uv.x.to_bits().hash(&mut hasher);
+                vertex.uv.y.to_bits().hash(&mut hasher);
+                vertex.color.a().hash(&mut hasher);
+            }
         }
         for triangle in row.visuals.mesh.indices.as_chunks::<3>().0 {
-            if triangle
-                .iter()
-                .all(|index| range.contains(&(*index as usize)))
-            {
+            if triangle.iter().all(|index| {
+                ranges
+                    .iter()
+                    .any(|range| range.contains(&(*index as usize)))
+            }) {
                 triangle.hash(&mut hasher);
             }
         }
@@ -335,6 +478,7 @@ fn cache(context: &Context) -> Arc<Mutex<Cache>> {
             .is_some_and(|entry| entry.frame < frame)
         {
             if let Some(entry) = cache.evicted.pop_front() {
+                cache.retained_bytes = cache.retained_bytes.saturating_sub(entry.bytes);
                 ids.push(entry.texture.id());
             }
         }
@@ -356,23 +500,53 @@ fn cached_mask(cache: &Arc<Mutex<Cache>>, key: MaskKey) -> Option<CachedMask> {
         key: mask.key,
         texture: mask.texture.clone(),
         bounds: mask.bounds,
+        bytes: mask.bytes,
     };
     cache.masks.push_back(mask);
     Some(cached)
 }
 
-fn insert_mask(cache: &Arc<Mutex<Cache>>, mask: CachedMask, frame: u64) {
+fn reserve_mask(cache: &Arc<Mutex<Cache>>, bytes: usize, frame: u64) -> bool {
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache.masks.retain(|cached| cached.key != mask.key);
-    cache.masks.push_back(mask);
-    if cache.masks.len() > CACHE_CAPACITY
-        && let Some(mask) = cache.masks.pop_front()
+    if bytes > MAX_MASK_BYTES
+        || cache
+            .retained_bytes
+            .checked_add(bytes)
+            .is_none_or(|total| total > MAX_RETAINED_BYTES)
     {
+        return false;
+    }
+    while cache.active_bytes + bytes > MAX_ACTIVE_BYTES || cache.masks.len() >= CACHE_CAPACITY {
+        let Some(mask) = cache.masks.pop_front() else {
+            return false;
+        };
+        cache.active_bytes = cache.active_bytes.saturating_sub(mask.bytes);
         cache.evicted.push_back(EvictedMask {
             frame,
             texture: mask.texture,
+            bytes: mask.bytes,
         });
     }
+    cache.active_bytes += bytes;
+    cache.retained_bytes += bytes;
+    true
+}
+
+fn insert_reserved_mask(cache: &Arc<Mutex<Cache>>, mask: CachedMask, frame: u64) {
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(index) = cache.masks.iter().position(|cached| cached.key == mask.key)
+        && let Some(previous) = cache.masks.remove(index)
+    {
+        cache.active_bytes = cache.active_bytes.saturating_sub(previous.bytes);
+        cache.evicted.push_back(EvictedMask {
+            frame,
+            texture: previous.texture,
+            bytes: previous.bytes,
+        });
+    }
+    cache.masks.push_back(mask);
 }

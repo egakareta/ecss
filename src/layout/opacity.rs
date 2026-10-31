@@ -185,7 +185,7 @@ pub(crate) fn rasterize_alpha_mask(
     }
 
     let max_texture_side = context.input(|input| input.max_texture_side).max(1);
-    let max_pixels = 16 * 1024 * 1024;
+    let max_pixels = crate::text_shadow::MAX_MASK_PIXELS;
     if target_size.iter().any(|side| *side > max_texture_side)
         || target_size[0].checked_mul(target_size[1])? > max_pixels
     {

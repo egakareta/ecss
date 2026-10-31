@@ -957,6 +957,55 @@ pub(super) fn paint_text_shadows(
     });
 }
 
+pub(super) fn paint_pseudo_text_shadows(
+    context: &Context,
+    layer: egui::LayerId,
+    start: egui::layers::ShapeIdx,
+    end: egui::layers::ShapeIdx,
+    selection: &[Rect],
+    shadows: &[crate::text_shadow::Shadow],
+    current_color: Color32,
+) -> Vec<egui::Shape> {
+    if selection.is_empty() || shadows.is_empty() {
+        return Vec::new();
+    }
+    fn collect(shape: &egui::Shape, clip: Rect, output: &mut Vec<(egui::epaint::TextShape, Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => output.push((text.clone(), clip)),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, clip, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let text_shapes = context.graphics(|layers| {
+        let Some(list) = layers.get(layer) else {
+            return Vec::new();
+        };
+        let mut text_shapes = Vec::new();
+        for entry in list.all_entries().skip(start.0).take(end.0 - start.0) {
+            collect(&entry.shape, entry.clip_rect, &mut text_shapes);
+        }
+        text_shapes
+    });
+    text_shapes
+        .into_iter()
+        .map(|(text, clip)| {
+            crate::text_shadow::paint_selected(
+                context,
+                &text,
+                clip,
+                shadows,
+                current_color,
+                selection,
+            )
+        })
+        .filter(|shape| !matches!(shape, egui::Shape::Noop))
+        .collect()
+}
+
 fn paint_text_shadow_shape(
     context: &Context,
     shape: &mut egui::Shape,
