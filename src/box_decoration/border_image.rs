@@ -82,74 +82,74 @@ pub(super) fn apply_border_image(
 }
 
 fn parse_border_image(values: &[String], units: Units) -> Result<BorderImage, &'static str> {
-    let mut sections = vec![Vec::new()];
-    for value in values {
-        if value == "/" {
-            if sections.len() == 3 {
-                return Err("too many border-image slashes");
-            }
-            sections.push(Vec::new());
-        } else {
-            sections.last_mut().unwrap().push(value.clone());
-        }
-    }
+    let [source, slice, width, outset, repeat] = border_image_components(values)?;
     let mut image = BorderImage::default();
-    let mut initial = Vec::new();
-    let mut source_seen = false;
-    for token in &sections[0] {
-        if let Some(repeat) = image_repeat(token) {
-            if image.repeat[0] != ImageRepeat::Stretch {
-                image.repeat[1] = repeat;
-            } else {
-                image.repeat[0] = repeat;
-                image.repeat[1] = repeat;
-            }
-        } else if is_border_image_source_token(token) {
-            if source_seen {
-                return Err("duplicate border image source");
-            }
-            image.source = crate::css::parse_background_image(token)
-                .map_err(|_| "invalid border image source")?;
-            source_seen = true;
-        } else {
-            initial.push(token.clone());
-        }
+    if let Some(source) = source.first() {
+        image.source = crate::css::parse_background_image(source)
+            .map_err(|_| "invalid border image source")?;
     }
-    if initial.is_empty() && sections.len() > 1 {
-        return Err("border-image slash values require a slice");
+    if !slice.is_empty() {
+        (image.slice, image.fill) = parse_image_slice(&slice, units)?;
     }
-    if !initial.is_empty() {
-        (image.slice, image.fill) = parse_image_slice(&initial, units)?;
+    if !width.is_empty() {
+        image.width = parse_image_width(&width, units)?;
     }
-    if sections.len() == 2 && sections[1].is_empty() {
-        return Err("border-image width requires a value");
+    if !outset.is_empty() {
+        image.outset = parse_image_outset(&outset, units)?;
     }
-    if sections.len() == 3 && sections[2].is_empty() {
-        return Err("border-image outset requires a value");
-    }
-    if sections.len() > 1 {
-        let width_values = sections[1].clone();
-        if !width_values.is_empty() {
-            image.width = parse_image_width(&width_values, units)?;
-        }
-    }
-    if sections.len() > 2 {
-        let outset_values = sections[2].clone();
-        if !outset_values.is_empty() {
-            image.outset = parse_image_outset(&outset_values, units)?;
-        }
-    }
-    let repeat_values = sections[0]
-        .iter()
-        .filter_map(|value| image_repeat(value))
-        .collect::<Vec<_>>();
-    if repeat_values.len() > 2 {
-        return Err("invalid border-image-repeat");
-    }
-    if let Some(first) = repeat_values.first() {
-        image.repeat = [*first, *repeat_values.get(1).unwrap_or(first)];
+    if !repeat.is_empty() {
+        image.repeat = parse_image_repeat(&repeat)?;
     }
     Ok(image)
+}
+
+pub(crate) fn border_image_components(values: &[String]) -> Result<[Vec<String>; 5], &'static str> {
+    let mut components: [Vec<String>; 5] = Default::default();
+    let mut values = values.iter().peekable();
+    let is_boundary = |value: &str| {
+        value == "/" || is_border_image_source_token(value) || image_repeat(value).is_some()
+    };
+    while let Some(value) = values.next() {
+        if is_border_image_source_token(value) {
+            if !components[0].is_empty() {
+                return Err("duplicate border image source");
+            }
+            components[0].push(value.clone());
+        } else if image_repeat(value).is_some() {
+            if !components[4].is_empty() {
+                return Err("invalid border-image-repeat");
+            }
+            components[4].push(value.clone());
+            if let Some(value) = values.next_if(|value| image_repeat(value).is_some()) {
+                components[4].push(value.clone());
+            }
+        } else {
+            if !components[1].is_empty() || value == "/" {
+                return Err("invalid border-image slice");
+            }
+            components[1].push(value.clone());
+            while let Some(value) = values.next_if(|value| !is_boundary(value)) {
+                components[1].push(value.clone());
+            }
+            if values.next_if(|value| value.as_str() == "/").is_none() {
+                continue;
+            }
+            while let Some(value) = values.next_if(|value| !is_boundary(value)) {
+                components[2].push(value.clone());
+            }
+            if values.next_if(|value| value.as_str() == "/").is_some() {
+                while let Some(value) = values.next_if(|value| !is_boundary(value)) {
+                    components[3].push(value.clone());
+                }
+                if components[3].is_empty() {
+                    return Err("border-image outset requires a value");
+                }
+            } else if components[2].is_empty() {
+                return Err("border-image width requires a value");
+            }
+        }
+    }
+    Ok(components)
 }
 
 fn parse_image_slice(

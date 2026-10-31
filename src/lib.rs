@@ -282,7 +282,13 @@ impl Stylesheet {
 
     fn background_image_urls(&self) -> Vec<String> {
         let mut urls = Vec::new();
-        for declaration in self.rules.iter().flat_map(|rule| &rule.declarations) {
+        let declarations = self.rules.iter().flat_map(|rule| &rule.declarations).chain(
+            self.keyframes
+                .iter()
+                .flat_map(|keyframes| &keyframes.frames)
+                .flat_map(|frame| &frame.declarations),
+        );
+        for declaration in declarations {
             if let Declaration::Layout(layout) = declaration
                 && layout.name.starts_with("border-image")
             {

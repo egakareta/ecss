@@ -9,7 +9,7 @@ mod shadows;
 mod shape_parser;
 
 use border_image::apply_border_image;
-pub(crate) use border_image::{border_image_source, border_image_urls};
+pub(crate) use border_image::{border_image_components, border_image_source, border_image_urls};
 use paths::filled_paths_difference;
 pub(crate) use paths::{
     clip_mesh_to_paths, filled_path, filled_paths, path_clip, rounded_corner_segments,

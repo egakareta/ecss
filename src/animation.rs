@@ -1488,7 +1488,15 @@ fn expand_layout_declaration(
         return border_component_declarations(name, value, axes);
     }
     if name == "border" {
-        return border_shorthand_declarations("border", value, ["top", "right", "bottom", "left"]);
+        let mut declarations =
+            border_shorthand_declarations("border", value, ["top", "right", "bottom", "left"]);
+        declarations.extend(border_image_declarations(
+            [if is_css_wide(value) { value } else { "initial" }; 5],
+        ));
+        return declarations;
+    }
+    if name == "border-image" {
+        return border_image_shorthand_declarations(value);
     }
     if matches!(name, "outline" | "column-rule") {
         return border_shorthand_declarations(name, value, [""]);
@@ -1718,6 +1726,39 @@ fn border_shorthand_declarations<const N: usize>(
         })
         .map(|(name, value)| (name.clone(), layout_declaration(name, &value)))
         .collect()
+}
+
+fn border_image_declarations(values: [&str; 5]) -> Vec<(String, Declaration)> {
+    ["source", "slice", "width", "outset", "repeat"]
+        .into_iter()
+        .zip(values)
+        .map(|(component, value)| {
+            let name = format!("border-image-{component}");
+            (name.clone(), layout_declaration(name, value))
+        })
+        .collect()
+}
+
+fn border_image_shorthand_declarations(value: &str) -> Vec<(String, Declaration)> {
+    if is_css_wide(value) {
+        return border_image_declarations([value; 5]);
+    }
+    if let Ok(components) = crate::layout_style::components(value)
+        && let Ok(components) = crate::box_decoration::border_image_components(&components)
+    {
+        let values = components.map(|values| {
+            if values.is_empty() {
+                "initial".to_owned()
+            } else {
+                values.join(" ")
+            }
+        });
+        return border_image_declarations(values.each_ref().map(String::as_str));
+    }
+    vec![(
+        "border-image".to_owned(),
+        layout_declaration("border-image".to_owned(), value),
+    )]
 }
 
 fn border_components(value: &str, outline: bool) -> Option<(String, String, String)> {

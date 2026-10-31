@@ -188,7 +188,11 @@ fn atomic_properties(property: &str, axes: LogicalAxes<'_>) -> Vec<String> {
                     }
                 }));
             }
-            "border" => result.extend(border_properties(None)),
+            "border" => {
+                result.extend(border_properties(None));
+                result.extend(border_image_properties());
+            }
+            "border-image" => result.extend(border_image_properties()),
             "border-width" | "border-color" | "border-style" => {
                 let suffix = property.strip_prefix("border-").unwrap();
                 result.extend(border_properties(Some(suffix)));
@@ -229,6 +233,12 @@ fn border_properties(component: Option<&str>) -> Vec<String> {
 fn border_side_properties(side: &str) -> Vec<String> {
     ["width", "style", "color"]
         .map(|component| format!("border-{side}-{component}"))
+        .to_vec()
+}
+
+fn border_image_properties() -> Vec<String> {
+    ["source", "slice", "width", "outset", "repeat"]
+        .map(|component| format!("border-image-{component}"))
         .to_vec()
 }
 

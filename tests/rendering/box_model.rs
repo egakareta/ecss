@@ -1858,8 +1858,27 @@ async fn border_image_slice_values_clamp_to_image_dimensions_test() {
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-async fn border_image_slice_rejects_duplicate_fill_keywords_test() {
+async fn border_image_rejects_invalid_components_test() {
     assert!(Stylesheet::parse(".image { border-image-slice:1 fill fill; }").is_err());
+    for value in [
+        "image(red) image(blue) 1",
+        "1 fill fill",
+        "1 /",
+        "1 / /",
+        "1 / 1 / 0 / 0",
+        "/ 1 round",
+        "1 / round",
+        "1 / 1 / round",
+        "1 round round round",
+        "repeat none round",
+        "1 round / 1",
+        "1 image(red) 2",
+    ] {
+        assert!(
+            Stylesheet::parse(&format!(".image {{ border-image:{value}; }}")).is_err(),
+            "accepted invalid border-image: {value}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

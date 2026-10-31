@@ -869,31 +869,6 @@ pub(crate) fn show(
         non_pointer_state | RuleState::HOVERED.bits() | RuleState::ACTIVE.bits()
     };
     let active_visual_rules = visual_rules(active_state);
-    let mut background_urls = Vec::new();
-    for declaration in resolved_rules
-        .iter()
-        .flat_map(|(_, declarations)| declarations)
-    {
-        match declaration {
-            Declaration::BackgroundShorthand(background)
-            | Declaration::BackgroundTbdShorthand(background) => {
-                for image in &background.images {
-                    image.collect_urls(&mut background_urls);
-                }
-            }
-            Declaration::BackgroundImage(images) => {
-                for image in images {
-                    image.collect_urls(&mut background_urls);
-                }
-            }
-            Declaration::Layout(declaration) if declaration.name.starts_with("border-image") => {
-                background_urls
-                    .extend(crate::box_decoration::border_image_urls(&declaration.value));
-            }
-            _ => {}
-        }
-    }
-    stylesheet.start_background_image_load_for_urls(ui.ctx(), &background_urls);
     let mut animation_properties = Vec::new();
     for (_, declarations) in &resolved_rules {
         for declaration in declarations {
@@ -1157,6 +1132,32 @@ pub(crate) fn show(
         frame.layout_animation_active |= animation.layout_active;
     }
     let animated_declarations = animation.declarations;
+    let mut background_urls = Vec::new();
+    for declaration in resolved_rules
+        .iter()
+        .flat_map(|(_, declarations)| declarations)
+        .chain(&animated_declarations)
+    {
+        match declaration {
+            Declaration::BackgroundShorthand(background)
+            | Declaration::BackgroundTbdShorthand(background) => {
+                for image in &background.images {
+                    image.collect_urls(&mut background_urls);
+                }
+            }
+            Declaration::BackgroundImage(images) => {
+                for image in images {
+                    image.collect_urls(&mut background_urls);
+                }
+            }
+            Declaration::Layout(declaration) if declaration.name.starts_with("border-image") => {
+                background_urls
+                    .extend(crate::box_decoration::border_image_urls(&declaration.value));
+            }
+            _ => {}
+        }
+    }
+    stylesheet.start_background_image_load_for_urls(ui.ctx(), &background_urls);
     let animated_background_color = animated_declarations.iter().any(|declaration| {
         matches!(
             declaration,

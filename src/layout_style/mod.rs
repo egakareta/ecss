@@ -1567,6 +1567,9 @@ fn copy_property(name: &str, out: &mut BoxStyle, source: &BoxStyle) {
         }
         _ if name.starts_with("border") => {
             out.border_set = true;
+            if name == "border" {
+                out.decorations.border_image = source.decorations.border_image.clone();
+            }
             let parts: Vec<_> = name.split('-').skip(1).collect();
             for i in 0..4 {
                 if parts
