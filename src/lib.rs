@@ -99,7 +99,7 @@ struct RuleIndex {
 }
 
 impl RuleIndex {
-    fn new(rules: &[Rule]) -> Self {
+    fn new(rules: &[Rule], keyframes: &[css::Keyframes]) -> Self {
         let mut index = Self::default();
 
         for (rule_index, rule) in rules.iter().enumerate() {
@@ -118,6 +118,12 @@ impl RuleIndex {
         index.has_element_references = rules
             .iter()
             .flat_map(|rule| &rule.declarations)
+            .chain(
+                keyframes
+                    .iter()
+                    .flat_map(|animation| &animation.frames)
+                    .flat_map(|frame| &frame.declarations),
+            )
             .any(declaration_has_element_references);
         index.has_transitions = rules.iter().flat_map(|rule| &rule.declarations).any(|declaration| {
             matches!(declaration, Declaration::Transition(_))
@@ -154,6 +160,18 @@ impl RuleIndex {
 fn declaration_has_element_references(declaration: &Declaration) -> bool {
     let mut ids = Vec::new();
     match declaration {
+        Declaration::Deferred { name, .. }
+            if matches!(
+                name.as_str(),
+                "background"
+                    | "background-image"
+                    | "border"
+                    | "border-image"
+                    | "border-image-source"
+            ) =>
+        {
+            return true;
+        }
         Declaration::BackgroundShorthand(background) => {
             for image in &background.images {
                 image.collect_element_ids(&mut ids);
@@ -237,7 +255,7 @@ impl Stylesheet {
         for (source_order, rule) in rules.iter_mut().enumerate() {
             rule.source_order = source_order;
         }
-        let rule_index = RuleIndex::new(&rules);
+        let rule_index = RuleIndex::new(&rules, &keyframes);
         Ok(Self {
             rules,
             rule_index,
@@ -624,7 +642,7 @@ impl<W: Widget> Widget for InlineStyledWidget<W> {
             source_order: usize::MAX,
             media: Vec::new(),
         });
-        stylesheet.rule_index = RuleIndex::new(&stylesheet.rules);
+        stylesheet.rule_index = RuleIndex::new(&stylesheet.rules, &stylesheet.keyframes);
         stylesheet.start_background_image_load(ui.ctx());
         if load_fonts {
             let font_load_id = Id::unique((

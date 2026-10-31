@@ -691,22 +691,31 @@ async fn all_reset_element_image_reference_does_not_create_a_cycle_test() {
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn border_shorthand_reset_does_not_create_an_element_image_cycle_test() {
-    let stylesheet = Stylesheet::parse(
-        "#first { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; border-image-source:element(#second); border:2px solid transparent; }\n         #second { position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }",
-    )
+    for reset in [
+        "border:2px solid transparent",
+        "border-image-source:initial",
+        "border-image-source:unset",
+        "border-image-source:revert",
+        "border-image-source:inherit",
+        "border-image:initial",
+    ] {
+        let stylesheet = Stylesheet::parse(&format!(
+        "#first {{ position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:red; border-image-source:element(#second); {reset}; }}\n         #second {{ position:relative; z-index:0; box-sizing:border-box; width:16px; height:16px; background:blue; background-image:element(#first); }}",
+    ))
     .unwrap();
-    let bounds = std::sync::Arc::new(Mutex::new(None));
-    let capture = bounds.clone();
-    let pixels = render_ui_pixels(stylesheet, move |ui| {
-        ui.add(empty_response.selector("#first"));
-        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
-    })
-    .await;
-    let second = bounds.lock().unwrap().unwrap();
-    assert_eq!(
-        pixel(&pixels, second.center().x, second.center().y),
-        [255, 0, 0, 255]
-    );
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(empty_response.selector("#first"));
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
+        })
+        .await;
+        let second = bounds.lock().unwrap().unwrap();
+        assert_eq!(
+            pixel(&pixels, second.center().x, second.center().y),
+            [255, 0, 0, 255]
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
@@ -728,6 +737,92 @@ async fn first_letter_border_image_participates_in_element_cycle_detection_test(
         pixel(&pixels, second.center().x, second.center().y),
         [0, 0, 255, 255]
     );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn first_letter_border_image_resets_remove_element_cycles() {
+    for reset in ["initial", "unset", "revert", "inherit"] {
+        let stylesheet = Stylesheet::parse(&format!(
+            "#first {{ position:relative; z-index:0; width:32px; height:24px; color:transparent; background:red; }} \
+             #first::first-letter {{ border-image-source:element(#second); border-image-source:{reset}; }} \
+             #second {{ position:relative; z-index:0; width:32px; height:24px; background:blue; background-image:element(#first); }}"
+        )).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(egui::Label::new("X").selector("#first"));
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.center().y),
+            [255, 0, 0, 255],
+            "{reset}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inherited_border_images_participate_in_element_cycles() {
+    let stylesheet = Stylesheet::parse(
+        ".parent { border-image-source:element(#second); } \
+         #first { position:relative; z-index:0; box-sizing:border-box; width:24px; height:24px; border:3px solid black; background:red; border-image-source:inherit; border-image-slice:1; } \
+         #second { position:relative; z-index:0; width:24px; height:24px; background:blue; background-image:element(#first); }"
+    ).unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(empty_response.selector("#first"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
+    })
+    .await;
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.center().x, rect.center().y),
+        [0, 0, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn animated_and_variable_border_images_participate_in_element_cycles() {
+    for animated in [false, true] {
+        let sources = if animated {
+            "@keyframes first { from,to { border-image-source:element(#second); } } \
+             @keyframes second { from,to { border-image-source:element(#first); } } \
+             #first { animation:first 1s linear infinite; } \
+             #second { animation:second 1s linear infinite; }"
+        } else {
+            "#first { --image:element(#second); border-image-source:var(--image); } \
+             #second { --image:element(#first); border-image-source:var(--image); }"
+        };
+        let stylesheet = Stylesheet::parse(&format!(
+            "#first, #second {{ position:relative; z-index:0; box-sizing:border-box; width:24px; height:24px; border:3px solid transparent; border-image-slice:1; }} \
+             #first {{ background:red; }} #second {{ background:blue; }} {sources}"
+        )).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+            ui.add(empty_response.selector("#first"));
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector("#second")).rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        assert_eq!(
+            pixel(&pixels, rect.center().x, rect.top() + 1.0),
+            [0, 0, 255, 255],
+            "animated={animated}"
+        );
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

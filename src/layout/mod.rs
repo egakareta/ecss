@@ -1446,9 +1446,10 @@ pub(crate) fn show(
             resolved_element_references_from_rules(
                 stylesheet,
                 target,
-                current_state,
+                state,
                 &current_element_rules,
-                units.viewport,
+                &style,
+                units,
             );
     }
     let interaction_layout_changed = state != current_state

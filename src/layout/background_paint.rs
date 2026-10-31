@@ -655,9 +655,10 @@ pub(super) fn resolved_element_references(
 pub(super) fn resolved_element_references_from_rules(
     stylesheet: &Stylesheet,
     selector: &crate::css::SelectorTarget,
-    state: u8,
+    pseudo_state: u8,
     rules: &[(RuleState, Vec<Declaration>)],
-    viewport: Vec2,
+    style: &BoxStyle,
+    units: Units,
 ) -> HashSet<String> {
     let mut references = HashSet::new();
     let mut collect = |image: &crate::css::BackgroundImage| {
@@ -668,30 +669,22 @@ pub(super) fn resolved_element_references_from_rules(
     for image in resolved_background_from_rules(rules).images {
         collect(image);
     }
-    let mut border_image = crate::css::BackgroundImage::None;
-    for (_, declarations) in rules {
-        for declaration in declarations {
-            match declaration {
-                Declaration::All(_) => border_image = crate::css::BackgroundImage::None,
-                Declaration::Layout(layout) => {
-                    if let Some(source) =
-                        crate::box_decoration::border_image_source(&layout.name, &layout.value)
-                    {
-                        border_image = source;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    collect(&border_image);
+    collect(&style.decorations.border_image.source);
     for pseudo in [
         crate::css::PseudoElementKind::FirstLetter,
         crate::css::PseudoElementKind::FirstLine,
     ] {
-        collect(&resolved_pseudo_border_image_source(
-            stylesheet, selector, pseudo, state, viewport,
-        ));
+        if let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+            stylesheet,
+            selector,
+            pseudo,
+            pseudo_state,
+            style,
+            units,
+            style.current_color,
+        ) {
+            collect(&pseudo_style.decorations.border_image.source);
+        }
     }
     references
 }

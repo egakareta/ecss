@@ -12,6 +12,13 @@ pub(crate) fn border_image_urls(value: &str) -> Vec<String> {
 
 pub(crate) fn border_image_source(name: &str, value: &str) -> Option<crate::css::BackgroundImage> {
     match name {
+        "border-image-source"
+            if ["initial", "unset", "revert"]
+                .iter()
+                .any(|keyword| value.trim().eq_ignore_ascii_case(keyword)) =>
+        {
+            Some(crate::css::BackgroundImage::None)
+        }
         "border-image-source" => crate::css::parse_background_image(value).ok(),
         "border" => Some(crate::css::BackgroundImage::None),
         "border-image" => {
