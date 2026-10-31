@@ -6,6 +6,8 @@ fn nested_descendants_apply_in_widget_tree_and_declarations_keep_source_order() 
     let context = Context::default();
     Stylesheet::parse(
         ".panel { --child-width:40px; width:120px; height:60px;
+             & { width:140px; }
+             & { .child { width:60px; } }
              .child { width:var(--child-width); height:12px; }
              .child { width:var(--child-width); }
              width:160px;
@@ -112,26 +114,44 @@ fn nested_media_and_supports_apply_to_descendants_and_parent_declarations() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn nested_selector_lists_use_the_maximum_parent_specificity() {
+fn nested_selector_lists_expand_cross_products_with_maximum_parent_specificity() {
     let context = Context::default();
     Stylesheet::parse(
-        ".panel, #alternate { .child { width:40px; height:12px; } }
-         .child.extra { width:20px; }",
+        ".panel, #alternate { .child, .other { width:40px; height:12px; } }
+         .child.extra, .other.extra { width:20px; height:12px; }",
     )
     .unwrap()
     .install(&context);
 
-    let mut child = Rect::NOTHING;
+    let mut children = Vec::new();
     frame(&context, 120.0, 0.0, Vec::new(), |ui| {
-        ui.add(
-            (|ui: &mut Ui| {
-                child = ui.add(empty_response.selector(".child.extra")).rect;
-                ui.response()
-            })
-            .selector(".panel"),
-        );
+        children.clear();
+        for parent in [".panel", "#alternate"] {
+            ui.add(
+                (|ui: &mut Ui| {
+                    for child in [".child.extra", ".other.extra"] {
+                        children.push(ui.add(empty_response.selector(child)).rect.size());
+                    }
+                    ui.response()
+                })
+                .selector(parent),
+            );
+        }
+        for child in [".child.extra", ".other.extra"] {
+            children.push(ui.add(empty_response.selector(child)).rect.size());
+        }
     });
-    assert_eq!(child.size(), vec2(40.0, 12.0));
+    assert_eq!(
+        children,
+        [
+            vec2(40.0, 12.0),
+            vec2(40.0, 12.0),
+            vec2(40.0, 12.0),
+            vec2(40.0, 12.0),
+            vec2(20.0, 12.0),
+            vec2(20.0, 12.0),
+        ]
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
