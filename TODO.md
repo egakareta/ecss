@@ -2,6 +2,8 @@
 
 > **Sources:** [W3C CSS specifications index](https://www.w3.org/Style/CSS/specs.en.html) and the [W3C generated CSS property index](https://www.w3.org/Style/CSS/all-properties.en.html) ([JSON data](https://www.w3.org/Style/CSS/all-properties.en.json)). Property names are grouped by the specification title used in that index and sorted alphabetically. Repeated property names are retained under each spec that defines them. The generated index says it may omit properties, especially from Editors’ Drafts; entries can include proposed and vendor-prefixed properties. A feature without a CSS-properties sub-bullet has no separate property list in that generated index (for example, selector/API/syntax specs, profiles, and snapshots).
 
+Property strike-throughs identify implemented behavior, not complete grammar or interaction conformance. Verified scope, remaining review findings and normalized backlog accounting are recorded in `EXECUTION.md`.
+
 ## Core CSS, syntax, and cascading
 
 - **[CSS 2.1](https://www.w3.org/TR/CSS2/) - Partial.**
@@ -47,7 +49,8 @@
 - **[CSS Will Change Module Level 1](https://www.w3.org/TR/css-will-change-1/) - Supported.**
   - CSS properties: `will-change`.
   - Optimization hints are ignored. `position` hints establish containing blocks and stacking contexts, while `z-index` hints establish stacking contexts where that property applies.
-- **[CSS Pseudo-Elements Module Level 4](https://www.w3.org/TR/css-pseudo-4/) - Unsupported.**
+- **[CSS Pseudo-Elements Module Level 4](https://www.w3.org/TR/css-pseudo-4/) - Partial.**
+  - First-line/first-letter painting is implemented for a subset of applicable properties; generated pseudo-elements, text-range identity and complete pseudo layout remain unsupported.
 - **[CSS Logical Properties and Values Level 1](https://www.w3.org/TR/css-logical-1/) - Partial.**
   - CSS properties: ~~`block-size`~~, ~~`border-block`~~, ~~`border-block-color`~~, ~~`border-block-end`~~, ~~`border-block-end-color`~~,
     ~~`border-block-end-style`~~, ~~`border-block-end-width`~~, ~~`border-block-start`~~, ~~`border-block-start-color`~~,
@@ -77,7 +80,7 @@
 - **[CSS Namespaces](https://www.w3.org/TR/css3-namespace/) - Unsupported.**
 - **[CSS Scoping](https://www.w3.org/TR/css-scoping-1/) - Unsupported.**
 - **[CSS Conditional Rules](https://www.w3.org/TR/css3-conditional/) - Partial.**
-  - `@supports` declaration/logical conditions and nested media/keyframe rules are implemented. General-enclosed handling, variable grammar, unknown nested rules and multiline diagnostics have outstanding review findings tracked in `EXECUTION.md`.
+  - `@supports` declaration/logical conditions, general-enclosed fallback, and nested media/keyframe rules are implemented. Unknown nested at-rules are ignored and multiline diagnostics retain source locations. The public parser remains strict about malformed supported declarations, including declarations inside false branches; it does not provide browser-style rule recovery.
 - **[Non-element Selectors Module Level 1](https://www.w3.org/TR/selectors-nonelement-1/) - Unsupported.**
 - **[CSS Shadow Parts](https://www.w3.org/TR/css-shadow-parts-1/) - Unsupported.**
 - **[CSS Conditional Rules Level 4](https://www.w3.org/TR/css-conditional-4/) - Partial.**
@@ -86,7 +89,8 @@
   - CSS properties: `container`, `container-name`, `container-type`.
 - **[Media Queries Level 5](https://www.w3.org/TR/mediaqueries-5/) - Unsupported.**
 - **[CSS Custom Highlight API Level 1](https://www.w3.org/TR/css-highlight-api-1/) - Unsupported.**
-- **[CSS Nesting](https://www.w3.org/TR/css-nesting-1/) - Unsupported.**
+- **[CSS Nesting](https://www.w3.org/TR/css-nesting-1/) - Partial.**
+  - Nested-style-rule expansion is implemented. Selector matching limits and the integrated cascade/rendering behavior are under independent review; this does not establish complete nesting or Selectors conformance.
 
 ## Box model and layout
 
@@ -211,10 +215,10 @@
 - **CSS Backgrounds Level 4 - Partial.**
   - CSS properties: ~~`background`~~, ~~`background-attachment`~~, ~~`background-clip`~~,
     ~~`background-color`~~, ~~`background-image`~~,
-    ~~`background-origin`~~, ~~`background-position`~~, `background-position-block`, `background-position-inline`,
-    `background-position-x`, `background-position-y`, ~~`background-repeat`~~, `background-repeat-block`,
-    `background-repeat-inline`, `background-repeat-x`, `background-repeat-y`, ~~`background-size`~~, `background-tbd`.
-  - Partial because Level 4's position/repeat longhands and `background-tbd` are not implemented, `background-clip` accepts only `border-box`, `padding-box`, and `content-box`, not `text` or `border-area`.
+    ~~`background-origin`~~, ~~`background-position`~~, ~~`background-position-block`~~, ~~`background-position-inline`~~,
+    ~~`background-position-x`~~, ~~`background-position-y`~~, ~~`background-repeat`~~, ~~`background-repeat-block`~~,
+    ~~`background-repeat-inline`~~, ~~`background-repeat-x`~~, ~~`background-repeat-y`~~, ~~`background-size`~~, ~~`background-tbd`~~.
+  - Physical/logical axes, layer-list cycling, layer-only shorthand resets, and position-axis interpolation are implemented. Integrated review corrections and final verification are tracked in `EXECUTION.md`. `background-clip` accepts only `border-box`, `padding-box`, and `content-box`, not `text` or `border-area`.
 - **[CSS Borders and Box Decorations Level 4](https://www.w3.org/TR/css-borders-4/) - Partial.**
   - CSS properties: ~~`border`~~, ~~`border-block`~~, ~~`border-block-clip`~~, ~~`border-block-color`~~, ~~`border-block-end`~~,
     ~~`border-block-end-clip`~~, ~~`border-block-end-color`~~, ~~`border-block-end-radius`~~, ~~`border-block-end-style`~~,
@@ -244,10 +248,11 @@
     ~~`corner-start-end-shape`~~, ~~`corner-start-start`~~, ~~`corner-start-start-shape`~~, ~~`corner-top`~~,
     ~~`corner-top-left`~~, ~~`corner-top-left-shape`~~, ~~`corner-top-right`~~, ~~`corner-top-right-shape`~~,
     ~~`corner-top-shape`~~.
-  - Partial because: CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are rejected, `border-color` supports colors/currentcolor and `stripes()` but not arbitrary `<image-1D>` values, some painting behavior is approximate (for example, fixed shade factors for 3D border styles).
+  - Partial because `revert-layer` remains unsupported, `border-color` supports colors/currentcolor and `stripes()` but not arbitrary `<image-1D>` values, and some painting behavior is approximate (for example, fixed shade factors for 3D border styles). Other CSS-wide keywords are implemented for the supported properties; computed element-image dependencies include inheritance and resets.
 - **[CSS Basic User Interface](https://www.w3.org/TR/css3-ui/) - Partial.**
   - CSS properties: `box-sizing`, `caret-color`, `cursor`, ~~`outline`~~, ~~`outline-color`~~, ~~`outline-offset`~~, ~~`outline-style`~~,
     ~~`outline-width`~~, `resize`, ~~`text-overflow`~~.
+  - Cursor keywords, inheritance, dynamic states, and paint-order arbitration are implemented. Image/URL cursors are rejected because egui exposes keyword cursor icons, not custom cursor images.
 - **[CSS Color](https://www.w3.org/TR/css3-color/) - Partial.**
   - CSS properties: ~~`color`~~, ~~`opacity`~~.
   - Named/hex/RGB/HSL colors and group opacity are implemented. System-color and complete contextual-color behavior remain incomplete.
@@ -301,6 +306,7 @@
   - CSS properties: `font`, ~~`font-family`~~, `font-feature-settings`, ~~`font-kerning`~~, ~~`font-size`~~, `font-size-adjust`, `font-stretch`,
     ~~`font-style`~~, `font-synthesis`, `font-variant`, `font-variant-caps`, `font-variant-east-asian`,
     `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`, ~~`font-weight`~~.
+  - `font` supports style/weight, size, optional line height, family lists, supported-property resets, and computed inheritance. Stretch, variants, system-font forms, relative weights, and size adjustment remain unsupported. Generic serif/sans-serif/cursive/fantasy currently map to egui proportional fonts.
 - **[CSS Generated Content for Paged Media](https://www.w3.org/TR/css3-gcpm/) - Unsupported.**
   - CSS properties: `footnote-display`, `footnote-policy`, `running`, `string-set`.
 - **[CSS Hyperlink Presentation](https://www.w3.org/TR/css3-hyperlinks/) - Unsupported.**
