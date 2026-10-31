@@ -1144,19 +1144,20 @@ pub(crate) fn apply_font_shorthand(
         }
         crate::css::FontShorthand::Wide(keyword) => {
             if size_only {
-                output.format.em =
-                    match keyword {
-                        crate::css::FontWideKeyword::Inherit
-                        | crate::css::FontWideKeyword::Unset => parent.format.em,
-                        crate::css::FontWideKeyword::Initial
-                        | crate::css::FontWideKeyword::Revert => BoxStyle::default().format.em,
-                    };
+                output.format.em = match keyword {
+                    crate::css::FontWideKeyword::Inherit
+                    | crate::css::FontWideKeyword::Unset
+                    | crate::css::FontWideKeyword::Revert => parent.format.em,
+                    crate::css::FontWideKeyword::Initial => BoxStyle::default().format.em,
+                };
                 output.format.font_size_set = true;
                 return Ok(());
             }
 
             match keyword {
-                crate::css::FontWideKeyword::Inherit | crate::css::FontWideKeyword::Unset => {
+                crate::css::FontWideKeyword::Inherit
+                | crate::css::FontWideKeyword::Unset
+                | crate::css::FontWideKeyword::Revert => {
                     output.format.font_family = parent.format.font_family.clone();
                     output.format.font_weight = parent.format.font_weight;
                     output.format.font_italic = parent.format.font_italic;
@@ -1164,7 +1165,7 @@ pub(crate) fn apply_font_shorthand(
                     output.format.line_height_multiplier = parent.format.line_height_multiplier;
                     output.format.font_kerning = parent.format.font_kerning;
                 }
-                crate::css::FontWideKeyword::Initial | crate::css::FontWideKeyword::Revert => {
+                crate::css::FontWideKeyword::Initial => {
                     let default = BoxStyle::default();
                     output.format.font_family = default.format.font_family;
                     output.format.font_weight = default.format.font_weight;

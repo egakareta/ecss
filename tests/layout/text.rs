@@ -502,6 +502,7 @@ fn all_inherit_uses_computed_relative_font_and_preserves_unitless_line_height() 
         ".outer { font-size:12px; }\
          .parent { font:2em/1.5 monospace; }\
          .all-inherited { all:inherit; }\
+         .font-reverted { font:revert; }\
          .font-inherited { font:inherit; font-size:10px; }\
          .absolute-line-height { font:inherit; font-size:10px; line-height:15px; }",
     )
@@ -519,6 +520,7 @@ fn all_inherit_uses_computed_relative_font_and_preserves_unitless_line_height() 
                             ".all-inherited",
                             ".font-inherited",
                             ".absolute-line-height",
+                            ".font-reverted",
                         ] {
                             rects.push(ui.add(egui::Label::new("MMMM").selector(selector)).rect);
                         }
@@ -532,7 +534,8 @@ fn all_inherit_uses_computed_relative_font_and_preserves_unitless_line_height() 
         );
     });
 
-    assert_eq!(rects.len(), 4);
+    assert_eq!(rects.len(), 5);
+    assert_eq!(rects[4].size(), rects[0].size(), "{rects:?}");
     assert!((rects[0].height() - 36.0).abs() < 0.5, "{rects:?}");
     assert!(
         (rects[1].height() - rects[0].height()).abs() < 0.5,

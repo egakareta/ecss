@@ -1466,7 +1466,7 @@ pub(crate) fn show(
         response.enabled()
     };
     let current_state = states::response_state(&response, id, enabled);
-    let (_, cursor_rules, _) = resolve_rules(current_state);
+    let (_, cursor_rules, _, _) = resolve_rules(current_state);
     let cursor_value = cursor_rules
         .iter()
         .flat_map(|(_, declarations)| declarations)
