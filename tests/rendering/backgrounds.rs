@@ -1627,26 +1627,54 @@ async fn background_axis_longhands_update_when_hover_style_changes_test() {
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn background_reset_on_hover_replaces_the_previous_color_in_the_same_frame() {
-    let stylesheet = Stylesheet::parse(
-        ".box { width:60px; height:30px; background:red; } \
-         .box:hover { background:initial; }",
-    )
-    .unwrap();
-    let bounds = std::sync::Arc::new(Mutex::new(None));
-    let capture = bounds.clone();
-    let pixels = render_ui_pixels_with_events(
-        stylesheet,
-        vec![
-            Vec::new(),
-            vec![egui::Event::PointerMoved(egui::pos2(20.0, 10.0))],
-        ],
-        move |ui| {
-            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
-        },
-    )
-    .await;
-    let rect = bounds.lock().unwrap().unwrap();
-    assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
+    for with_child in [false, true] {
+        let stylesheet = Stylesheet::parse(
+            ".box { width:60px; height:30px; background:red; } \
+         .box:hover { background:initial; } \
+         .child { width:30px; height:15px; background-color:inherit; }",
+        )
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_with_events(
+            stylesheet,
+            vec![
+                Vec::new(),
+                vec![egui::Event::PointerMoved(egui::pos2(50.0, 25.0))],
+            ],
+            move |ui| {
+                if with_child {
+                    let child = std::cell::Cell::new(egui::Rect::NOTHING);
+                    let parent = ui.add(
+                        (|ui: &mut egui::Ui| {
+                            child.set(ui.add(empty_response.selector(".child")).rect);
+                            ui.interact(
+                                egui::Rect::from_min_size(
+                                    ui.min_rect().min,
+                                    egui::vec2(60.0, 30.0),
+                                ),
+                                ui.scope_id().with("hover-surface"),
+                                egui::Sense::hover(),
+                            )
+                        })
+                        .selector(".box"),
+                    );
+                    *capture.lock().unwrap() = Some((parent.rect, child.get(), parent.hovered()));
+                } else {
+                    let parent = ui.add(empty_response.selector(".box"));
+                    *capture.lock().unwrap() = Some((parent.rect, parent.rect, parent.hovered()));
+                }
+            },
+        )
+        .await;
+        let (parent, rect, hovered) = bounds.lock().unwrap().unwrap();
+        assert!(hovered, "the pointer must hover the parent, not its child");
+        assert_eq!(
+            pixel(&pixels, parent.right() - 2.0, parent.bottom() - 2.0),
+            [255; 4]
+        );
+        assert_eq!(pixel(&pixels, rect.center().x, rect.center().y), [255; 4]);
+    }
 }
 
 #[test]

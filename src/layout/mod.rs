@@ -103,6 +103,7 @@ struct Node {
     element_references: HashSet<String>,
     style: Rc<BoxStyle>,
     cursor_value: Option<cursor::Value>,
+    inherits_background: bool,
     children: smallvec::SmallVec<[usize; 4]>,
     parent: Option<usize>,
     flow_source: bool,
@@ -238,6 +239,29 @@ fn ordinarily_inherited(declaration: &Declaration) -> bool {
             | Declaration::Cursor(_)
             | Declaration::FontShorthand(_)
     ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "text-shadow")
+}
+
+fn inherits_background(declaration: &Declaration) -> bool {
+    use crate::css::{AllKeyword::Inherit, BackgroundAxisValue::Keyword};
+    match declaration {
+        Declaration::All(Inherit)
+        | Declaration::BackgroundReset(Inherit)
+        | Declaration::BackgroundTbdReset(Inherit)
+        | Declaration::BackgroundPositionKeyword(Inherit)
+        | Declaration::BackgroundRepeatKeyword(Inherit)
+        | Declaration::BackgroundPositionX(Keyword(Inherit))
+        | Declaration::BackgroundPositionY(Keyword(Inherit))
+        | Declaration::BackgroundPositionInline(Keyword(Inherit))
+        | Declaration::BackgroundPositionBlock(Keyword(Inherit))
+        | Declaration::BackgroundRepeatX(Keyword(Inherit))
+        | Declaration::BackgroundRepeatY(Keyword(Inherit))
+        | Declaration::BackgroundRepeatInline(Keyword(Inherit))
+        | Declaration::BackgroundRepeatBlock(Keyword(Inherit)) => true,
+        Declaration::Layout(layout) => {
+            is_background_property(&layout.name) && layout.value.eq_ignore_ascii_case("inherit")
+        }
+        _ => false,
+    }
 }
 
 fn is_css_wide_value(value: &str) -> bool {
@@ -1324,6 +1348,7 @@ pub(crate) fn show(
             element_references: HashSet::new(),
             style: style.clone(),
             cursor_value: None,
+            inherits_background: false,
             children: smallvec::SmallVec::new(),
             parent,
             flow_source: false,
@@ -1856,8 +1881,8 @@ pub(crate) fn show(
         response.enabled()
     };
     let current_state = states::response_state(&response, id, enabled);
-    let (_, cursor_rules, _, _) = resolve_rules(current_state);
-    let cursor_value = cursor_rules
+    let (_, current_rules, _, _) = resolve_rules(current_state);
+    let cursor_value = current_rules
         .iter()
         .flat_map(|(_, declarations)| declarations)
         .fold(None, |value, declaration| match declaration {
@@ -1865,7 +1890,14 @@ pub(crate) fn show(
             Declaration::Cursor(cursor) => Some(*cursor),
             _ => value,
         });
-    active.0.borrow_mut().nodes[index].cursor_value = cursor_value;
+    {
+        let mut frame = active.0.borrow_mut();
+        frame.nodes[index].cursor_value = cursor_value;
+        frame.nodes[index].inherits_background = current_rules
+            .iter()
+            .flat_map(|(_, declarations)| declarations)
+            .any(inherits_background);
+    }
     if stylesheet.rule_index.has_element_references {
         let (_, current_element_rules, _, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
@@ -1895,7 +1927,13 @@ pub(crate) fn show(
                                 | Declaration::Transition(_)
                                 | Declaration::CustomProperty { .. }
                                 | Declaration::Deferred { .. }
-                        )
+                        ) || matches_wide_property(declaration, "background") && {
+                            let frame = active.0.borrow();
+                            frame.nodes[index]
+                                .children
+                                .iter()
+                                .any(|child| frame.nodes[*child].inherits_background)
+                        }
                     }))
         });
     if interaction_layout_changed {
