@@ -408,6 +408,46 @@ fn font_shorthand_resolves_relative_sizes_line_heights_and_later_font_sizes() {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn font_shorthand_importance_applies_to_its_longhands_and_inline_overrides() {
+    let context = Context::default();
+    Stylesheet::parse(
+        ".reference { width:max-content; font:16px/2 monospace; } \
+         .sample { width:max-content; font:16px/2 monospace !important; font-size:30px; line-height:1; font-family:sans-serif; } \
+         .sample.override { font-family:sans-serif !important; }",
+    ).unwrap().install(&context);
+    let normal = ecss::InlineStyle::parse("font:24px/1 sans-serif").unwrap();
+    let important = ecss::InlineStyle::parse("font:24px/1 monospace !important").unwrap();
+    let mut bounds = Vec::new();
+    frame(&context, 300.0, 0.0, vec![], |ui| {
+        bounds = vec![
+            ui.add(egui::Label::new("iiii").selector(".reference")).rect,
+            ui.add(egui::Label::new("iiii").selector(".sample")).rect,
+            ui.add(
+                egui::Label::new("iiii")
+                    .selector(".sample")
+                    .inline_style(normal.clone()),
+            )
+            .rect,
+            ui.add(
+                egui::Label::new("iiii")
+                    .selector(".sample")
+                    .inline_style(important.clone()),
+            )
+            .rect,
+            ui.add(egui::Label::new("iiii").selector(".sample.override"))
+                .rect,
+        ];
+    });
+    assert_eq!(bounds[0].size(), bounds[1].size());
+    assert_eq!(bounds[0].size(), bounds[2].size());
+    assert!((bounds[3].height() - 24.0).abs() < 0.5, "{bounds:?}");
+    assert!(bounds[3].width() > bounds[0].width(), "{bounds:?}");
+    assert!(bounds[4].width() < bounds[0].width(), "{bounds:?}");
+    assert_eq!(bounds[4].height(), bounds[0].height());
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn font_shorthand_accepts_optional_order_resets_and_inherits_unitless_line_height() {
     let context = Context::default();
     Stylesheet::parse(
