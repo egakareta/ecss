@@ -23,6 +23,7 @@ pub(crate) struct BoxStyle {
     pub(crate) cursor: crate::layout::cursor::Computed,
     pub(crate) computed_declarations: std::sync::Arc<Vec<crate::css::Declaration>>,
     pub(crate) custom_properties: crate::css::variables::CustomProperties,
+    pub(crate) background_values: crate::css::BackgroundValues,
     template_grid: bool,
     pub display_set: bool,
     pub inline: bool,
@@ -167,6 +168,7 @@ impl Default for BoxStyle {
             cursor: Default::default(),
             computed_declarations: Default::default(),
             custom_properties: Default::default(),
+            background_values: Default::default(),
             layout: Style {
                 display: Display::Block,
                 box_sizing: BoxSizing::ContentBox,

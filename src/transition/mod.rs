@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use egui::{Context, Id, Rect, Ui};
 
-use crate::{animation::ease, layout_style::BoxStyle, math::Arena};
+use crate::{animation::ease, layout_style::BoxStyle};
 
 mod config;
 mod values;
@@ -72,6 +72,8 @@ struct State {
 pub(crate) struct Sample {
     pub(crate) layout_sampled: bool,
     pub(crate) background: bool,
+    pub(crate) background_position_x: bool,
+    pub(crate) background_position_y: bool,
     color: bool,
     radius: bool,
 }
@@ -115,13 +117,18 @@ impl Sample {
     }
 }
 
-pub(crate) fn sample(context: &Context, id: Id, style: &mut BoxStyle, arena: &Arena) -> Sample {
+pub(crate) fn sample(
+    context: &Context,
+    id: Id,
+    style: &mut BoxStyle,
+    units: crate::layout_style::Units<'_>,
+) -> Sample {
     let now = context.input(|input| input.time);
     let frame = context.cumulative_frame_nr();
     let state_id = id.with("ecss.transitions");
     let absent = style.layout.display == taffy::Display::None;
     let targets = PropertyId::all()
-        .map(|property| property.get(style))
+        .map(|property| property.get(style, units))
         .collect::<Vec<_>>();
     let previous = context.data_mut(|data| data.remove_temp::<State>(state_id));
     let mut state = previous
@@ -198,12 +205,14 @@ pub(crate) fn sample(context: &Context, id: Id, style: &mut BoxStyle, arena: &Ar
                 || destination.clone(),
                 |running| running.value(now, property),
             );
-            property.set(style, &value, arena);
+            property.set(style, &value, units.math);
             match property {
                 PropertyId::Color => sample.color = true,
                 PropertyId::Background => {
                     sample.background = style.background_set || was_running || changed
                 }
+                PropertyId::BackgroundPositionX => sample.background_position_x = true,
+                PropertyId::BackgroundPositionY => sample.background_position_y = true,
                 PropertyId::Radius(_) => {
                     sample.radius |=
                         was_running

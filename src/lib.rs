@@ -177,6 +177,11 @@ fn declaration_has_element_references(declaration: &Declaration) -> bool {
                 image.collect_element_ids(&mut ids);
             }
         }
+        Declaration::BackgroundTbdShorthand(background) => {
+            for image in &background.images {
+                image.collect_element_ids(&mut ids);
+            }
+        }
         Declaration::BackgroundImage(images) => {
             for image in images {
                 image.collect_element_ids(&mut ids);
@@ -277,7 +282,10 @@ impl Stylesheet {
             }
             let image = match declaration {
                 Declaration::BackgroundImage(images) => Some(images.as_slice()),
-                Declaration::BackgroundShorthand(background) => Some(background.images.as_slice()),
+                Declaration::BackgroundShorthand(background)
+                | Declaration::BackgroundTbdShorthand(background) => {
+                    Some(background.images.as_slice())
+                }
                 _ => None,
             };
             if let Some(images) = image {
@@ -1106,12 +1114,27 @@ fn apply_visual_declaration(
         }
         Declaration::Layout(_)
         | Declaration::All(_)
+        | Declaration::BackgroundReset(_)
+        | Declaration::BackgroundTbdShorthand(_)
+        | Declaration::BackgroundTbdReset(_)
         | Declaration::BackgroundImage(_)
         | Declaration::BackgroundAttachment(_)
         | Declaration::BackgroundClip(_)
         | Declaration::BackgroundOrigin(_)
         | Declaration::BackgroundPosition(_)
+        | Declaration::BackgroundPositionKeyword(_)
+        | Declaration::BackgroundPositionX(_)
+        | Declaration::BackgroundPositionY(_)
+        | Declaration::BackgroundPositionInline(_)
+        | Declaration::BackgroundPositionBlock(_)
+        | Declaration::BackgroundPositionComputedX(_)
+        | Declaration::BackgroundPositionComputedY(_)
         | Declaration::BackgroundRepeat(_)
+        | Declaration::BackgroundRepeatKeyword(_)
+        | Declaration::BackgroundRepeatX(_)
+        | Declaration::BackgroundRepeatY(_)
+        | Declaration::BackgroundRepeatInline(_)
+        | Declaration::BackgroundRepeatBlock(_)
         | Declaration::BackgroundSize(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)

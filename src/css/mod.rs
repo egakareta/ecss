@@ -23,12 +23,15 @@ mod media;
 mod supports;
 pub(crate) mod variables;
 
+pub(crate) use background::BackgroundPositionAxisKind;
+pub(crate) use background::computed_background_position_axis;
 pub(crate) use background::parse_background_image;
 use background::{
     consume_value, parse_background_attachment_value, parse_background_attachments,
-    parse_background_clip_value, parse_background_clips, parse_background_origins,
-    parse_background_position_value, parse_background_positions, parse_background_repeat_atom,
-    parse_background_repeats, parse_background_size_components, parse_background_sizes,
+    parse_background_clip_value, parse_background_clips, parse_background_css_wide_keyword,
+    parse_background_origins, parse_background_position_axis, parse_background_position_value,
+    parse_background_positions, parse_background_repeat_atom, parse_background_repeats,
+    parse_background_repeats_axis, parse_background_size_components, parse_background_sizes,
     split_top_level_commas,
 };
 pub(crate) use color::parse_color;
@@ -133,12 +136,27 @@ pub(crate) enum Declaration {
     Color(Color32),
     Background(Color32),
     BackgroundShorthand(BackgroundShorthand),
+    BackgroundReset(AllKeyword),
     BackgroundImage(Vec<BackgroundImage>),
     BackgroundAttachment(Vec<BackgroundAttachment>),
     BackgroundClip(Vec<BackgroundClip>),
     BackgroundOrigin(Vec<BackgroundOrigin>),
     BackgroundPosition(Vec<BackgroundPosition>),
+    BackgroundPositionKeyword(AllKeyword),
+    BackgroundPositionX(BackgroundAxisValue<BackgroundPositionAxis>),
+    BackgroundPositionY(BackgroundAxisValue<BackgroundPositionAxis>),
+    BackgroundPositionInline(BackgroundAxisValue<BackgroundPositionAxis>),
+    BackgroundPositionBlock(BackgroundAxisValue<BackgroundPositionAxis>),
+    BackgroundPositionComputedX(Vec<crate::math::ComputedLength>),
+    BackgroundPositionComputedY(Vec<crate::math::ComputedLength>),
+    BackgroundTbdShorthand(BackgroundShorthand),
+    BackgroundTbdReset(AllKeyword),
     BackgroundRepeat(Vec<BackgroundRepeatPair>),
+    BackgroundRepeatKeyword(AllKeyword),
+    BackgroundRepeatX(BackgroundAxisValue<BackgroundRepeat>),
+    BackgroundRepeatY(BackgroundAxisValue<BackgroundRepeat>),
+    BackgroundRepeatInline(BackgroundAxisValue<BackgroundRepeat>),
+    BackgroundRepeatBlock(BackgroundAxisValue<BackgroundRepeat>),
     BackgroundSize(Vec<BackgroundSize>),
     Layout(crate::layout_style::Declaration),
     BorderRadius(u8),
@@ -166,6 +184,12 @@ pub(crate) enum AllKeyword {
     Inherit,
     Unset,
     Revert,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum BackgroundAxisValue<T> {
+    Values(Vec<T>),
+    Keyword(AllKeyword),
 }
 
 #[derive(Clone, Debug)]
@@ -457,6 +481,7 @@ pub(crate) enum BackgroundOrigin {
     Content,
 }
 
+/// Repeat modes switch discretely at the keyframe midpoint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BackgroundRepeat {
     #[default]
@@ -466,10 +491,17 @@ pub(crate) enum BackgroundRepeat {
     Round,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackgroundRepeatLogical {
+    Inline,
+    Block,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BackgroundRepeatPair {
     pub(crate) x: BackgroundRepeat,
     pub(crate) y: BackgroundRepeat,
+    pub(crate) logical: Option<BackgroundRepeatLogical>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -482,8 +514,11 @@ pub(crate) struct BackgroundPosition {
 pub(crate) enum BackgroundPositionAxis {
     FreeSpace(String),
     Start(String),
+    AxisStart(String),
     Center,
     End(String),
+    AxisEnd(String),
+    Computed(crate::math::ComputedLength),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -497,6 +532,37 @@ pub(crate) enum BackgroundSize {
 pub(crate) enum BackgroundSizeComponent {
     Auto,
     Value(String),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BackgroundValues {
+    pub(crate) color: Color32,
+    pub(crate) images: Vec<BackgroundImage>,
+    pub(crate) attachments: Vec<BackgroundAttachment>,
+    pub(crate) clips: Vec<BackgroundClip>,
+    pub(crate) origins: Vec<BackgroundOrigin>,
+    pub(crate) position_x: Vec<BackgroundPositionAxis>,
+    pub(crate) position_y: Vec<BackgroundPositionAxis>,
+    pub(crate) repeat_x: Vec<BackgroundRepeat>,
+    pub(crate) repeat_y: Vec<BackgroundRepeat>,
+    pub(crate) sizes: Vec<BackgroundSize>,
+}
+
+impl Default for BackgroundValues {
+    fn default() -> Self {
+        Self {
+            color: Color32::TRANSPARENT,
+            images: Vec::new(),
+            attachments: Vec::new(),
+            clips: Vec::new(),
+            origins: Vec::new(),
+            position_x: vec![BackgroundPositionAxis::Start("0px".to_owned())],
+            position_y: vec![BackgroundPositionAxis::Start("0px".to_owned())],
+            repeat_x: vec![BackgroundRepeat::Repeat],
+            repeat_y: vec![BackgroundRepeat::Repeat],
+            sizes: Vec::new(),
+        }
+    }
 }
 
 enum ParsedRule {
@@ -1097,7 +1163,23 @@ impl Declarations {
                 important,
             )));
         }
-        if is_non_layout_css_wide_property(&name, &value) {
+        if is_non_layout_css_wide_property(&name, &value)
+            && !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "background"
+                    | "background-tbd"
+                    | "background-position"
+                    | "background-position-x"
+                    | "background-position-y"
+                    | "background-position-inline"
+                    | "background-position-block"
+                    | "background-repeat"
+                    | "background-repeat-x"
+                    | "background-repeat-y"
+                    | "background-repeat-inline"
+                    | "background-repeat-block"
+            )
+        {
             while input.next().is_ok() {}
             return Ok(Some((
                 Declaration::Layout(crate::layout_style::Declaration {
@@ -1117,7 +1199,9 @@ impl Declarations {
         } else if name.eq_ignore_ascii_case("background-color") {
             Some(Declaration::Background(parse_color(input)?))
         } else if name.eq_ignore_ascii_case("background") {
-            Some(Declaration::BackgroundShorthand(parse_background(input)?))
+            Some(parse_background_declaration(input)?)
+        } else if name.eq_ignore_ascii_case("background-tbd") {
+            Some(parse_background_tbd_declaration(input)?)
         } else if name.eq_ignore_ascii_case("background-image") {
             Some(Declaration::BackgroundImage(parse_background_images_value(
                 input,
@@ -1133,13 +1217,41 @@ impl Declarations {
                 input,
             )?))
         } else if name.eq_ignore_ascii_case("background-position") {
-            Some(Declaration::BackgroundPosition(parse_background_positions(
-                input,
-            )?))
+            Some(parse_background_position_declaration(input)?)
+        } else if name.eq_ignore_ascii_case("background-position-x") {
+            Some(Declaration::BackgroundPositionX(
+                parse_background_position_axis(input, BackgroundPositionAxisKind::X)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-position-y") {
+            Some(Declaration::BackgroundPositionY(
+                parse_background_position_axis(input, BackgroundPositionAxisKind::Y)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-position-inline") {
+            Some(Declaration::BackgroundPositionInline(
+                parse_background_position_axis(input, BackgroundPositionAxisKind::Inline)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-position-block") {
+            Some(Declaration::BackgroundPositionBlock(
+                parse_background_position_axis(input, BackgroundPositionAxisKind::Block)?,
+            ))
         } else if name.eq_ignore_ascii_case("background-repeat") {
-            Some(Declaration::BackgroundRepeat(parse_background_repeats(
-                input,
-            )?))
+            Some(parse_background_repeat_declaration(input)?)
+        } else if name.eq_ignore_ascii_case("background-repeat-x") {
+            Some(Declaration::BackgroundRepeatX(
+                parse_background_repeats_axis(input)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-repeat-y") {
+            Some(Declaration::BackgroundRepeatY(
+                parse_background_repeats_axis(input)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-repeat-inline") {
+            Some(Declaration::BackgroundRepeatInline(
+                parse_background_repeats_axis(input)?,
+            ))
+        } else if name.eq_ignore_ascii_case("background-repeat-block") {
+            Some(Declaration::BackgroundRepeatBlock(
+                parse_background_repeats_axis(input)?,
+            ))
         } else if name.eq_ignore_ascii_case("background-size") {
             Some(Declaration::BackgroundSize(parse_background_sizes(input)?))
         } else if name.eq_ignore_ascii_case("border-radius") {
@@ -1215,8 +1327,61 @@ fn invalid_computed_value(name: &str) -> Declaration {
     })
 }
 
+fn parse_background_declaration<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Declaration, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(Declaration::BackgroundReset(keyword));
+    }
+    let mut input = CssParser::new(&value);
+    Ok(Declaration::BackgroundShorthand(parse_background(
+        &mut input, true,
+    )?))
+}
+
+fn parse_background_tbd_declaration<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Declaration, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(Declaration::BackgroundTbdReset(keyword));
+    }
+    let mut input = CssParser::new(&value);
+    Ok(Declaration::BackgroundTbdShorthand(parse_background(
+        &mut input, false,
+    )?))
+}
+
+fn parse_background_position_declaration<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Declaration, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(Declaration::BackgroundPositionKeyword(keyword));
+    }
+    let mut input = CssParser::new(&value);
+    Ok(Declaration::BackgroundPosition(parse_background_positions(
+        &mut input,
+    )?))
+}
+
+fn parse_background_repeat_declaration<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<Declaration, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(Declaration::BackgroundRepeatKeyword(keyword));
+    }
+    let mut input = CssParser::new(&value);
+    Ok(Declaration::BackgroundRepeat(parse_background_repeats(
+        &mut input,
+    )?))
+}
+
 fn parse_background<'i>(
     input: &mut CssParser<'i>,
+    allow_color: bool,
 ) -> Result<BackgroundShorthand, ParseError<&'static str>> {
     let value = consume_value(input)?;
     let layers = split_top_level_commas(&value);
@@ -1257,6 +1422,11 @@ fn parse_background<'i>(
         let mut color_seen = false;
         for component in &components[..split] {
             if let Ok(color) = parse_color(&mut CssParser::new(component)) {
+                if !allow_color {
+                    return Err(ParseError::custom(
+                        "background-tbd does not accept a background color",
+                    ));
+                }
                 if layer_index + 1 != layers.len() || color_seen {
                     return Err(ParseError::custom(
                         "background color must appear once in the final layer",
@@ -1312,6 +1482,11 @@ fn parse_background<'i>(
                 } else if background::parse_background_repeat_component(component).is_ok() {
                     repeat_tokens.push(component.clone());
                 } else if let Ok(color) = parse_color(&mut CssParser::new(component)) {
+                    if !allow_color {
+                        return Err(ParseError::custom(
+                            "background-tbd does not accept a background color",
+                        ));
+                    }
                     if layer_index + 1 != layers.len() || color_seen {
                         return Err(ParseError::custom(
                             "background color must appear once in the final layer",
@@ -1388,6 +1563,7 @@ fn parse_background_repeat_tokens(values: &[String]) -> Result<BackgroundRepeatP
             Ok(BackgroundRepeatPair {
                 x: first,
                 y: second,
+                logical: None,
             })
         }
         _ => Err("too many background repeat values"),

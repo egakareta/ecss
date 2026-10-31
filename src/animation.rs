@@ -29,6 +29,18 @@ pub(crate) struct Sample {
     pub(crate) can_defer_layout: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct PositionContext<'a> {
+    pub(crate) units: crate::layout_style::Units<'a>,
+    pub(crate) writing: crate::formatting::Writing,
+    pub(crate) direction: taffy::Direction,
+}
+
+pub(crate) struct SampleContext<'a> {
+    pub(crate) important: &'a [Declaration],
+    pub(crate) position: PositionContext<'a>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Direction {
     Normal,
@@ -926,8 +938,12 @@ pub(crate) fn sample(
     properties: &[Property],
     keyframes: &HashMap<String, Vec<Keyframe>>,
     underlying: &[Declaration],
-    important: &[Declaration],
+    sample_context: SampleContext<'_>,
 ) -> Sample {
+    let SampleContext {
+        important,
+        position,
+    } = sample_context;
     if properties.is_empty() {
         return Sample {
             declarations: Vec::new(),
@@ -975,9 +991,9 @@ pub(crate) fn sample(
             .iter()
             .flat_map(|frame| &frame.declarations)
             .filter(|declaration| is_interpolable(declaration))
-            .filter_map(normalized_declaration)
+            .flat_map(normalized_declarations)
             .any(|(_, declaration)| {
-                !crate::css::cascade::overrides_animation(important, &declaration)
+                !crate::css::cascade::overrides_animation(important, &declaration, position.writing)
             });
         if !has_unoverridden_property {
             continue;
@@ -996,15 +1012,33 @@ pub(crate) fn sample(
         let Some(progress) = progress else {
             continue;
         };
-        let sampled = sample_keyframes(frames, progress, before, underlying)
+        let sampled = sample_keyframes(frames, progress, before, underlying, position)
             .into_iter()
-            .filter(|declaration| !crate::css::cascade::overrides_animation(important, declaration))
+            .filter(|declaration| {
+                !crate::css::cascade::overrides_animation(important, declaration, position.writing)
+            })
             .collect::<Vec<_>>();
         if active {
             can_defer_layout &= sampled.iter().all(|declaration| {
                 matches!(
                     declaration,
-                    Declaration::Layout(_) | Declaration::Color(_) | Declaration::BorderRadius(_)
+                    Declaration::Layout(_)
+                        | Declaration::Color(_)
+                        | Declaration::BorderRadius(_)
+                        | Declaration::BackgroundPositionComputedX(_)
+                        | Declaration::BackgroundPositionComputedY(_)
+                        | Declaration::BackgroundRepeatX(crate::css::BackgroundAxisValue::Values(
+                            _
+                        ))
+                        | Declaration::BackgroundRepeatY(crate::css::BackgroundAxisValue::Values(
+                            _
+                        ))
+                        | Declaration::BackgroundRepeatInline(
+                            crate::css::BackgroundAxisValue::Values(_)
+                        )
+                        | Declaration::BackgroundRepeatBlock(
+                            crate::css::BackgroundAxisValue::Values(_)
+                        )
                 )
             });
             layout_active |= sampled
@@ -1208,27 +1242,28 @@ fn sample_keyframes(
     progress: f32,
     before: bool,
     underlying: &[Declaration],
+    position: PositionContext<'_>,
 ) -> Vec<Declaration> {
     let mut properties: Vec<(String, Vec<(f32, Declaration)>)> = Vec::new();
     for frame in frames {
         for declaration in &frame.declarations {
-            let Some((name, declaration)) = normalized_declaration(declaration) else {
-                continue;
-            };
-            let anchors =
-                if let Some((_, anchors)) = properties.iter_mut().find(|(key, _)| *key == name) {
+            for (name, declaration) in normalized_declarations(declaration) {
+                let anchors = if let Some((_, anchors)) =
+                    properties.iter_mut().find(|(key, _)| *key == name)
+                {
                     anchors
                 } else {
                     properties.push((name, Vec::new()));
                     &mut properties.last_mut().expect("property was inserted").1
                 };
-            if let Some((_, existing)) = anchors
-                .iter_mut()
-                .find(|(offset, _)| *offset == frame.offset)
-            {
-                *existing = declaration;
-            } else {
-                anchors.push((frame.offset, declaration));
+                if let Some((_, existing)) = anchors
+                    .iter_mut()
+                    .find(|(offset, _)| *offset == frame.offset)
+                {
+                    *existing = declaration;
+                } else {
+                    anchors.push((frame.offset, declaration));
+                }
             }
         }
     }
@@ -1238,7 +1273,7 @@ fn sample_keyframes(
         anchors.sort_by(|first, second| first.0.total_cmp(&second.0));
         let base = underlying
             .iter()
-            .filter_map(normalized_declaration)
+            .flat_map(normalized_declarations)
             .filter(|(property, _)| *property == name)
             .map(|(_, declaration)| declaration)
             .next_back();
@@ -1285,7 +1320,7 @@ fn sample_keyframes(
             let local = keyframe_timing(frames, previous.0)
                 .map(|timing| ease(&timing, f64::from(local), before) as f32)
                 .unwrap_or(local);
-            interpolate(&previous.1, &next.1, local)
+            interpolate(&previous.1, &next.1, local, position)
         } else {
             anchors.last().expect("anchors are non-empty").1.clone()
         };
@@ -1303,34 +1338,130 @@ fn keyframe_timing(frames: &[Keyframe], offset: f32) -> Option<TimingFunction> {
         .and_then(parse_timing)
 }
 
-fn normalized_declaration(declaration: &Declaration) -> Option<(String, Declaration)> {
+fn normalized_declarations(declaration: &Declaration) -> Vec<(String, Declaration)> {
+    use crate::css::BackgroundAxisValue;
+
+    fn add_positions(
+        declarations: &mut Vec<(String, Declaration)>,
+        positions: &[crate::css::BackgroundPosition],
+    ) {
+        declarations.push((
+            "background-position-x".to_owned(),
+            Declaration::BackgroundPositionX(BackgroundAxisValue::Values(
+                positions
+                    .iter()
+                    .map(|position| position.x.clone())
+                    .collect(),
+            )),
+        ));
+        declarations.push((
+            "background-position-y".to_owned(),
+            Declaration::BackgroundPositionY(BackgroundAxisValue::Values(
+                positions
+                    .iter()
+                    .map(|position| position.y.clone())
+                    .collect(),
+            )),
+        ));
+    }
+    fn add_repeats(
+        declarations: &mut Vec<(String, Declaration)>,
+        repeats: &[crate::css::BackgroundRepeatPair],
+    ) {
+        declarations.push((
+            "background-repeat-x".to_owned(),
+            Declaration::BackgroundRepeatX(BackgroundAxisValue::Values(
+                repeats.iter().map(|repeat| repeat.x).collect(),
+            )),
+        ));
+        declarations.push((
+            "background-repeat-y".to_owned(),
+            Declaration::BackgroundRepeatY(BackgroundAxisValue::Values(
+                repeats.iter().map(|repeat| repeat.y).collect(),
+            )),
+        ));
+    }
+    let mut declarations = Vec::new();
     match declaration {
-        Declaration::All(_) => None,
-        Declaration::Color(_) => Some(("color".to_owned(), declaration.clone())),
-        Declaration::Background(_) => Some(("background-color".to_owned(), declaration.clone())),
-        Declaration::BackgroundShorthand(background) => Some((
-            "background-color".to_owned(),
-            Declaration::Background(background.color),
-        )),
-        Declaration::BackgroundImage(_)
+        Declaration::All(_) => {}
+        Declaration::Color(_) => declarations.push(("color".to_owned(), declaration.clone())),
+        Declaration::Background(_) => {
+            declarations.push(("background-color".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundShorthand(background) => {
+            declarations.push((
+                "background-color".to_owned(),
+                Declaration::Background(background.color),
+            ));
+            add_positions(&mut declarations, &background.positions);
+            add_repeats(&mut declarations, &background.repeats);
+        }
+        Declaration::BackgroundTbdShorthand(background) => {
+            add_positions(&mut declarations, &background.positions);
+            add_repeats(&mut declarations, &background.repeats);
+        }
+        Declaration::BackgroundPosition(positions) => add_positions(&mut declarations, positions),
+        Declaration::BackgroundRepeat(repeats) => add_repeats(&mut declarations, repeats),
+        Declaration::BackgroundPositionX(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-position-x".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundPositionY(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-position-y".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundPositionInline(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-position-inline".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundPositionBlock(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-position-block".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundRepeatX(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-repeat-x".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundRepeatY(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-repeat-y".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundRepeatInline(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-repeat-inline".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundRepeatBlock(BackgroundAxisValue::Values(_)) => {
+            declarations.push(("background-repeat-block".to_owned(), declaration.clone()))
+        }
+        Declaration::BackgroundReset(_)
+        | Declaration::BackgroundTbdReset(_)
+        | Declaration::BackgroundImage(_)
         | Declaration::BackgroundAttachment(_)
         | Declaration::BackgroundClip(_)
         | Declaration::BackgroundOrigin(_)
-        | Declaration::BackgroundPosition(_)
-        | Declaration::BackgroundRepeat(_)
+        | Declaration::BackgroundPositionKeyword(_)
+        | Declaration::BackgroundPositionX(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundPositionY(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundPositionInline(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundPositionBlock(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundPositionComputedX(_)
+        | Declaration::BackgroundPositionComputedY(_)
+        | Declaration::BackgroundRepeatKeyword(_)
+        | Declaration::BackgroundRepeatX(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundRepeatY(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundRepeatInline(BackgroundAxisValue::Keyword(_))
+        | Declaration::BackgroundRepeatBlock(BackgroundAxisValue::Keyword(_))
         | Declaration::BackgroundSize(_)
         | Declaration::FontFamily(_)
         | Declaration::FontWeight(_)
         | Declaration::FontStyle(_)
-        | Declaration::FontShorthand(_) => None,
-        Declaration::Layout(layout) => Some((layout.name.clone(), declaration.clone())),
-        Declaration::BorderRadius(_) => Some(("border-radius".to_owned(), declaration.clone())),
+        | Declaration::FontShorthand(_)
+        | Declaration::Cursor(_) => {}
+        Declaration::Layout(layout) => {
+            declarations.push((layout.name.clone(), declaration.clone()))
+        }
+        Declaration::BorderRadius(_) => {
+            declarations.push(("border-radius".to_owned(), declaration.clone()))
+        }
         Declaration::Animation(_)
         | Declaration::Transition(_)
         | Declaration::CustomProperty { .. }
-        | Declaration::Cursor(_)
-        | Declaration::Deferred { .. } => None,
+        | Declaration::Deferred { .. } => {}
     }
+    declarations
 }
 
 fn is_interpolable(declaration: &Declaration) -> bool {
@@ -1339,12 +1470,28 @@ fn is_interpolable(declaration: &Declaration) -> bool {
         Declaration::Color(_)
             | Declaration::Background(_)
             | Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundPosition(_)
+            | Declaration::BackgroundPositionX(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundPositionY(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundPositionInline(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundPositionBlock(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundRepeat(_)
+            | Declaration::BackgroundRepeatX(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundRepeatY(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundRepeatInline(crate::css::BackgroundAxisValue::Values(_))
+            | Declaration::BackgroundRepeatBlock(crate::css::BackgroundAxisValue::Values(_))
             | Declaration::Layout(_)
             | Declaration::BorderRadius(_)
     )
 }
 
-fn interpolate(from: &Declaration, to: &Declaration, progress: f32) -> Declaration {
+fn interpolate(
+    from: &Declaration,
+    to: &Declaration,
+    progress: f32,
+    position: PositionContext<'_>,
+) -> Declaration {
     match (from, to) {
         (Declaration::Color(from), Declaration::Color(to)) => {
             Declaration::Color(interpolate_color(*from, *to, progress))
@@ -1358,6 +1505,45 @@ fn interpolate(from: &Declaration, to: &Declaration, progress: f32) -> Declarati
                     .round()
                     .clamp(0.0, f32::from(u8::MAX)) as u8,
             )
+        }
+        (from, to)
+            if position_axis_kind(from).is_some()
+                && position_axis_kind(from) == position_axis_kind(to) =>
+        {
+            let kind = position_axis_kind(from).expect("position axis kind was checked");
+            let Some((from_y, from_values)) = computed_position_values(from, kind, position) else {
+                return if progress < 0.5 {
+                    from.clone()
+                } else {
+                    to.clone()
+                };
+            };
+            let Some((to_y, to_values)) = computed_position_values(to, kind, position) else {
+                return if progress < 0.5 {
+                    from.clone()
+                } else {
+                    to.clone()
+                };
+            };
+            if from_y != to_y {
+                return if progress < 0.5 {
+                    from.clone()
+                } else {
+                    to.clone()
+                };
+            }
+            let count = from_values.len().max(to_values.len());
+            let values = (0..count)
+                .map(|index| {
+                    from_values[index % from_values.len()]
+                        .interpolate(&to_values[index % to_values.len()], progress)
+                })
+                .collect();
+            if from_y {
+                Declaration::BackgroundPositionComputedY(values)
+            } else {
+                Declaration::BackgroundPositionComputedX(values)
+            }
         }
         (Declaration::Layout(from), Declaration::Layout(to)) if from.name == to.name => {
             let value = interpolate_css_values(&from.name, &from.value, &to.value, progress)
@@ -1375,6 +1561,40 @@ fn interpolate(from: &Declaration, to: &Declaration, progress: f32) -> Declarati
             }
         }
     }
+}
+
+fn position_axis_kind(declaration: &Declaration) -> Option<crate::css::BackgroundPositionAxisKind> {
+    use crate::css::BackgroundPositionAxisKind as Kind;
+    match declaration {
+        Declaration::BackgroundPositionX(_) => Some(Kind::X),
+        Declaration::BackgroundPositionY(_) => Some(Kind::Y),
+        Declaration::BackgroundPositionInline(_) => Some(Kind::Inline),
+        Declaration::BackgroundPositionBlock(_) => Some(Kind::Block),
+        _ => None,
+    }
+}
+
+fn computed_position_values(
+    declaration: &Declaration,
+    kind: crate::css::BackgroundPositionAxisKind,
+    position: PositionContext<'_>,
+) -> Option<(bool, Vec<crate::math::ComputedLength>)> {
+    use crate::css::BackgroundAxisValue;
+    let values = match declaration {
+        Declaration::BackgroundPositionX(BackgroundAxisValue::Values(values))
+        | Declaration::BackgroundPositionY(BackgroundAxisValue::Values(values))
+        | Declaration::BackgroundPositionInline(BackgroundAxisValue::Values(values))
+        | Declaration::BackgroundPositionBlock(BackgroundAxisValue::Values(values)) => values,
+        _ => return None,
+    };
+    crate::css::computed_background_position_axis(
+        values,
+        kind,
+        position.units,
+        position.writing,
+        position.direction,
+    )
+    .ok()
 }
 
 fn discrete(from: &str, to: &str, progress: f32) -> String {

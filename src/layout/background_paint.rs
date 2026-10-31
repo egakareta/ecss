@@ -1,101 +1,196 @@
 use super::*;
 
-pub(super) struct BackgroundPaint<'a> {
-    pub(super) color: Color32,
-    pub(super) images: &'a [crate::css::BackgroundImage],
-    pub(super) attachments: &'a [crate::css::BackgroundAttachment],
-    pub(super) clips: &'a [crate::css::BackgroundClip],
-    pub(super) origins: &'a [crate::css::BackgroundOrigin],
-    pub(super) positions: &'a [crate::css::BackgroundPosition],
-    pub(super) repeats: &'a [crate::css::BackgroundRepeatPair],
-    pub(super) sizes: &'a [crate::css::BackgroundSize],
+pub(super) type BackgroundPaint = crate::css::BackgroundValues;
+
+#[derive(Clone, Copy)]
+pub(super) struct BackgroundContext {
+    pub(super) writing: crate::formatting::Writing,
+    pub(super) direction: taffy::Direction,
 }
 
-pub(super) fn resolved_background_from_rules<'a>(
-    rules: &'a [(RuleState, Vec<Declaration>)],
-) -> BackgroundPaint<'a> {
+pub(super) fn resolved_background_from_rules(
+    rules: &[(RuleState, Vec<Declaration>)],
+    parent: Option<&BackgroundPaint>,
+    parent_context: BackgroundContext,
+    context: BackgroundContext,
+) -> BackgroundPaint {
     background_from_declarations(
         rules
             .iter()
             .flat_map(|(_, declarations)| declarations.iter()),
+        parent,
+        parent_context,
+        context,
     )
 }
 
-pub(super) fn resolved_background<'a>(
-    stylesheet: &'a Stylesheet,
-    target: &'a crate::css::SelectorTarget,
+pub(super) fn resolved_background(
+    stylesheet: &Stylesheet,
+    target: &crate::css::SelectorTarget,
     state: u8,
     viewport: Vec2,
-) -> BackgroundPaint<'a> {
+) -> BackgroundPaint {
     let ordered = crate::css::cascade::ordered(
         matching_rules(stylesheet, target, viewport).filter(move |rule| rule.state.matches(state)),
     );
-    background_from_declarations(ordered.into_iter().map(|(_, declaration)| declaration))
+    let context = BackgroundContext {
+        writing: crate::formatting::Writing::Horizontal,
+        direction: taffy::Direction::Ltr,
+    };
+    background_from_declarations(
+        ordered.into_iter().map(|(_, declaration)| declaration),
+        None,
+        context,
+        context,
+    )
 }
 
 pub(super) fn background_from_declarations<'a>(
     declarations: impl Iterator<Item = &'a Declaration>,
-) -> BackgroundPaint<'a> {
-    fn reset(background: &mut BackgroundPaint<'_>) {
-        background.color = Color32::TRANSPARENT;
-        background.images = &[];
-        background.attachments = &[];
-        background.clips = &[];
-        background.origins = &[];
-        background.positions = &[];
-        background.repeats = &[];
-        background.sizes = &[];
-    }
-
-    let mut background = BackgroundPaint {
-        color: Color32::TRANSPARENT,
-        images: &[],
-        attachments: &[],
-        clips: &[],
-        origins: &[],
-        positions: &[],
-        repeats: &[],
-        sizes: &[],
-    };
+    parent: Option<&BackgroundPaint>,
+    parent_context: BackgroundContext,
+    context: BackgroundContext,
+) -> BackgroundPaint {
+    let mut background = BackgroundPaint::default();
     for declaration in declarations {
         match declaration {
-            Declaration::All(_) => reset(&mut background),
+            Declaration::All(keyword) | Declaration::BackgroundReset(keyword) => {
+                apply_background_keyword(&mut background, *keyword, parent);
+            }
+            Declaration::BackgroundTbdReset(keyword) => {
+                apply_background_tbd_keyword(&mut background, *keyword, parent);
+            }
             Declaration::Background(color) => background.color = *color,
             Declaration::BackgroundShorthand(value) => {
                 background.color = value.color;
-                background.images = &value.images;
-                background.attachments = &value.attachments;
-                background.clips = &value.clips;
-                background.origins = &value.origins;
-                background.positions = &value.positions;
-                background.repeats = &value.repeats;
-                background.sizes = &value.sizes;
+                set_background_layers(&mut background, value, context.writing);
             }
-            Declaration::BackgroundImage(images) => background.images = images,
+            Declaration::BackgroundTbdShorthand(value) => {
+                set_background_layers(&mut background, value, context.writing);
+            }
+            Declaration::BackgroundImage(images) => background.images = images.clone(),
             Declaration::BackgroundAttachment(attachments) => {
-                background.attachments = attachments;
+                background.attachments = attachments.clone();
             }
-            Declaration::BackgroundClip(clips) => background.clips = clips,
-            Declaration::BackgroundOrigin(origins) => background.origins = origins,
-            Declaration::BackgroundPosition(positions) => background.positions = positions,
-            Declaration::BackgroundRepeat(repeats) => background.repeats = repeats,
-            Declaration::BackgroundSize(sizes) => background.sizes = sizes,
+            Declaration::BackgroundClip(clips) => background.clips = clips.clone(),
+            Declaration::BackgroundOrigin(origins) => background.origins = origins.clone(),
+            Declaration::BackgroundPosition(positions) => {
+                set_position_lists(&mut background, positions)
+            }
+            Declaration::BackgroundRepeat(repeats) => {
+                set_repeat_lists(&mut background, repeats, context.writing)
+            }
+            Declaration::BackgroundPositionKeyword(keyword) => {
+                apply_position_keyword(&mut background, *keyword, parent, true, true)
+            }
+            Declaration::BackgroundPositionX(value) => apply_position_axis(
+                &mut background,
+                value,
+                false,
+                false,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundPositionY(value) => apply_position_axis(
+                &mut background,
+                value,
+                true,
+                false,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundPositionInline(value) => apply_position_axis(
+                &mut background,
+                value,
+                false,
+                true,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundPositionBlock(value) => apply_position_axis(
+                &mut background,
+                value,
+                true,
+                true,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundRepeatKeyword(keyword) => {
+                apply_repeat_keyword(&mut background, *keyword, parent, true, true)
+            }
+            Declaration::BackgroundRepeatX(value) => {
+                apply_repeat_axis(&mut background, value, false, parent)
+            }
+            Declaration::BackgroundRepeatY(value) => {
+                apply_repeat_axis(&mut background, value, true, parent)
+            }
+            Declaration::BackgroundRepeatInline(value) => apply_logical_repeat_axis(
+                &mut background,
+                value,
+                true,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundRepeatBlock(value) => apply_logical_repeat_axis(
+                &mut background,
+                value,
+                false,
+                parent_context,
+                context,
+                parent,
+            ),
+            Declaration::BackgroundPositionComputedX(values) => {
+                background.position_x = values
+                    .iter()
+                    .cloned()
+                    .map(crate::css::BackgroundPositionAxis::Computed)
+                    .collect();
+            }
+            Declaration::BackgroundPositionComputedY(values) => {
+                background.position_y = values
+                    .iter()
+                    .cloned()
+                    .map(crate::css::BackgroundPositionAxis::Computed)
+                    .collect();
+            }
+            Declaration::BackgroundSize(sizes) => background.sizes = sizes.clone(),
             Declaration::Layout(layout)
                 if layout.value.eq_ignore_ascii_case("initial")
                     || layout.value.eq_ignore_ascii_case("unset")
                     || layout.value.eq_ignore_ascii_case("revert")
                     || layout.value.eq_ignore_ascii_case("inherit") =>
             {
+                let defaults = BackgroundPaint::default();
                 match layout.name.as_str() {
-                    "background" => reset(&mut background),
+                    "background" => background = defaults,
                     "background-color" => background.color = Color32::TRANSPARENT,
-                    "background-image" => background.images = &[],
-                    "background-attachment" => background.attachments = &[],
-                    "background-clip" => background.clips = &[],
-                    "background-origin" => background.origins = &[],
-                    "background-position" => background.positions = &[],
-                    "background-repeat" => background.repeats = &[],
-                    "background-size" => background.sizes = &[],
+                    "background-image" => background.images.clear(),
+                    "background-attachment" => background.attachments.clear(),
+                    "background-clip" => background.clips.clear(),
+                    "background-origin" => background.origins.clear(),
+                    "background-position" => {
+                        background.position_x = defaults.position_x;
+                        background.position_y = defaults.position_y;
+                    }
+                    "background-position-x" => background.position_x = defaults.position_x,
+                    "background-position-y" => background.position_y = defaults.position_y,
+                    "background-repeat" => {
+                        background.repeat_x = defaults.repeat_x;
+                        background.repeat_y = defaults.repeat_y;
+                    }
+                    "background-repeat-x" => background.repeat_x = defaults.repeat_x,
+                    "background-repeat-y" => background.repeat_y = defaults.repeat_y,
+                    "background-size" => background.sizes.clear(),
+                    "background-tbd" => {
+                        let color = background.color;
+                        background = defaults;
+                        background.color = color;
+                    }
                     _ => {}
                 }
             }
@@ -103,6 +198,391 @@ pub(super) fn background_from_declarations<'a>(
         }
     }
     background
+}
+
+fn apply_background_keyword(
+    background: &mut BackgroundPaint,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+) {
+    if keyword == crate::css::AllKeyword::Inherit {
+        *background = parent.cloned().unwrap_or_default();
+    } else {
+        *background = BackgroundPaint::default();
+    }
+}
+
+fn apply_background_tbd_keyword(
+    background: &mut BackgroundPaint,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+) {
+    let color = background.color;
+    *background = if keyword == crate::css::AllKeyword::Inherit {
+        parent.cloned().unwrap_or_default()
+    } else {
+        BackgroundPaint::default()
+    };
+    background.color = color;
+}
+
+fn set_background_layers(
+    background: &mut BackgroundPaint,
+    value: &crate::css::BackgroundShorthand,
+    writing: crate::formatting::Writing,
+) {
+    background.images.clone_from(&value.images);
+    background.attachments.clone_from(&value.attachments);
+    background.clips.clone_from(&value.clips);
+    background.origins.clone_from(&value.origins);
+    set_position_lists(background, &value.positions);
+    set_repeat_lists(background, &value.repeats, writing);
+    background.sizes.clone_from(&value.sizes);
+}
+
+fn set_position_lists(
+    background: &mut BackgroundPaint,
+    positions: &[crate::css::BackgroundPosition],
+) {
+    background.position_x = positions
+        .iter()
+        .map(|position| position.x.clone())
+        .collect();
+    background.position_y = positions
+        .iter()
+        .map(|position| position.y.clone())
+        .collect();
+}
+
+fn set_position_axis(
+    background: &mut BackgroundPaint,
+    values: &crate::css::BackgroundAxisValue<crate::css::BackgroundPositionAxis>,
+    y: bool,
+    parent: Option<&BackgroundPaint>,
+) {
+    let target = if y {
+        &mut background.position_y
+    } else {
+        &mut background.position_x
+    };
+    match values {
+        crate::css::BackgroundAxisValue::Values(values) => *target = values.clone(),
+        crate::css::BackgroundAxisValue::Keyword(keyword) => {
+            apply_position_keyword_axis(target, *keyword, parent, y)
+        }
+    }
+}
+
+fn apply_position_axis(
+    background: &mut BackgroundPaint,
+    values: &crate::css::BackgroundAxisValue<crate::css::BackgroundPositionAxis>,
+    y: bool,
+    logical: bool,
+    parent_context: BackgroundContext,
+    context: BackgroundContext,
+    parent: Option<&BackgroundPaint>,
+) {
+    if !logical {
+        match values {
+            crate::css::BackgroundAxisValue::Values(values) => {
+                let block = if y {
+                    !context.writing.vertical()
+                } else {
+                    context.writing.vertical()
+                };
+                let values = values
+                    .iter()
+                    .cloned()
+                    .map(|value| map_axis_position(value, block, context))
+                    .collect();
+                set_position_axis(
+                    background,
+                    &crate::css::BackgroundAxisValue::Values(values),
+                    y,
+                    parent,
+                );
+            }
+            crate::css::BackgroundAxisValue::Keyword(_) => {
+                set_position_axis(background, values, y, parent);
+            }
+        }
+        return;
+    }
+    if let crate::css::BackgroundAxisValue::Keyword(crate::css::AllKeyword::Inherit) = values
+        && let Some(parent) = parent
+    {
+        let parent_y = if y {
+            !parent_context.writing.vertical()
+        } else {
+            parent_context.writing.vertical()
+        };
+        let parent_values = if parent_y {
+            &parent.position_y
+        } else {
+            &parent.position_x
+        };
+        let values = parent_values
+            .iter()
+            .cloned()
+            .map(|value| {
+                map_logical_position(value, y, parent_context.writing, parent_context.direction)
+            })
+            .map(|value| map_logical_position(value, y, context.writing, context.direction))
+            .collect();
+        set_position_axis(
+            background,
+            &crate::css::BackgroundAxisValue::Values(values),
+            if y {
+                !context.writing.vertical()
+            } else {
+                context.writing.vertical()
+            },
+            None,
+        );
+        return;
+    }
+    let target_y = if y {
+        !context.writing.vertical()
+    } else {
+        context.writing.vertical()
+    };
+    match values {
+        crate::css::BackgroundAxisValue::Values(values) => {
+            let values = values
+                .iter()
+                .cloned()
+                .map(|value| map_logical_position(value, y, context.writing, context.direction))
+                .collect();
+            set_position_axis(
+                background,
+                &crate::css::BackgroundAxisValue::Values(values),
+                target_y,
+                parent,
+            );
+        }
+        crate::css::BackgroundAxisValue::Keyword(_) => {
+            let value = map_logical_position(
+                crate::css::BackgroundPositionAxis::Start("0%".to_owned()),
+                y,
+                context.writing,
+                context.direction,
+            );
+            if target_y {
+                background.position_y = vec![value];
+            } else {
+                background.position_x = vec![value];
+            }
+        }
+    }
+}
+
+fn apply_position_keyword(
+    background: &mut BackgroundPaint,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+    x: bool,
+    y: bool,
+) {
+    if x {
+        apply_position_keyword_axis(&mut background.position_x, keyword, parent, false);
+    }
+    if y {
+        apply_position_keyword_axis(&mut background.position_y, keyword, parent, true);
+    }
+}
+
+fn apply_position_keyword_axis(
+    target: &mut Vec<crate::css::BackgroundPositionAxis>,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+    y: bool,
+) {
+    if keyword == crate::css::AllKeyword::Inherit
+        && let Some(parent) = parent
+    {
+        *target = if y {
+            parent.position_y.clone()
+        } else {
+            parent.position_x.clone()
+        };
+        return;
+    }
+    *target = vec![crate::css::BackgroundPositionAxis::Start("0px".to_owned())];
+}
+
+fn map_logical_position(
+    value: crate::css::BackgroundPositionAxis,
+    block: bool,
+    writing: crate::formatting::Writing,
+    direction: taffy::Direction,
+) -> crate::css::BackgroundPositionAxis {
+    let reverse = if block {
+        writing.vertical() && writing.reverse()
+    } else {
+        direction == taffy::Direction::Rtl
+    };
+    if !reverse {
+        return value;
+    }
+    match value {
+        crate::css::BackgroundPositionAxis::Start(value) => {
+            crate::css::BackgroundPositionAxis::End(value)
+        }
+        crate::css::BackgroundPositionAxis::End(value) => {
+            crate::css::BackgroundPositionAxis::Start(value)
+        }
+        value => value,
+    }
+}
+
+fn map_axis_position(
+    value: crate::css::BackgroundPositionAxis,
+    block: bool,
+    context: BackgroundContext,
+) -> crate::css::BackgroundPositionAxis {
+    match value {
+        crate::css::BackgroundPositionAxis::AxisStart(offset) => map_logical_position(
+            crate::css::BackgroundPositionAxis::Start(offset),
+            block,
+            context.writing,
+            context.direction,
+        ),
+        crate::css::BackgroundPositionAxis::AxisEnd(offset) => map_logical_position(
+            crate::css::BackgroundPositionAxis::End(offset),
+            block,
+            context.writing,
+            context.direction,
+        ),
+        value => value,
+    }
+}
+
+fn set_repeat_lists(
+    background: &mut BackgroundPaint,
+    repeats: &[crate::css::BackgroundRepeatPair],
+    writing: crate::formatting::Writing,
+) {
+    let mut x = Vec::with_capacity(repeats.len());
+    let mut y = Vec::with_capacity(repeats.len());
+    for repeat in repeats {
+        let (repeat_x, repeat_y) = normalize_repeat(*repeat, writing);
+        x.push(repeat_x);
+        y.push(repeat_y);
+    }
+    background.repeat_x = x;
+    background.repeat_y = y;
+}
+
+fn normalize_repeat(
+    repeat: crate::css::BackgroundRepeatPair,
+    writing: crate::formatting::Writing,
+) -> (crate::css::BackgroundRepeat, crate::css::BackgroundRepeat) {
+    use crate::css::{BackgroundRepeat, BackgroundRepeatLogical};
+    match repeat.logical {
+        Some(BackgroundRepeatLogical::Inline) if writing.vertical() => {
+            (BackgroundRepeat::NoRepeat, repeat.x)
+        }
+        Some(BackgroundRepeatLogical::Inline) => (repeat.x, BackgroundRepeat::NoRepeat),
+        Some(BackgroundRepeatLogical::Block) if writing.vertical() => {
+            (repeat.y, BackgroundRepeat::NoRepeat)
+        }
+        Some(BackgroundRepeatLogical::Block) => (BackgroundRepeat::NoRepeat, repeat.y),
+        None => (repeat.x, repeat.y),
+    }
+}
+
+fn apply_repeat_axis(
+    background: &mut BackgroundPaint,
+    values: &crate::css::BackgroundAxisValue<crate::css::BackgroundRepeat>,
+    y: bool,
+    parent: Option<&BackgroundPaint>,
+) {
+    let target = if y {
+        &mut background.repeat_y
+    } else {
+        &mut background.repeat_x
+    };
+    match values {
+        crate::css::BackgroundAxisValue::Values(values) => *target = values.clone(),
+        crate::css::BackgroundAxisValue::Keyword(keyword) => {
+            apply_repeat_keyword_axis(target, *keyword, parent, y)
+        }
+    }
+}
+
+fn apply_logical_repeat_axis(
+    background: &mut BackgroundPaint,
+    values: &crate::css::BackgroundAxisValue<crate::css::BackgroundRepeat>,
+    inline: bool,
+    parent_context: BackgroundContext,
+    context: BackgroundContext,
+    parent: Option<&BackgroundPaint>,
+) {
+    if let crate::css::BackgroundAxisValue::Keyword(crate::css::AllKeyword::Inherit) = values
+        && let Some(parent) = parent
+    {
+        let parent_y = if inline {
+            parent_context.writing.vertical()
+        } else {
+            !parent_context.writing.vertical()
+        };
+        let target_y = if inline {
+            context.writing.vertical()
+        } else {
+            !context.writing.vertical()
+        };
+        let source = if parent_y {
+            &parent.repeat_y
+        } else {
+            &parent.repeat_x
+        };
+        if target_y {
+            background.repeat_y.clone_from(source);
+        } else {
+            background.repeat_x.clone_from(source);
+        }
+        return;
+    }
+    let y = if inline {
+        context.writing.vertical()
+    } else {
+        !context.writing.vertical()
+    };
+    apply_repeat_axis(background, values, y, parent);
+}
+
+fn apply_repeat_keyword(
+    background: &mut BackgroundPaint,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+    x: bool,
+    y: bool,
+) {
+    if x {
+        apply_repeat_keyword_axis(&mut background.repeat_x, keyword, parent, false);
+    }
+    if y {
+        apply_repeat_keyword_axis(&mut background.repeat_y, keyword, parent, true);
+    }
+}
+
+fn apply_repeat_keyword_axis(
+    target: &mut Vec<crate::css::BackgroundRepeat>,
+    keyword: crate::css::AllKeyword,
+    parent: Option<&BackgroundPaint>,
+    y: bool,
+) {
+    if keyword == crate::css::AllKeyword::Inherit
+        && let Some(parent) = parent
+    {
+        *target = if y {
+            parent.repeat_y.clone()
+        } else {
+            parent.repeat_x.clone()
+        };
+        return;
+    }
+    *target = vec![crate::css::BackgroundRepeat::Repeat];
 }
 
 pub(super) fn background_clip_path(
@@ -214,7 +694,7 @@ pub(super) struct ImageResources<'a> {
 
 pub(super) fn fragment_background_shapes(
     resources: &ImageResources<'_>,
-    background: &BackgroundPaint<'_>,
+    background: &BackgroundPaint,
     geometry: &BoxDecorationGeometry<'_>,
     corner_radius: egui::CornerRadius,
     scroll: Vec2,
@@ -258,8 +738,10 @@ pub(super) fn fragment_background_shapes(
     let scale = context.pixels_per_point();
     let attachment_count = background.attachments.len().max(1);
     let origin_count = background.origins.len().max(1);
-    let position_count = background.positions.len().max(1);
-    let repeat_count = background.repeats.len().max(1);
+    let position_x_count = background.position_x.len().max(1);
+    let position_y_count = background.position_y.len().max(1);
+    let repeat_x_count = background.repeat_x.len().max(1);
+    let repeat_y_count = background.repeat_y.len().max(1);
     let size_count = background.sizes.len().max(1);
     let arena = crate::math::Arena::default();
     let units = crate::layout_style::Units {
@@ -290,15 +772,31 @@ pub(super) fn fragment_background_shapes(
             .get(layer_index % origin_count)
             .copied()
             .unwrap_or_default();
-        let position = background
-            .positions
-            .get(layer_index % position_count)
-            .unwrap_or(&default_position);
-        let repeat = background
-            .repeats
-            .get(layer_index % repeat_count)
-            .copied()
-            .unwrap_or_default();
+        let position = crate::css::BackgroundPosition {
+            x: background
+                .position_x
+                .get(layer_index % position_x_count)
+                .cloned()
+                .unwrap_or_else(|| default_position.x.clone()),
+            y: background
+                .position_y
+                .get(layer_index % position_y_count)
+                .cloned()
+                .unwrap_or_else(|| default_position.y.clone()),
+        };
+        let repeat = crate::css::BackgroundRepeatPair {
+            x: background
+                .repeat_x
+                .get(layer_index % repeat_x_count)
+                .copied()
+                .unwrap_or(crate::css::BackgroundRepeat::Repeat),
+            y: background
+                .repeat_y
+                .get(layer_index % repeat_y_count)
+                .copied()
+                .unwrap_or(crate::css::BackgroundRepeat::Repeat),
+            logical: None,
+        };
         let size = background
             .sizes
             .get(layer_index % size_count)
@@ -396,7 +894,7 @@ pub(super) fn fragment_background_shapes(
             continue;
         }
         let position_offset =
-            resolve_background_position(position, image_size, positioning_area.size(), units);
+            resolve_background_position(&position, image_size, positioning_area.size(), units);
         let image_origin = positioning_area.min + position_offset;
         let x_tiles = background_tiles(
             clipped_area.left(),
@@ -561,15 +1059,16 @@ fn resolve_background_position(
                 crate::box_decoration::length_percentage(value, units, true)
                     .map_or(0.0, |value| value.resolve(free))
             }
-            BackgroundPositionAxis::Start(value) => {
+            BackgroundPositionAxis::Start(value) | BackgroundPositionAxis::AxisStart(value) => {
                 crate::box_decoration::length_percentage(value, units, true)
-                    .map_or(0.0, |value| value.resolve(extent))
+                    .map_or(0.0, |value| value.resolve(free))
             }
             BackgroundPositionAxis::Center => free / 2.0,
-            BackgroundPositionAxis::End(value) => {
+            BackgroundPositionAxis::End(value) | BackgroundPositionAxis::AxisEnd(value) => {
                 free - crate::box_decoration::length_percentage(value, units, true)
-                    .map_or(0.0, |value| value.resolve(extent))
+                    .map_or(0.0, |value| value.resolve(free))
             }
+            BackgroundPositionAxis::Computed(value) => value.resolve(free),
         }
     };
     vec2(
@@ -635,7 +1134,7 @@ pub(super) fn resolved_element_references(
         image.collect_element_ids(&mut ids);
         references.extend(ids);
     };
-    for image in resolved_background(stylesheet, target, state, viewport).images {
+    for image in &resolved_background(stylesheet, target, state, viewport).images {
         collect(image);
     }
     collect(&resolved_border_image_source(
@@ -656,7 +1155,7 @@ pub(super) fn resolved_element_references_from_rules(
     stylesheet: &Stylesheet,
     selector: &crate::css::SelectorTarget,
     pseudo_state: u8,
-    rules: &[(RuleState, Vec<Declaration>)],
+    _rules: &[(RuleState, Vec<Declaration>)],
     style: &BoxStyle,
     units: Units,
 ) -> HashSet<String> {
@@ -666,7 +1165,7 @@ pub(super) fn resolved_element_references_from_rules(
         image.collect_element_ids(&mut ids);
         references.extend(ids);
     };
-    for image in resolved_background_from_rules(rules).images {
+    for image in &style.background_values.images {
         collect(image);
     }
     collect(&style.decorations.border_image.source);
@@ -833,7 +1332,8 @@ pub(super) fn collect_rule_element_ids(rule: &crate::css::Rule, ids: &mut HashSe
 
     for declaration in &rule.declarations {
         match declaration {
-            Declaration::BackgroundShorthand(background) => {
+            Declaration::BackgroundShorthand(background)
+            | Declaration::BackgroundTbdShorthand(background) => {
                 for image in &background.images {
                     collect(image, ids);
                 }

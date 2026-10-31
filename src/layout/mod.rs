@@ -241,6 +241,16 @@ fn is_background_property(name: &str) -> bool {
     name == "background" || name.starts_with("background-")
 }
 
+fn is_logical_background_property(name: &str) -> bool {
+    matches!(
+        name,
+        "background-position-inline"
+            | "background-position-block"
+            | "background-repeat-inline"
+            | "background-repeat-block"
+    )
+}
+
 fn is_font_property(name: &str) -> bool {
     matches!(name, "font-family" | "font-weight" | "font-style")
 }
@@ -255,12 +265,27 @@ fn matches_wide_property(declaration: &Declaration, name: &str) -> bool {
         return match declaration {
             Declaration::Background(_)
             | Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundReset(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundTbdReset(_)
             | Declaration::BackgroundImage(_)
             | Declaration::BackgroundAttachment(_)
             | Declaration::BackgroundClip(_)
             | Declaration::BackgroundOrigin(_)
             | Declaration::BackgroundPosition(_)
+            | Declaration::BackgroundPositionKeyword(_)
+            | Declaration::BackgroundPositionX(_)
+            | Declaration::BackgroundPositionY(_)
+            | Declaration::BackgroundPositionInline(_)
+            | Declaration::BackgroundPositionBlock(_)
+            | Declaration::BackgroundPositionComputedX(_)
+            | Declaration::BackgroundPositionComputedY(_)
             | Declaration::BackgroundRepeat(_)
+            | Declaration::BackgroundRepeatKeyword(_)
+            | Declaration::BackgroundRepeatX(_)
+            | Declaration::BackgroundRepeatY(_)
+            | Declaration::BackgroundRepeatInline(_)
+            | Declaration::BackgroundRepeatBlock(_)
             | Declaration::BackgroundSize(_) => true,
             Declaration::Layout(layout) => {
                 layout.name == "background" || is_background_property(&layout.name)
@@ -269,43 +294,162 @@ fn matches_wide_property(declaration: &Declaration, name: &str) -> bool {
         };
     }
     match name {
+        "background-tbd" => match declaration {
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundReset(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundTbdReset(_)
+            | Declaration::BackgroundImage(_)
+            | Declaration::BackgroundAttachment(_)
+            | Declaration::BackgroundClip(_)
+            | Declaration::BackgroundOrigin(_)
+            | Declaration::BackgroundPosition(_)
+            | Declaration::BackgroundPositionKeyword(_)
+            | Declaration::BackgroundPositionX(_)
+            | Declaration::BackgroundPositionY(_)
+            | Declaration::BackgroundPositionInline(_)
+            | Declaration::BackgroundPositionBlock(_)
+            | Declaration::BackgroundPositionComputedX(_)
+            | Declaration::BackgroundPositionComputedY(_)
+            | Declaration::BackgroundRepeat(_)
+            | Declaration::BackgroundRepeatKeyword(_)
+            | Declaration::BackgroundRepeatX(_)
+            | Declaration::BackgroundRepeatY(_)
+            | Declaration::BackgroundRepeatInline(_)
+            | Declaration::BackgroundRepeatBlock(_)
+            | Declaration::BackgroundSize(_) => true,
+            Declaration::Layout(layout) => {
+                layout.name.starts_with("background-") && layout.name != "background-color"
+            }
+            _ => false,
+        },
         "background-color" => match declaration {
             Declaration::Background(_) | Declaration::BackgroundShorthand(_) => true,
             Declaration::Layout(layout) => layout.name == "background-color",
             _ => false,
         },
         "background-image" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundImage(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundImage(_) => true,
             Declaration::Layout(layout) => layout.name == "background-image",
             _ => false,
         },
         "background-attachment" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundAttachment(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundAttachment(_) => true,
             Declaration::Layout(layout) => layout.name == "background-attachment",
             _ => false,
         },
         "background-clip" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundClip(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundClip(_) => true,
             Declaration::Layout(layout) => layout.name == "background-clip",
             _ => false,
         },
         "background-origin" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundOrigin(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundOrigin(_) => true,
             Declaration::Layout(layout) => layout.name == "background-origin",
             _ => false,
         },
         "background-position" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundPosition(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundPosition(_)
+            | Declaration::BackgroundPositionKeyword(_) => true,
             Declaration::Layout(layout) => layout.name == "background-position",
             _ => false,
         },
+        "background-position-x" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundPosition(_)
+                    | Declaration::BackgroundPositionX(_)
+                    | Declaration::BackgroundPositionComputedX(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-position-x")
+        }
+        "background-position-y" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundPosition(_)
+                    | Declaration::BackgroundPositionY(_)
+                    | Declaration::BackgroundPositionComputedY(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-position-y")
+        }
+        "background-position-inline" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundPosition(_)
+                    | Declaration::BackgroundPositionInline(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-position-inline")
+        }
+        "background-position-block" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundPosition(_)
+                    | Declaration::BackgroundPositionBlock(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-position-block")
+        }
         "background-repeat" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundRepeat(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundRepeat(_)
+            | Declaration::BackgroundRepeatKeyword(_) => true,
             Declaration::Layout(layout) => layout.name == "background-repeat",
             _ => false,
         },
+        "background-repeat-x" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundRepeat(_)
+                    | Declaration::BackgroundRepeatX(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-repeat-x")
+        }
+        "background-repeat-y" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundRepeat(_)
+                    | Declaration::BackgroundRepeatY(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-repeat-y")
+        }
+        "background-repeat-inline" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundRepeat(_)
+                    | Declaration::BackgroundRepeatInline(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-repeat-inline")
+        }
+        "background-repeat-block" => {
+            matches!(
+                declaration,
+                Declaration::BackgroundShorthand(_)
+                    | Declaration::BackgroundTbdShorthand(_)
+                    | Declaration::BackgroundRepeat(_)
+                    | Declaration::BackgroundRepeatBlock(_)
+            ) || matches!(declaration, Declaration::Layout(layout) if layout.name == "background-repeat-block")
+        }
         "background-size" => match declaration {
-            Declaration::BackgroundShorthand(_) | Declaration::BackgroundSize(_) => true,
+            Declaration::BackgroundShorthand(_)
+            | Declaration::BackgroundTbdShorthand(_)
+            | Declaration::BackgroundSize(_) => true,
             Declaration::Layout(layout) => layout.name == "background-size",
             _ => false,
         },
@@ -336,39 +480,100 @@ fn inherited_background_property(
     if !matches!(
         name,
         "background"
+            | "background-tbd"
             | "background-color"
             | "background-image"
             | "background-attachment"
             | "background-clip"
             | "background-origin"
             | "background-position"
+            | "background-position-x"
+            | "background-position-y"
+            | "background-position-inline"
+            | "background-position-block"
             | "background-repeat"
+            | "background-repeat-x"
+            | "background-repeat-y"
+            | "background-repeat-inline"
+            | "background-repeat-block"
             | "background-size"
     ) {
         return None;
     }
-    let background = background_from_declarations(declarations.iter());
+    let context = BackgroundContext {
+        writing: crate::formatting::Writing::Horizontal,
+        direction: taffy::Direction::Ltr,
+    };
+    let background = background_from_declarations(declarations.iter(), None, context, context);
+    let layer_count = [
+        background.images.len(),
+        background.attachments.len(),
+        background.clips.len(),
+        background.origins.len(),
+        background.position_x.len(),
+        background.position_y.len(),
+        background.repeat_x.len(),
+        background.repeat_y.len(),
+        background.sizes.len(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(1)
+    .max(1);
+    let positions = (0..layer_count)
+        .map(|index| crate::css::BackgroundPosition {
+            x: background.position_x[index % background.position_x.len()].clone(),
+            y: background.position_y[index % background.position_y.len()].clone(),
+        })
+        .collect();
+    let repeats = (0..layer_count)
+        .map(|index| crate::css::BackgroundRepeatPair {
+            x: background.repeat_x[index % background.repeat_x.len()],
+            y: background.repeat_y[index % background.repeat_y.len()],
+            logical: None,
+        })
+        .collect();
     Some(match name {
         "background" => Declaration::BackgroundShorthand(crate::css::BackgroundShorthand {
             color,
-            images: background.images.to_vec(),
-            attachments: background.attachments.to_vec(),
-            clips: background.clips.to_vec(),
-            origins: background.origins.to_vec(),
-            positions: background.positions.to_vec(),
-            repeats: background.repeats.to_vec(),
-            sizes: background.sizes.to_vec(),
+            images: background.images,
+            attachments: background.attachments,
+            clips: background.clips,
+            origins: background.origins,
+            positions,
+            repeats,
+            sizes: background.sizes,
+        }),
+        "background-tbd" => Declaration::BackgroundTbdShorthand(crate::css::BackgroundShorthand {
+            color,
+            images: background.images,
+            attachments: background.attachments,
+            clips: background.clips,
+            origins: background.origins,
+            positions,
+            repeats,
+            sizes: background.sizes,
         }),
         "background-color" => Declaration::Background(color),
-        "background-image" => Declaration::BackgroundImage(background.images.to_vec()),
-        "background-attachment" => {
-            Declaration::BackgroundAttachment(background.attachments.to_vec())
-        }
-        "background-clip" => Declaration::BackgroundClip(background.clips.to_vec()),
-        "background-origin" => Declaration::BackgroundOrigin(background.origins.to_vec()),
-        "background-position" => Declaration::BackgroundPosition(background.positions.to_vec()),
-        "background-repeat" => Declaration::BackgroundRepeat(background.repeats.to_vec()),
-        "background-size" => Declaration::BackgroundSize(background.sizes.to_vec()),
+        "background-image" => Declaration::BackgroundImage(background.images),
+        "background-attachment" => Declaration::BackgroundAttachment(background.attachments),
+        "background-clip" => Declaration::BackgroundClip(background.clips),
+        "background-origin" => Declaration::BackgroundOrigin(background.origins),
+        "background-position" => Declaration::BackgroundPosition(positions),
+        "background-repeat" => Declaration::BackgroundRepeat(repeats),
+        "background-size" => Declaration::BackgroundSize(background.sizes),
+        "background-position-x" => Declaration::BackgroundPositionX(
+            crate::css::BackgroundAxisValue::Values(background.position_x),
+        ),
+        "background-position-y" => Declaration::BackgroundPositionY(
+            crate::css::BackgroundAxisValue::Values(background.position_y),
+        ),
+        "background-repeat-x" => Declaration::BackgroundRepeatX(
+            crate::css::BackgroundAxisValue::Values(background.repeat_x),
+        ),
+        "background-repeat-y" => Declaration::BackgroundRepeatY(
+            crate::css::BackgroundAxisValue::Values(background.repeat_y),
+        ),
         _ => return None,
     })
 }
@@ -393,7 +598,7 @@ fn apply_all_rules(
                 inherited_background_property(&name, parent_declarations, parent_background_color)
             {
                 effective.push((state, inherited));
-            } else {
+            } else if !is_logical_background_property(&name) {
                 effective.extend(
                     parent_declarations
                         .iter()
@@ -631,7 +836,8 @@ pub(crate) fn show(
         .flat_map(|(_, declarations)| declarations)
     {
         match declaration {
-            Declaration::BackgroundShorthand(background) => {
+            Declaration::BackgroundShorthand(background)
+            | Declaration::BackgroundTbdShorthand(background) => {
                 for image in &background.images {
                     image.collect_urls(&mut background_urls);
                 }
@@ -758,6 +964,80 @@ pub(crate) fn show(
     if style.background_current_color {
         style.background_color = style.current_color;
     }
+    style.background_values = resolved_background_from_rules(
+        &resolved_rules,
+        Some(&parent_style.background_values),
+        BackgroundContext {
+            writing: parent_style.format.writing,
+            direction: parent_style.layout.direction,
+        },
+        BackgroundContext {
+            writing: style.format.writing,
+            direction: style.layout.direction,
+        },
+    );
+    if !animation_properties.is_empty() {
+        let (_, position_x) = crate::css::computed_background_position_axis(
+            &style.background_values.position_x,
+            crate::css::BackgroundPositionAxisKind::X,
+            units,
+            style.format.writing,
+            style.layout.direction,
+        )
+        .expect("computed background position-x values are valid");
+        let (_, position_y) = crate::css::computed_background_position_axis(
+            &style.background_values.position_y,
+            crate::css::BackgroundPositionAxisKind::Y,
+            units,
+            style.format.writing,
+            style.layout.direction,
+        )
+        .expect("computed background position-y values are valid");
+        let computed_axis = |values: &[crate::math::ComputedLength]| {
+            crate::css::BackgroundAxisValue::Values(
+                values
+                    .iter()
+                    .cloned()
+                    .map(crate::css::BackgroundPositionAxis::Computed)
+                    .collect(),
+            )
+        };
+        let (position_inline, position_block) = if style.format.writing.vertical() {
+            (&position_y, &position_x)
+        } else {
+            (&position_x, &position_y)
+        };
+        let (repeat_inline, repeat_block) = if style.format.writing.vertical() {
+            (
+                &style.background_values.repeat_y,
+                &style.background_values.repeat_x,
+            )
+        } else {
+            (
+                &style.background_values.repeat_x,
+                &style.background_values.repeat_y,
+            )
+        };
+        let defaults = [
+            Declaration::BackgroundPositionX(computed_axis(&position_x)),
+            Declaration::BackgroundPositionY(computed_axis(&position_y)),
+            Declaration::BackgroundPositionInline(computed_axis(position_inline)),
+            Declaration::BackgroundPositionBlock(computed_axis(position_block)),
+            Declaration::BackgroundRepeatX(crate::css::BackgroundAxisValue::Values(
+                style.background_values.repeat_x.clone(),
+            )),
+            Declaration::BackgroundRepeatY(crate::css::BackgroundAxisValue::Values(
+                style.background_values.repeat_y.clone(),
+            )),
+            Declaration::BackgroundRepeatInline(crate::css::BackgroundAxisValue::Values(
+                repeat_inline.clone(),
+            )),
+            Declaration::BackgroundRepeatBlock(crate::css::BackgroundAxisValue::Values(
+                repeat_block.clone(),
+            )),
+        ];
+        underlying_declarations.extend(defaults);
+    }
     let keyframes = stylesheet
         .keyframes
         .iter()
@@ -795,7 +1075,14 @@ pub(crate) fn show(
         &animation_properties,
         &keyframes,
         &underlying_declarations,
-        &important_declarations,
+        crate::animation::SampleContext {
+            important: &important_declarations,
+            position: crate::animation::PositionContext {
+                units,
+                writing: style.format.writing,
+                direction: style.layout.direction,
+            },
+        },
     );
     {
         let mut frame = active.0.borrow_mut();
@@ -803,6 +1090,16 @@ pub(crate) fn show(
         frame.layout_animation_active |= animation.layout_active;
     }
     let animated_declarations = animation.declarations;
+    let animated_background_color = animated_declarations.iter().any(|declaration| {
+        matches!(
+            declaration,
+            Declaration::Background(_) | Declaration::BackgroundShorthand(_)
+        )
+    });
+    let mut animated_background_position_x = None;
+    let mut animated_background_position_y = None;
+    let mut animated_background_repeat_x = None;
+    let mut animated_background_repeat_y = None;
     for declaration in &animated_declarations {
         match declaration {
             Declaration::Color(color) => style.current_color = *color,
@@ -819,14 +1116,62 @@ pub(crate) fn show(
                     units.font = style.format.em;
                 }
             }
+            Declaration::BackgroundPositionComputedX(values) => {
+                animated_background_position_x = Some(values.clone());
+            }
+            Declaration::BackgroundPositionComputedY(values) => {
+                animated_background_position_y = Some(values.clone());
+            }
+            Declaration::BackgroundRepeatX(crate::css::BackgroundAxisValue::Values(values)) => {
+                animated_background_repeat_x = Some(values.clone());
+            }
+            Declaration::BackgroundRepeatY(crate::css::BackgroundAxisValue::Values(values)) => {
+                animated_background_repeat_y = Some(values.clone());
+            }
+            Declaration::BackgroundRepeatInline(crate::css::BackgroundAxisValue::Values(
+                values,
+            )) => {
+                if style.format.writing.vertical() {
+                    animated_background_repeat_y = Some(values.clone());
+                } else {
+                    animated_background_repeat_x = Some(values.clone());
+                }
+            }
+            Declaration::BackgroundRepeatBlock(crate::css::BackgroundAxisValue::Values(values)) => {
+                if style.format.writing.vertical() {
+                    animated_background_repeat_x = Some(values.clone());
+                } else {
+                    animated_background_repeat_y = Some(values.clone());
+                }
+            }
             _ => {}
         }
     }
     if style.background_current_color {
         style.background_color = style.current_color;
     }
+    if let Some(values) = &animated_background_position_x {
+        style.background_values.position_x = values
+            .iter()
+            .cloned()
+            .map(crate::css::BackgroundPositionAxis::Computed)
+            .collect();
+    }
+    if let Some(values) = &animated_background_position_y {
+        style.background_values.position_y = values
+            .iter()
+            .cloned()
+            .map(crate::css::BackgroundPositionAxis::Computed)
+            .collect();
+    }
+    if let Some(values) = &animated_background_repeat_x {
+        style.background_values.repeat_x.clone_from(values);
+    }
+    if let Some(values) = &animated_background_repeat_y {
+        style.background_values.repeat_y.clone_from(values);
+    }
     let transition = if stylesheet.rule_index.has_transitions {
-        crate::transition::sample(ui.ctx(), id, &mut style, &math)
+        crate::transition::sample(ui.ctx(), id, &mut style, units)
     } else {
         crate::transition::Sample::default()
     };
@@ -848,6 +1193,13 @@ pub(crate) fn show(
         });
     if let Some(request) = &font_request {
         stylesheet.start_font_load_for_request(request.clone(), ui.ctx());
+    }
+    let background_position_x_overridden =
+        animated_background_position_x.is_some() || transition.background_position_x;
+    let background_position_y_overridden =
+        animated_background_position_y.is_some() || transition.background_position_y;
+    if transition.background || animated_background_color {
+        style.background_values.color = style.background_color;
     }
     let mut computed_declarations = if all_keyword.is_none() {
         parent_style
@@ -1528,16 +1880,55 @@ pub(crate) fn show(
             .widgets
             .state(response.widget_state());
         let (_, current_state_rules, _, _) = resolve_rules(current_state);
-        let mut background_style = resolved_background_from_rules(&current_state_rules);
+        let mut background_style = resolved_background_from_rules(
+            &current_state_rules,
+            Some(&parent_style.background_values),
+            BackgroundContext {
+                writing: parent_style.format.writing,
+                direction: parent_style.layout.direction,
+            },
+            BackgroundContext {
+                writing: style.format.writing,
+                direction: style.layout.direction,
+            },
+        );
         if transition.background
+            || animated_background_color
             || resolved_rules
                 .iter()
                 .flat_map(|(_, declarations)| declarations)
                 .any(|declaration| {
-                    matches!(declaration, Declaration::Layout(layout) if layout.name == "background" || layout.name == "background-color")
+                    matches!(
+                        declaration,
+                        Declaration::Background(_) | Declaration::BackgroundShorthand(_)
+                    ) || matches!(
+                        declaration,
+                        Declaration::Layout(layout)
+                            if layout.name == "background" || layout.name == "background-color"
+                    )
                 })
         {
             background_style.color = style.background_color;
+        }
+        if background_position_x_overridden {
+            background_style
+                .position_x
+                .clone_from(&style.background_values.position_x);
+        }
+        if background_position_y_overridden {
+            background_style
+                .position_y
+                .clone_from(&style.background_values.position_y);
+        }
+        if animated_background_repeat_x.is_some() {
+            background_style
+                .repeat_x
+                .clone_from(&style.background_values.repeat_x);
+        }
+        if animated_background_repeat_y.is_some() {
+            background_style
+                .repeat_y
+                .clone_from(&style.background_values.repeat_y);
         }
         let corner_radius = if final_geometry.collapsed.is_some() {
             egui::CornerRadius::ZERO

@@ -330,6 +330,215 @@ pub(super) fn parse_background_positions<'i>(
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackgroundPositionAxisKind {
+    X,
+    Y,
+    Inline,
+    Block,
+}
+
+pub(crate) fn computed_background_position_axis(
+    values: &[BackgroundPositionAxis],
+    kind: BackgroundPositionAxisKind,
+    units: crate::layout_style::Units<'_>,
+    writing: crate::formatting::Writing,
+    direction: taffy::Direction,
+) -> Result<(bool, Vec<crate::math::ComputedLength>), &'static str> {
+    use crate::{css::BackgroundPositionAxis as Axis, math::ComputedLength};
+
+    let target_y = match kind {
+        BackgroundPositionAxisKind::X => false,
+        BackgroundPositionAxisKind::Y => true,
+        BackgroundPositionAxisKind::Inline => writing.vertical(),
+        BackgroundPositionAxisKind::Block => !writing.vertical(),
+    };
+    let relative_axis = match kind {
+        BackgroundPositionAxisKind::X => writing.vertical(),
+        BackgroundPositionAxisKind::Y => !writing.vertical(),
+        BackgroundPositionAxisKind::Inline => false,
+        BackgroundPositionAxisKind::Block => true,
+    };
+    let reverse = if relative_axis {
+        writing.vertical() && writing.reverse()
+    } else {
+        direction == taffy::Direction::Rtl
+    };
+    let parse = |value: &str| {
+        let value = crate::box_decoration::length_percentage(value, units, true)?;
+        Ok::<_, &'static str>(match value {
+            crate::box_decoration::LengthPercentage::Length(value) => ComputedLength::length(value),
+            crate::box_decoration::LengthPercentage::Percentage(value) => {
+                ComputedLength::percentage(value)
+            }
+            crate::box_decoration::LengthPercentage::Calc(handle) => {
+                ComputedLength::from_handle(handle)
+            }
+        })
+    };
+    let positions = values
+        .iter()
+        .map(|value| {
+            let (end, value) = match value {
+                Axis::FreeSpace(value) => (false, parse(value)?),
+                Axis::Start(value) => (
+                    matches!(
+                        kind,
+                        BackgroundPositionAxisKind::Inline | BackgroundPositionAxisKind::Block
+                    ) && reverse,
+                    parse(value)?,
+                ),
+                Axis::End(value) => (
+                    !(matches!(
+                        kind,
+                        BackgroundPositionAxisKind::Inline | BackgroundPositionAxisKind::Block
+                    ) && reverse),
+                    parse(value)?,
+                ),
+                Axis::AxisStart(value) => (reverse, parse(value)?),
+                Axis::AxisEnd(value) => (!reverse, parse(value)?),
+                Axis::Center => (false, ComputedLength::percentage(0.5)),
+                Axis::Computed(value) => return Ok(value.clone()),
+            };
+            Ok(if end {
+                ComputedLength::percentage(1.0).subtract(&value)
+            } else {
+                value
+            })
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
+    Ok((target_y, positions))
+}
+
+pub(super) fn parse_background_position_axis<'i>(
+    input: &mut CssParser<'i>,
+    kind: BackgroundPositionAxisKind,
+) -> Result<BackgroundAxisValue<BackgroundPositionAxis>, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(BackgroundAxisValue::Keyword(keyword));
+    }
+    let values = split_top_level_commas(&value)
+        .into_iter()
+        .map(|value| parse_background_position_axis_value(value, kind))
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.is_empty() {
+        return Err(ParseError::custom("empty background position"));
+    }
+    Ok(BackgroundAxisValue::Values(values))
+}
+
+fn parse_background_position_axis_value(
+    value: &str,
+    kind: BackgroundPositionAxisKind,
+) -> Result<BackgroundPositionAxis, ParseError<&'static str>> {
+    let values = crate::layout_style::components(value).map_err(ParseError::custom)?;
+    if values.is_empty() || values.len() > 2 {
+        return Err(ParseError::custom(
+            "background position axis requires one or two values",
+        ));
+    }
+    let first = values[0].to_ascii_lowercase();
+    if first == "center" {
+        if values.len() == 1 {
+            return Ok(BackgroundPositionAxis::Center);
+        }
+        return Err(ParseError::custom("center cannot have a background offset"));
+    }
+    let edge = match kind {
+        BackgroundPositionAxisKind::X => match first.as_str() {
+            "left" => Some((false, false)),
+            "right" => Some((true, false)),
+            "x-start" => Some((false, true)),
+            "x-end" => Some((true, true)),
+            _ => None,
+        },
+        BackgroundPositionAxisKind::Y => match first.as_str() {
+            "top" => Some((false, false)),
+            "bottom" => Some((true, false)),
+            "y-start" => Some((false, true)),
+            "y-end" => Some((true, true)),
+            _ => None,
+        },
+        BackgroundPositionAxisKind::Inline | BackgroundPositionAxisKind::Block => {
+            match first.as_str() {
+                "start" => Some((false, false)),
+                "end" => Some((true, false)),
+                _ => None,
+            }
+        }
+    };
+    if let Some((from_end, axis_relative)) = edge {
+        let offset = values.get(1).cloned().unwrap_or_else(|| "0px".to_owned());
+        if values.len() == 2 && !is_background_length_percentage(&offset, true) {
+            return Err(ParseError::custom("invalid background position offset"));
+        }
+        return Ok(match (from_end, axis_relative) {
+            (false, false) => BackgroundPositionAxis::Start(offset),
+            (true, false) => BackgroundPositionAxis::End(offset),
+            (false, true) => BackgroundPositionAxis::AxisStart(offset),
+            (true, true) => BackgroundPositionAxis::AxisEnd(offset),
+        });
+    }
+    if values.len() == 1 && is_background_length_percentage(&values[0], true) {
+        crate::box_decoration::length_percentage(
+            &values[0],
+            crate::layout_style::Units {
+                math: &crate::math::Arena::default(),
+                font: 16.0,
+                root_font: 16.0,
+                viewport: egui::Vec2::splat(1000.0),
+                pixels_per_point: 1.0,
+            },
+            true,
+        )
+        .map_err(ParseError::custom)?;
+        return Ok(BackgroundPositionAxis::Start(values[0].clone()));
+    }
+    Err(ParseError::custom("unsupported background position axis"))
+}
+
+pub(super) fn parse_background_repeats_axis<'i>(
+    input: &mut CssParser<'i>,
+) -> Result<BackgroundAxisValue<BackgroundRepeat>, ParseError<&'static str>> {
+    let value = consume_value(input)?;
+    if let Some(keyword) = parse_background_css_wide_keyword(&value)? {
+        return Ok(BackgroundAxisValue::Keyword(keyword));
+    }
+    let values = split_top_level_commas(&value)
+        .into_iter()
+        .map(|value| {
+            let components = crate::layout_style::components(value).map_err(ParseError::custom)?;
+            let [value] = components.as_slice() else {
+                return Err(ParseError::custom(
+                    "background repeat axis requires one value",
+                ));
+            };
+            parse_background_repeat_atom(value)
+                .ok_or_else(|| ParseError::custom("unsupported background repeat axis"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.is_empty() {
+        return Err(ParseError::custom("empty background repeat"));
+    }
+    Ok(BackgroundAxisValue::Values(values))
+}
+
+pub(super) fn parse_background_css_wide_keyword(
+    value: &str,
+) -> Result<Option<AllKeyword>, ParseError<&'static str>> {
+    Ok(match value.trim().to_ascii_lowercase().as_str() {
+        "initial" => Some(AllKeyword::Initial),
+        "inherit" => Some(AllKeyword::Inherit),
+        "unset" => Some(AllKeyword::Unset),
+        "revert" => Some(AllKeyword::Revert),
+        "revert-layer" => {
+            return Err(ParseError::custom("cascade layers are unsupported"));
+        }
+        _ => None,
+    })
+}
+
 pub(super) fn parse_background_position_value(
     value: &str,
 ) -> Result<BackgroundPosition, ParseError<&'static str>> {
@@ -494,22 +703,37 @@ pub(super) fn parse_background_repeat_component(
             "no-repeat" => BackgroundRepeatPair {
                 x: BackgroundRepeat::NoRepeat,
                 y: BackgroundRepeat::NoRepeat,
+                logical: None,
             },
             "space" => BackgroundRepeatPair {
                 x: BackgroundRepeat::Space,
                 y: BackgroundRepeat::Space,
+                logical: None,
             },
             "round" => BackgroundRepeatPair {
                 x: BackgroundRepeat::Round,
                 y: BackgroundRepeat::Round,
+                logical: None,
             },
             "repeat-x" => BackgroundRepeatPair {
                 x: BackgroundRepeat::Repeat,
                 y: BackgroundRepeat::NoRepeat,
+                logical: None,
             },
             "repeat-y" => BackgroundRepeatPair {
                 x: BackgroundRepeat::NoRepeat,
                 y: BackgroundRepeat::Repeat,
+                logical: None,
+            },
+            "repeat-inline" => BackgroundRepeatPair {
+                x: BackgroundRepeat::Repeat,
+                y: BackgroundRepeat::NoRepeat,
+                logical: Some(BackgroundRepeatLogical::Inline),
+            },
+            "repeat-block" => BackgroundRepeatPair {
+                x: BackgroundRepeat::NoRepeat,
+                y: BackgroundRepeat::Repeat,
+                logical: Some(BackgroundRepeatLogical::Block),
             },
             _ => return Err(ParseError::custom("unsupported background repeat")),
         },
@@ -518,6 +742,7 @@ pub(super) fn parse_background_repeat_component(
                 .ok_or_else(|| ParseError::custom("invalid background repeat"))?,
             y: parse_background_repeat_atom(second)
                 .ok_or_else(|| ParseError::custom("invalid background repeat"))?,
+            logical: None,
         },
         _ => {
             return Err(ParseError::custom(

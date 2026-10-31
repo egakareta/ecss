@@ -13,6 +13,7 @@ pub(super) enum Value {
     Length(ComputedLength),
     Radius(ComputedLength, ComputedLength),
     Position(crate::object::Position),
+    PositionAxis(Vec<ComputedLength>),
 }
 
 impl Value {
@@ -39,6 +40,19 @@ impl Value {
             }
             (Self::Position(from), Self::Position(to)) => {
                 Self::Position(from.interpolate(to, progress))
+            }
+            (Self::PositionAxis(from), Self::PositionAxis(to)) => {
+                let count = from.len().max(to.len());
+                if count == 0 {
+                    return None;
+                }
+                Self::PositionAxis(
+                    (0..count)
+                        .map(|index| {
+                            from[index % from.len()].interpolate(&to[index % to.len()], progress)
+                        })
+                        .collect(),
+                )
             }
             _ => return None,
         })
@@ -155,6 +169,8 @@ pub(super) enum PropertyId {
     Order,
     ZIndex,
     ObjectPosition,
+    BackgroundPositionX,
+    BackgroundPositionY,
 }
 
 impl PropertyId {
@@ -171,6 +187,8 @@ impl PropertyId {
             Self::Order,
             Self::ZIndex,
             Self::ObjectPosition,
+            Self::BackgroundPositionX,
+            Self::BackgroundPositionY,
         ]
         .into_iter()
         .chain((0..4).flat_map(|side| {
@@ -217,6 +235,8 @@ impl PropertyId {
             Self::Order => "order",
             Self::ZIndex => "z-index",
             Self::ObjectPosition => "object-position",
+            Self::BackgroundPositionX => "background-position-x",
+            Self::BackgroundPositionY => "background-position-y",
         }
     }
 
@@ -226,6 +246,10 @@ impl PropertyId {
         }
         match (self, name) {
             (Self::Background, "background")
+            | (
+                Self::BackgroundPositionX | Self::BackgroundPositionY,
+                "background" | "background-tbd" | "background-position",
+            )
             | (Self::Radius(_), "border-radius")
             | (Self::BorderColor(_) | Self::BorderWidth(_), "border")
             | (Self::BorderColor(_), "border-color")
@@ -239,6 +263,17 @@ impl PropertyId {
                 "flex",
             ) => return true,
             _ => {}
+        }
+        if matches!(
+            name,
+            "background-position-inline" | "background-position-block"
+        ) {
+            let y = if name == "background-position-inline" {
+                style.format.writing.vertical()
+            } else {
+                !style.format.writing.vertical()
+            };
+            return matches!(self, Self::BackgroundPositionY) == y;
         }
         let own = self.name();
         if matches!(name, "margin" | "padding") {
@@ -329,6 +364,8 @@ impl PropertyId {
                 | Self::ColumnRuleColor
                 | Self::Radius(_)
                 | Self::ObjectPosition
+                | Self::BackgroundPositionX
+                | Self::BackgroundPositionY
                 | Self::Number(
                     Number::OutlineWidth
                         | Number::OutlineOffset
@@ -364,10 +401,39 @@ impl PropertyId {
         }
     }
 
-    pub(super) fn get(self, style: &BoxStyle) -> Option<Value> {
+    pub(super) fn get(
+        self,
+        style: &BoxStyle,
+        units: crate::layout_style::Units<'_>,
+    ) -> Option<Value> {
         Some(match self {
             Self::Color => Value::Color(style.current_color),
             Self::ObjectPosition => Value::Position(style.object_position.clone()),
+            Self::BackgroundPositionX | Self::BackgroundPositionY => {
+                let (kind, values) = if self == Self::BackgroundPositionX {
+                    (
+                        crate::css::BackgroundPositionAxisKind::X,
+                        &style.background_values.position_x,
+                    )
+                } else {
+                    (
+                        crate::css::BackgroundPositionAxisKind::Y,
+                        &style.background_values.position_y,
+                    )
+                };
+                let (target_y, values) = crate::css::computed_background_position_axis(
+                    values,
+                    kind,
+                    units,
+                    style.format.writing,
+                    style.layout.direction,
+                )
+                .ok()?;
+                if target_y != (self == Self::BackgroundPositionY) {
+                    return None;
+                }
+                Value::PositionAxis(values)
+            }
             Self::Background => Value::Color(style.background_color),
             Self::BorderColor(side) => {
                 if style.border_stripes[side].is_some() {
@@ -410,6 +476,20 @@ impl PropertyId {
                 style.border_colors[side] = Some(*value)
             }
             (Self::ObjectPosition, Value::Position(value)) => style.object_position = value.clone(),
+            (Self::BackgroundPositionX, Value::PositionAxis(values)) => {
+                style.background_values.position_x = values
+                    .iter()
+                    .cloned()
+                    .map(crate::css::BackgroundPositionAxis::Computed)
+                    .collect()
+            }
+            (Self::BackgroundPositionY, Value::PositionAxis(values)) => {
+                style.background_values.position_y = values
+                    .iter()
+                    .cloned()
+                    .map(crate::css::BackgroundPositionAxis::Computed)
+                    .collect()
+            }
             (Self::OutlineColor, Value::Color(value)) => style.outline.color = Some(*value),
             (Self::ColumnRuleColor, Value::Color(value)) => {
                 style.format.column_rule.color = Some(*value)

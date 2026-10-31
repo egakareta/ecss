@@ -122,6 +122,16 @@ impl ComputedLength {
         )
     }
 
+    pub(crate) fn subtract(&self, other: &Self) -> Self {
+        Self(
+            Expression {
+                kind: Kind::Length,
+                value: Value::Binary('-', Box::new(self.0.clone()), Box::new(other.0.clone())),
+            }
+            .normalized(),
+        )
+    }
+
     pub(crate) fn encode(&self, arena: &Arena) -> taffy::LengthPercentage {
         match self.0.value {
             Value::Constant(value) if value.is_finite() => {

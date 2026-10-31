@@ -66,7 +66,7 @@ async fn transitions_override_important_values_and_animations_test() {
     let capture = bounds.clone();
     let pixels =
         render_ui_pixels_with_events(stylesheet, hover_frames(6, &[(1, true)]), move |ui| {
-            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect)
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
         })
         .await;
 
@@ -77,6 +77,112 @@ async fn transitions_override_important_values_and_animations_test() {
             && actual[1].abs_diff(128) <= 1
             && actual[2].abs_diff(128) <= 1,
         "transition sample was {actual:?}, expected a halfway red-to-white value"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn background_position_axis_transition_interpolates_start_and_end_edges() {
+    let stylesheet = Stylesheet::parse(
+        ".box { width:60px; height:20px; background-color:black; background-image:linear-gradient(to right, lime 50%, transparent 50%); background-size:20px 10px; background-repeat:no-repeat; background-position-x:left 2px; transition:background-position-x 1s linear; }\
+         .box:hover { background-position-x:right 10%; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels =
+        render_ui_pixels_with_events(stylesheet, hover_frames(6, &[(1, true)]), move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
+        })
+        .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 25.0, rect.top() + 5.0),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 35.0, rect.top() + 5.0),
+        [0, 0, 0, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn background_position_axis_transition_cycles_layer_lists_before_interpolation() {
+    let stylesheet = Stylesheet::parse(
+        ".box { width:60px; height:20px; background-color:black; background-image:linear-gradient(to right, lime 50%, transparent 50%), linear-gradient(blue, blue); background-size:20px 10px, 20px 10px; background-repeat:no-repeat; background-position-x:left, right; background-position-y:top; transition:background-position-x 1s linear; }\
+         .box:hover { background-position-x:right; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels =
+        render_ui_pixels_with_events(stylesheet, hover_frames(6, &[(1, true)]), move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
+        })
+        .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 25.0, rect.top() + 5.0),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 45.0, rect.top() + 5.0),
+        [0, 0, 255, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn important_background_tbd_variable_masks_position_animation_and_preserves_color() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes shift { from { background-position-x:left; } to { background-position-x:right; } }\
+         .box { width:60px; height:20px; --layer:linear-gradient(to right, lime 50%, transparent 50%) / 20px 10px no-repeat; background-color:red; background-tbd:var(--layer) !important; animation:shift 1s linear both; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_with_events(stylesheet, hover_frames(6, &[]), move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
+    })
+    .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 5.0, rect.top() + 5.0),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 25.0, rect.top() + 5.0),
+        [255, 0, 0, 255]
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn important_logical_background_axes_mask_physical_axis_animations() {
+    let stylesheet = Stylesheet::parse(
+        "@keyframes shift { from { background-position-y:center; background-repeat-y:no-repeat; } to { background-position-y:bottom; background-repeat-y:repeat; } }\
+         .box { width:40px; height:40px; writing-mode:vertical-rl; background-color:black; background-image:linear-gradient(to bottom, lime 50%, transparent 50%); background-size:10px 20px; background-position-inline:center !important; background-repeat-inline:no-repeat !important; animation:shift 1s linear both; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels_with_events(stylesheet, hover_frames(6, &[]), move |ui| {
+        *capture.lock().unwrap() = Some(ui.add(empty_response.selector(".box")).rect);
+    })
+    .await;
+
+    let rect = bounds.lock().unwrap().unwrap();
+    assert_eq!(
+        pixel(&pixels, rect.left() + 5.0, rect.top() + 12.0),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(
+        pixel(&pixels, rect.left() + 5.0, rect.top() + 25.0),
+        [0, 0, 0, 255]
     );
 }
 
