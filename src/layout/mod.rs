@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -787,7 +788,6 @@ pub(crate) fn show(
     };
     style.format.em = base_font_size;
     style.format.font_size_set = parent_style.format.font_size_set;
-    let inherited_style = style.clone();
     let mut units = Units {
         math: &math,
         font: base_font_size,
@@ -842,29 +842,33 @@ pub(crate) fn show(
             style.background_current_color = false;
             style.custom_properties = custom_properties.clone();
         }
-        Some(crate::css::AllKeyword::Unset | crate::css::AllKeyword::Revert) => {
-            style = inherited_style;
-            style.custom_properties = custom_properties.clone();
-        }
         Some(crate::css::AllKeyword::Initial) => {
             let direction = style.layout.direction;
             style = BoxStyle::default();
             style.layout.direction = direction;
             style.custom_properties = custom_properties.clone();
         }
-        None => {}
+        Some(crate::css::AllKeyword::Unset | crate::css::AllKeyword::Revert) | None => {}
     }
     units.font = style.format.em;
+    let has_state_rules = matching_rules(stylesheet, target, units.viewport)
+        .any(|rule| rule.state != RuleState::BASE);
+    let visual_rules = |visual_state| {
+        if visual_state == state || !has_state_rules {
+            Cow::Borrowed(resolved_rules.as_slice())
+        } else {
+            Cow::Owned(resolve_rules(visual_state).1)
+        }
+    };
     let non_pointer_state = state & !(RuleState::HOVERED.bits() | RuleState::ACTIVE.bits());
-    let (_, base_visual_rules, _, _) = resolve_rules(non_pointer_state);
-    let (_, hovered_visual_rules, _, _) =
-        resolve_rules(non_pointer_state | RuleState::HOVERED.bits());
+    let base_visual_rules = visual_rules(non_pointer_state);
+    let hovered_visual_rules = visual_rules(non_pointer_state | RuleState::HOVERED.bits());
     let active_state = if state & (RuleState::FOCUS.bits() | RuleState::ACTIVE.bits()) != 0 {
         state
     } else {
         non_pointer_state | RuleState::HOVERED.bits() | RuleState::ACTIVE.bits()
     };
-    let (_, active_visual_rules, _, _) = resolve_rules(active_state);
+    let active_visual_rules = visual_rules(active_state);
     let mut background_urls = Vec::new();
     for declaration in resolved_rules
         .iter()
@@ -1083,36 +1087,43 @@ pub(crate) fn show(
         ];
         underlying_declarations.extend(defaults);
     }
-    let keyframes = stylesheet
-        .keyframes
-        .iter()
-        .filter(|keyframes| {
-            keyframes
-                .media
-                .iter()
-                .all(|query| query.matches(units.viewport))
-        })
-        .map(|keyframes| {
-            (
-                keyframes.name.clone(),
+    let keyframes = if animation_properties.is_empty() {
+        HashMap::new()
+    } else {
+        stylesheet
+            .keyframes
+            .iter()
+            .filter(|keyframes| {
                 keyframes
-                    .frames
+                    .media
                     .iter()
-                    .map(|frame| crate::css::Keyframe {
-                        offset: frame.offset,
-                        timing_function: frame.timing_function.clone(),
-                        declarations: frame
-                            .declarations
-                            .iter()
-                            .filter_map(|declaration| {
-                                crate::css::resolve_deferred(declaration, &style.custom_properties)
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
+                    .all(|query| query.matches(units.viewport))
+            })
+            .map(|keyframes| {
+                (
+                    keyframes.name.clone(),
+                    keyframes
+                        .frames
+                        .iter()
+                        .map(|frame| crate::css::Keyframe {
+                            offset: frame.offset,
+                            timing_function: frame.timing_function.clone(),
+                            declarations: frame
+                                .declarations
+                                .iter()
+                                .filter_map(|declaration| {
+                                    crate::css::resolve_deferred(
+                                        declaration,
+                                        &style.custom_properties,
+                                    )
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    };
     let logical_axes = crate::css::cascade::LogicalAxes {
         direction: style.layout.direction,
         writing: style.format.writing,
@@ -1414,7 +1425,7 @@ pub(crate) fn show(
         (crate::VisualState::Hovered, &hovered_visual_rules),
         (crate::VisualState::Active, &active_visual_rules),
     ] {
-        for (_, declarations) in rules {
+        for (_, declarations) in rules.iter() {
             crate::apply_declarations(&mut content_ui, visual_state, declarations);
         }
     }
@@ -1881,7 +1892,7 @@ pub(crate) fn show(
         response.enabled()
     };
     let current_state = states::response_state(&response, id, enabled);
-    let (_, current_rules, _, _) = resolve_rules(current_state);
+    let current_rules = visual_rules(current_state);
     let cursor_value = current_rules
         .iter()
         .flat_map(|(_, declarations)| declarations)
@@ -1899,13 +1910,12 @@ pub(crate) fn show(
             .any(inherits_background);
     }
     if stylesheet.rule_index.has_element_references {
-        let (_, current_element_rules, _, _) = resolve_rules(current_state);
         active.0.borrow_mut().nodes[index].element_references =
             resolved_element_references_from_rules(
                 stylesheet,
                 target,
                 state,
-                &current_element_rules,
+                &current_rules,
                 &style,
                 units,
             );
@@ -1955,9 +1965,8 @@ pub(crate) fn show(
             .visuals
             .widgets
             .state(response.widget_state());
-        let (_, current_state_rules, _, _) = resolve_rules(current_state);
         let mut background_style = resolved_background_from_rules(
-            &current_state_rules,
+            &current_rules,
             Some(&parent_style.background_values),
             BackgroundContext {
                 writing: parent_style.format.writing,
@@ -1970,7 +1979,7 @@ pub(crate) fn show(
         );
         if transition.background
             || animated_background_color
-            || current_state_rules
+            || current_rules
                 .iter()
                 .flat_map(|(_, declarations)| declarations)
                 .any(|declaration| {
