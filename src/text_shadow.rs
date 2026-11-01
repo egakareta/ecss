@@ -302,7 +302,21 @@ pub(crate) fn paint(
 pub(crate) struct Override<'a> {
     pub(crate) selection: &'a [Rect],
     pub(crate) shadows: &'a [Shadow],
-    pub(crate) current_color: Color32,
+}
+
+pub(crate) struct ColorOverride<'a> {
+    pub(crate) selection: &'a [Rect],
+    pub(crate) color: Color32,
+}
+
+#[derive(Default)]
+pub(crate) struct Overrides<'a> {
+    pub(crate) shadows: &'a [Override<'a>],
+    pub(crate) colors: &'a [ColorOverride<'a>],
+}
+
+pub(crate) fn uses_current_color(shadows: &[Shadow]) -> bool {
+    shadows.iter().any(|shadow| shadow.color.is_none())
 }
 
 pub(crate) fn paint_with_overrides(
@@ -311,19 +325,20 @@ pub(crate) fn paint_with_overrides(
     clip: Rect,
     shadows: &[Shadow],
     current_color: Color32,
-    overrides: &[Override<'_>],
+    overrides: Overrides<'_>,
     vertical: bool,
 ) -> Shape {
-    if overrides.is_empty() {
+    if overrides.shadows.is_empty() && overrides.colors.is_empty() {
         return paint(context, text, clip, shadows, current_color);
     }
-    let mut shapes = Vec::with_capacity(overrides.len() + 2);
+    let mut shapes = Vec::with_capacity(overrides.shadows.len() + overrides.colors.len() + 2);
     let selections = overrides
+        .shadows
         .iter()
         .flat_map(|override_| override_.selection.iter().copied())
         .collect::<Vec<_>>();
     extend_shapes(
-        paint_filtered(
+        paint_colored(
             context,
             text,
             clip,
@@ -335,30 +350,116 @@ pub(crate) fn paint_with_overrides(
                 include_text: false,
                 vertical,
             },
+            overrides.colors,
         ),
         &mut shapes,
     );
     let mut selection_end = 0;
-    for override_ in overrides {
+    for override_ in overrides.shadows {
         selection_end += override_.selection.len();
         extend_shapes(
-            paint_filtered(
+            paint_colored(
                 context,
                 text,
                 clip,
                 override_.shadows,
-                override_.current_color,
+                current_color,
                 GlyphFilter {
                     selection: Some(override_.selection),
                     excluded: &selections[selection_end..],
                     include_text: false,
                     vertical,
                 },
+                overrides.colors,
             ),
             &mut shapes,
         );
     }
     shapes.push(Shape::Text(text.clone()));
+    Shape::Vec(shapes)
+}
+
+fn paint_colored(
+    context: &Context,
+    text: &TextShape,
+    clip: Rect,
+    shadows: &[Shadow],
+    current_color: Color32,
+    filter: GlyphFilter<'_>,
+    colors: &[ColorOverride<'_>],
+) -> Shape {
+    if colors.is_empty() || !uses_current_color(shadows) {
+        return paint_filtered(context, text, clip, shadows, current_color, filter);
+    }
+    let selections = colors
+        .iter()
+        .flat_map(|color| color.selection.iter().copied())
+        .collect::<Vec<_>>();
+    let mut excluded = filter.excluded.to_vec();
+    let original_excluded = excluded.len();
+    let mut shapes = Vec::new();
+    for shadow in shadows.iter().rev() {
+        let shadow = std::slice::from_ref(shadow);
+        if shadow[0].color.is_some() {
+            extend_shapes(
+                paint_filtered(context, text, clip, shadow, current_color, filter),
+                &mut shapes,
+            );
+            continue;
+        }
+        excluded.truncate(original_excluded);
+        excluded.extend_from_slice(&selections);
+        extend_shapes(
+            paint_filtered(
+                context,
+                text,
+                clip,
+                shadow,
+                current_color,
+                GlyphFilter {
+                    excluded: &excluded,
+                    ..filter
+                },
+            ),
+            &mut shapes,
+        );
+        let mut selection_end = 0;
+        for color in colors {
+            selection_end += color.selection.len();
+            excluded.truncate(original_excluded);
+            excluded.extend_from_slice(&selections[selection_end..]);
+            let selection = filter.selection.map_or_else(
+                || color.selection.to_vec(),
+                |selection| {
+                    selection
+                        .iter()
+                        .flat_map(|first| {
+                            color
+                                .selection
+                                .iter()
+                                .map(|second| first.intersect(*second))
+                        })
+                        .filter(|rect| rect.is_positive())
+                        .collect()
+                },
+            );
+            extend_shapes(
+                paint_filtered(
+                    context,
+                    text,
+                    clip,
+                    shadow,
+                    color.color,
+                    GlyphFilter {
+                        selection: Some(&selection),
+                        excluded: &excluded,
+                        ..filter
+                    },
+                ),
+                &mut shapes,
+            );
+        }
+    }
     Shape::Vec(shapes)
 }
 

@@ -75,6 +75,7 @@ pub(crate) struct Sample {
     pub(crate) background_position_x: bool,
     pub(crate) background_position_y: bool,
     pub(crate) text_shadow: bool,
+    pub(crate) color_sampled: bool,
     color: bool,
     radius: bool,
 }
@@ -232,7 +233,10 @@ pub(crate) fn sample(
             );
             property.set(style, &value, units.math);
             match property {
-                PropertyId::Color => sample.color = true,
+                PropertyId::Color => {
+                    sample.color = true;
+                    sample.color_sampled = was_running || running.is_some();
+                }
                 PropertyId::TextShadows => sample.text_shadow = was_running || running.is_some(),
                 PropertyId::Background => {
                     sample.background = style.background_set || was_running || changed

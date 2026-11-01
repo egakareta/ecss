@@ -19,6 +19,242 @@ fn shadow_color_count(pixels: &[[u8; 4]], rect: egui::Rect, channel: usize) -> u
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_ink_does_not_change_layout_or_expand_hit_targets() {
+    async fn render(
+        shadow: &str,
+        frames: Vec<Vec<egui::Event>>,
+    ) -> (Vec<[u8; 4]>, egui::Rect, egui::Rect, bool) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ color:transparent; font-size:28px; width:max-content; text-shadow:{shadow}; }} .after {{ width:20px; height:12px; background:black; }}"
+        )).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_with_events(stylesheet, frames, move |ui| {
+            let text = ui.add(
+                egui::Label::new("MM")
+                    .sense(egui::Sense::click())
+                    .selector(".text"),
+            );
+            let after = ui.add(empty_response.selector(".after"));
+            *capture.lock().unwrap() = Some((text.rect, after.rect, text.clicked()));
+        })
+        .await;
+        let (text, after, clicked) = bounds.lock().unwrap().unwrap();
+        (pixels, text, after, clicked)
+    }
+    let (_, control_text, control_after, _) = render("none", vec![Vec::new(), Vec::new()]).await;
+    let shadow = "24px 0 4px red, -8px 6px 2px blue";
+    let (pixels, text, after, _) = render(shadow, vec![Vec::new(), Vec::new()]).await;
+    assert_eq!(
+        text, control_text,
+        "shadows changed the text's public bounds"
+    );
+    assert_eq!(
+        after, control_after,
+        "shadows changed following content placement"
+    );
+    let point = pixels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, pixel)| {
+            let point = egui::pos2(
+                (index % WIDTH as usize) as f32 + 0.5,
+                (index / WIDTH as usize) as f32 + 0.5,
+            );
+            (point.x > text.right() + 2.0
+                && pixel[0] > pixel[1].saturating_add(8)
+                && pixel[0] > pixel[2].saturating_add(8))
+            .then_some(point)
+        })
+        .max_by(|first, second| first.x.total_cmp(&second.x))
+        .expect("no visible shadow beyond the text's public bounds");
+    assert!(!text.contains(point));
+    let button = |pressed| egui::Event::PointerButton {
+        pos: point,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frames = vec![
+        Vec::new(),
+        vec![egui::Event::PointerMoved(point), button(true)],
+        vec![egui::Event::PointerMoved(point), button(false)],
+    ];
+    let (_, _, _, control_clicked) = render("none", frames.clone()).await;
+    assert!(
+        !control_clicked,
+        "the probe was within the control's hit region"
+    );
+    let (_, hit_text, hit_after, clicked) = render(shadow, frames).await;
+    assert_eq!(hit_text, control_text);
+    assert_eq!(hit_after, control_after);
+    assert!(!clicked, "shadow-only ink expanded the text's click target");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn pseudo_color_changes_resolve_inherited_currentcolor_shadows() {
+    for (pseudo, reference) in [
+        (
+            ".text::first-letter { color:red; }",
+            ".text::first-letter { text-shadow:0 70px red; }",
+        ),
+        (
+            ".text::first-line { color:red; }",
+            ".text::first-line { text-shadow:0 70px red; }",
+        ),
+        (
+            ".text::first-line { color:red; } .text::first-letter { color:lime; }",
+            ".text::first-line { text-shadow:0 70px red; } .text::first-letter { text-shadow:0 70px lime; }",
+        ),
+        (
+            ".text::first-line { color:red; text-shadow:10px 70px currentColor; } .text::first-letter { color:lime; }",
+            ".text::first-line { text-shadow:10px 70px red; } .text::first-letter { text-shadow:10px 70px lime; }",
+        ),
+        (
+            ".text::first-line { color:red; } .text::first-letter { color:inherit; }",
+            ".text::first-line { text-shadow:0 70px red; }",
+        ),
+        (
+            ".text { text-shadow:0 70px rgb(0 255 0 / 25%), 0 70px currentColor; } .text::first-letter { color:red; }",
+            ".text { text-shadow:0 70px rgb(0 255 0 / 25%), 0 70px blue; } .text::first-letter { text-shadow:0 70px rgb(0 255 0 / 25%), 0 70px red; }",
+        ),
+    ] {
+        let base =
+            ".text { color:blue; font-size:28px; width:65px; text-shadow:0 70px currentColor; }";
+        let actual = render_ui_pixels(
+            Stylesheet::parse(&format!("{base} {pseudo}")).unwrap(),
+            |ui| {
+                ui.add(egui::Label::new("MM MM").selector(".text"));
+            },
+        )
+        .await;
+        let expected = render_ui_pixels(
+            Stylesheet::parse(&format!(
+                "{base} .text {{ text-shadow:0 70px blue; }} {reference}"
+            ))
+            .unwrap(),
+            |ui| {
+                ui.add(egui::Label::new("MM MM").selector(".text"));
+            },
+        )
+        .await;
+        let shadow =
+            egui::Rect::from_min_max(egui::pos2(0.0, 70.0), egui::pos2(WIDTH as f32, 100.0));
+        assert!(shadow_color_count(&expected, shadow, 0) > 0);
+        let differences = actual
+            .iter()
+            .zip(&expected)
+            .enumerate()
+            .filter(|(index, (actual, expected))| {
+                (70..100).contains(&(index / WIDTH as usize)) && actual != expected
+            })
+            .count();
+        assert_eq!(
+            differences, 0,
+            "pseudo shadow used the originating element's currentColor: {pseudo}"
+        );
+    }
+    fn block_text(ui: &mut egui::Ui) {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("MM MM").selector(".text"));
+                ui.response()
+            })
+            .selector(".block"),
+        );
+    }
+    for (child, shadow) in [
+        ("", "10px 70px red"),
+        ("color:lime;", "10px 70px lime"),
+        ("text-shadow:0 70px currentColor;", "0 70px red"),
+        (
+            "color:lime; text-shadow:0 70px currentColor;",
+            "0 70px lime",
+        ),
+        ("animation:green 1s linear both;", "10px 70px lime"),
+        ("animation:own-shadow 1s linear both;", "0 70px red"),
+        ("color:initial;", "10px 70px black"),
+        ("color:inherit;", "10px 70px red"),
+        ("color:revert;", "10px 70px red"),
+        ("text-shadow:none;", "none"),
+        ("text-shadow:0 70px blue;", "0 70px blue"),
+    ] {
+        let base = format!(
+            "@keyframes green {{ from,to {{ color:lime; }} }} @keyframes own-shadow {{ from,to {{ text-shadow:0 70px currentColor; }} }} .block {{ color:blue; font-size:28px; width:65px; text-shadow:0 70px currentColor; }} .text {{ display:block; width:65px; {child} }}"
+        );
+        let actual = render_ui_pixels(
+            Stylesheet::parse(&format!(
+                "{base} .block::first-line {{ color:red; text-shadow:10px 70px currentColor; }}"
+            ))
+            .unwrap(),
+            block_text,
+        )
+        .await;
+        let expected = render_ui_pixels(
+            Stylesheet::parse(&format!(
+                "{base} .text {{ text-shadow:{shadow} !important; animation:none !important; }}"
+            ))
+            .unwrap(),
+            block_text,
+        )
+        .await;
+        let region = 70 * WIDTH as usize..100 * WIDTH as usize;
+        if shadow != "none" {
+            assert!(
+                expected[region.clone()]
+                    .iter()
+                    .any(|pixel| pixel[..3].iter().any(|channel| *channel < 128))
+            );
+        }
+        assert_eq!(
+            actual[region.clone()]
+                .iter()
+                .zip(&expected[region])
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "descendant's own color/shadow precedence was lost: {child}"
+        );
+    }
+    let base = ".block { color:blue; font-size:28px; width:65px; text-shadow:0 70px currentColor; } .block::first-line { color:red; } .text { width:65px; text-shadow:0 70px blue; }";
+    let actual = render_ui_pixels(
+        Stylesheet::parse(&format!(
+            "{base} .text::first-letter {{ text-shadow:0 70px currentColor; }}"
+        ))
+        .unwrap(),
+        block_text,
+    )
+    .await;
+    let expected = render_ui_pixels(
+        Stylesheet::parse(&format!(
+            "{base} .text::first-letter {{ text-shadow:0 70px red; }}"
+        ))
+        .unwrap(),
+        block_text,
+    )
+    .await;
+    let region = 70 * WIDTH as usize..100 * WIDTH as usize;
+    assert!(
+        shadow_color_count(
+            &expected,
+            egui::Rect::from_min_max(egui::pos2(0.0, 70.0), egui::pos2(WIDTH as f32, 100.0)),
+            0
+        ) > 0
+    );
+    assert_eq!(
+        actual[region.clone()]
+            .iter()
+            .zip(&expected[region])
+            .filter(|(actual, expected)| actual != expected)
+            .count(),
+        0,
+        "a descendant's pseudo lost inherited first-line color after specifying its own shadow list"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn max_content_wrapping_does_not_override_constrained_descendants() {
     fn nested_text(ui: &mut egui::Ui) {
         ui.add(

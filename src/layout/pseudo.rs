@@ -261,6 +261,14 @@ pub(super) fn is_combining_mark(character: char) -> bool {
     )
 }
 
+pub(super) struct PseudoDecorationStyle {
+    pub(super) style: BoxStyle,
+    pub(super) fill: Color32,
+    pub(super) color: Color32,
+    shadow_inheritance: Option<Inheritance>,
+    color_inheritance: Option<Inheritance>,
+}
+
 pub(super) fn pseudo_decoration_style(
     stylesheet: &Stylesheet,
     target: &crate::css::SelectorTarget,
@@ -269,7 +277,7 @@ pub(super) fn pseudo_decoration_style(
     parent: &BoxStyle,
     units: Units,
     current: Color32,
-) -> Option<(BoxStyle, Color32, Color32, Option<ShadowInheritance>)> {
+) -> Option<PseudoDecorationStyle> {
     let rules = matching_pseudo_rules(stylesheet, target, pseudo, state, units.viewport);
     if rules.is_empty() {
         return None;
@@ -295,7 +303,9 @@ pub(super) fn pseudo_decoration_style(
                 .map(|declaration| (state, declaration))
         })
         .collect();
-    let shadow_inheritance = text_shadow_inheritance(resolved.iter().map(|(_, value)| value));
+    let shadow_inheritance =
+        property_inheritance(resolved.iter().map(|(_, value)| value), "text-shadow");
+    let color_inheritance = property_inheritance(resolved.iter().map(|(_, value)| value), "color");
     let (rules, all_keyword) = super::apply_all_rules(
         resolved,
         &parent.computed_declarations,
@@ -374,37 +384,51 @@ pub(super) fn pseudo_decoration_style(
         fill = style.current_color;
     }
     style.finish();
-    Some((style, fill, color, shadow_inheritance))
+    Some(PseudoDecorationStyle {
+        style,
+        fill,
+        color,
+        shadow_inheritance,
+        color_inheritance,
+    })
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum ShadowInheritance {
+pub(super) enum Inheritance {
     Inherit,
     Specified,
 }
 
-pub(super) fn text_shadow_inheritance<'a>(
+pub(super) fn property_inheritance<'a>(
     declarations: impl IntoIterator<Item = &'a Declaration>,
-) -> Option<ShadowInheritance> {
+    property: &str,
+) -> Option<Inheritance> {
     let mut inheritance = None;
     for declaration in declarations {
         match declaration {
-            Declaration::TextShadowInterpolation(_) | Declaration::TextShadowUnderlying => {
-                inheritance = Some(ShadowInheritance::Specified)
+            Declaration::TextShadowInterpolation(_) | Declaration::TextShadowUnderlying
+                if property == "text-shadow" =>
+            {
+                inheritance = Some(Inheritance::Specified)
+            }
+            Declaration::Color(_) if property == "color" => {
+                inheritance = Some(Inheritance::Specified)
             }
             Declaration::All(crate::css::AllKeyword::Initial) => {
-                inheritance = Some(ShadowInheritance::Specified);
+                inheritance = Some(Inheritance::Specified);
             }
-            Declaration::All(_) => inheritance = Some(ShadowInheritance::Inherit),
-            Declaration::Layout(value) if value.name == "text-shadow" => {
+            Declaration::All(_) => inheritance = Some(Inheritance::Inherit),
+            Declaration::Layout(value) if value.name == property => {
                 inheritance = Some(
                     if ["inherit", "unset", "revert"]
                         .iter()
                         .any(|keyword| value.value.trim().eq_ignore_ascii_case(keyword))
+                        || property == "color"
+                            && value.value.trim().eq_ignore_ascii_case("currentcolor")
                     {
-                        ShadowInheritance::Inherit
+                        Inheritance::Inherit
                     } else {
-                        ShadowInheritance::Specified
+                        Inheritance::Specified
                     },
                 );
             }
@@ -416,8 +440,8 @@ pub(super) fn text_shadow_inheritance<'a>(
 
 pub(super) struct TextShadowReplacement {
     pub(super) pseudo: crate::css::PseudoElementKind,
-    pub(super) shadows: Vec<crate::text_shadow::Shadow>,
-    pub(super) current_color: Color32,
+    pub(super) shadows: Option<Vec<crate::text_shadow::Shadow>>,
+    pub(super) color: Option<Color32>,
 }
 
 pub(super) fn text_shadow_replacements(
@@ -433,7 +457,7 @@ pub(super) fn text_shadow_replacements(
     ]
     .into_iter()
     .filter_map(|pseudo| {
-        let (style, _, color, mode) = pseudo_decoration_style(
+        let resolved = pseudo_decoration_style(
             stylesheet,
             target,
             pseudo,
@@ -442,10 +466,14 @@ pub(super) fn text_shadow_replacements(
             units,
             parent.current_color,
         )?;
-        matches!(mode, Some(ShadowInheritance::Specified)).then_some(TextShadowReplacement {
+        let shadows = matches!(resolved.shadow_inheritance, Some(Inheritance::Specified))
+            .then_some(resolved.style.text_shadows);
+        let color = matches!(resolved.color_inheritance, Some(Inheritance::Specified))
+            .then_some(resolved.color);
+        (shadows.is_some() || color.is_some()).then_some(TextShadowReplacement {
             pseudo,
-            shadows: style.text_shadows,
-            current_color: color,
+            shadows,
+            color,
         })
     })
     .collect()

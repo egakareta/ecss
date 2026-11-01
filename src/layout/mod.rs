@@ -121,6 +121,7 @@ struct Node {
     color: Color32,
     text_decorations: Vec<crate::text_decoration::Decoration>,
     text_shadow_specified: bool,
+    color_specified: bool,
     pseudo_text_shadows: Vec<TextShadowReplacement>,
     shadow_owner: Option<usize>,
     text_range: Option<TextPaintRange>,
@@ -828,6 +829,7 @@ pub(crate) fn show(
         pixels_per_point: ui.ctx().pixels_per_point(),
     };
     let track_shadow_inheritance = stylesheet.rule_index.has_pseudo_text_shadows
+        || stylesheet.rule_index.has_pseudo_color_rules
         || active
             .0
             .borrow()
@@ -858,8 +860,13 @@ pub(crate) fn show(
             .collect::<Vec<_>>();
         let text_shadow_specified = track_shadow_inheritance
             && matches!(
-                text_shadow_inheritance(resolved.iter().map(|(_, value, _)| value)),
-                Some(ShadowInheritance::Specified)
+                property_inheritance(resolved.iter().map(|(_, value, _)| value), "text-shadow"),
+                Some(Inheritance::Specified)
+            );
+        let color_specified = track_shadow_inheritance
+            && matches!(
+                property_inheritance(resolved.iter().map(|(_, value, _)| value), "color"),
+                Some(Inheritance::Specified)
             );
         let resolved = resolved
             .into_iter()
@@ -876,6 +883,7 @@ pub(crate) fn show(
             all_keyword,
             important_declarations,
             text_shadow_specified,
+            color_specified,
         )
     };
     let (
@@ -884,6 +892,7 @@ pub(crate) fn show(
         all_keyword,
         important_declarations,
         text_shadow_specified,
+        color_specified,
     ) = resolve_rules(state);
     style.custom_properties = custom_properties.clone();
     match all_keyword {
@@ -1183,12 +1192,17 @@ pub(crate) fn show(
     }
     let animated_declarations = animation.declarations;
     let mut text_shadow_specified = if track_shadow_inheritance {
-        text_shadow_inheritance(&animated_declarations).map_or(text_shadow_specified, |value| {
-            matches!(value, ShadowInheritance::Specified)
-        })
+        property_inheritance(&animated_declarations, "text-shadow")
+            .map_or(text_shadow_specified, |value| {
+                matches!(value, Inheritance::Specified)
+            })
     } else {
         false
     };
+    let mut color_specified = track_shadow_inheritance
+        && property_inheritance(&animated_declarations, "color").map_or(color_specified, |value| {
+            matches!(value, Inheritance::Specified)
+        });
     let mut background_urls = Vec::new();
     for declaration in resolved_rules
         .iter()
@@ -1317,6 +1331,7 @@ pub(crate) fn show(
         crate::transition::Sample::default()
     };
     text_shadow_specified |= track_shadow_inheritance && transition.text_shadow;
+    color_specified |= track_shadow_inheritance && transition.color_sampled;
     if style.background_current_color && !transition.background {
         style.background_color = style.current_color;
     }
@@ -1368,7 +1383,10 @@ pub(crate) fn show(
     style.computed_declarations = std::sync::Arc::new(computed_declarations);
     crate::layout_style::resolve_flow(&mut style, &parent_style);
     style.finish();
-    let pseudo_text_shadows = if stylesheet.rule_index.has_pseudo_text_shadows {
+    let pseudo_text_shadows = if stylesheet.rule_index.has_pseudo_text_shadows
+        || stylesheet.rule_index.has_pseudo_color_rules
+            && crate::text_shadow::uses_current_color(&style.text_shadows)
+    {
         text_shadow_replacements(
             stylesheet,
             target,
@@ -1444,7 +1462,17 @@ pub(crate) fn show(
             frame.nodes[parent].children.push(index);
         }
         let shadow_owner = parent
-            .filter(|_| !text_shadow_specified)
+            .filter(|_| {
+                !text_shadow_specified
+                    || !color_specified
+                        && (crate::text_shadow::uses_current_color(&style.text_shadows)
+                            || pseudo_text_shadows.iter().any(|replacement| {
+                                replacement
+                                    .shadows
+                                    .as_deref()
+                                    .is_some_and(crate::text_shadow::uses_current_color)
+                            }))
+            })
             .and_then(|parent| frame.nodes[parent].shadow_owner)
             .or_else(|| (!pseudo_text_shadows.is_empty()).then_some(index));
         let inherited_wrap = ui.style().wrap_mode;
@@ -1480,6 +1508,7 @@ pub(crate) fn show(
             color: Color32::BLACK,
             text_decorations,
             text_shadow_specified,
+            color_specified,
             pseudo_text_shadows,
             shadow_owner,
             text_range: None,
@@ -1708,7 +1737,10 @@ pub(crate) fn show(
                 style.format.flow_into_content,
             );
             if let Some(text) = &mut text
-                && let Some((pseudo_style, _, _, _)) = pseudo_decoration_style(
+                && let Some(PseudoDecorationStyle {
+                    style: pseudo_style,
+                    ..
+                }) = pseudo_decoration_style(
                     stylesheet,
                     target,
                     crate::css::PseudoElementKind::FirstLetter,
@@ -1756,7 +1788,10 @@ pub(crate) fn show(
         (!frame.nodes[index].children.is_empty()).then_some(frame.nodes[index].color)
     };
     if let Some(color) = descendant_text_color
-        && let Some((pseudo_style, _, _, _)) = pseudo_decoration_style(
+        && let Some(PseudoDecorationStyle {
+            style: pseudo_style,
+            ..
+        }) = pseudo_decoration_style(
             stylesheet,
             target,
             crate::css::PseudoElementKind::FirstLetter,
@@ -1897,7 +1932,7 @@ pub(crate) fn show(
                 &active.0.borrow(),
                 index,
                 ShapeRange { layer, start, end },
-                &[],
+                text::PseudoTextShadowOverrides::default(),
             );
         }
     }
@@ -2558,7 +2593,12 @@ pub(crate) fn show(
                 crate::css::PseudoElementKind::FirstLine,
                 crate::css::PseudoElementKind::FirstLetter,
             ] {
-                let Some((pseudo_style, fill, color, _)) = pseudo_decoration_style(
+                let Some(PseudoDecorationStyle {
+                    style: pseudo_style,
+                    fill,
+                    color,
+                    ..
+                }) = pseudo_decoration_style(
                     stylesheet,
                     target,
                     pseudo,
@@ -2566,7 +2606,8 @@ pub(crate) fn show(
                     &style,
                     units,
                     visuals.fg_stroke.color,
-                ) else {
+                )
+                else {
                     continue;
                 };
                 let text_rects = pseudo_text_rects(
@@ -2693,7 +2734,13 @@ pub(crate) fn show(
                     }
                 } else {
                     if let Some(range) = frame.nodes[node].text_range {
-                        text::paint_text_shadows(ui.ctx(), &frame, node, range.all, &[]);
+                        text::paint_text_shadows(
+                            ui.ctx(),
+                            &frame,
+                            node,
+                            range.all,
+                            text::PseudoTextShadowOverrides::default(),
+                        );
                     }
                     frame.nodes[node].shadow_pending = false;
                 }

@@ -1030,10 +1030,10 @@ pub(super) fn paint_text_shadows(
     frame: &Frame,
     index: usize,
     range: ShapeRange,
-    overrides: &[&PseudoTextShadowOverride],
+    overrides: PseudoTextShadowOverrides<'_>,
 ) {
     let node = &frame.nodes[index];
-    if node.style.text_shadows.is_empty() && overrides.is_empty() {
+    if node.style.text_shadows.is_empty() && overrides.shadows.is_empty() {
         return;
     }
     let mut shapes = context.graphics(|layers| {
@@ -1115,23 +1115,63 @@ pub(super) fn has_own_text(
 pub(super) struct PseudoTextShadowOverride {
     selection: Vec<Rect>,
     shadows: Vec<crate::text_shadow::Shadow>,
-    current_color: Color32,
+}
+
+pub(super) struct PseudoTextColorOverride {
+    selection: Vec<Rect>,
+    color: Color32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct PseudoTextShadowOverrides<'a> {
+    shadows: &'a [&'a PseudoTextShadowOverride],
+    colors: &'a [&'a PseudoTextColorOverride],
 }
 
 pub(super) fn paint_owned_text_shadows(context: &Context, frame: &mut Frame, owner: usize) {
-    struct Cascade {
-        parent: Option<Rc<Cascade>>,
-        overrides: Vec<PseudoTextShadowOverride>,
+    struct Cascade<T> {
+        parent: Option<Rc<Cascade<T>>>,
+        overrides: Vec<T>,
+    }
+    #[derive(Clone, Default)]
+    struct Inherited {
+        shadows: Option<Rc<Cascade<PseudoTextShadowOverride>>>,
+        colors: Option<Rc<Cascade<PseudoTextColorOverride>>>,
+    }
+    fn values<T>(cascade: &Option<Rc<Cascade<T>>>) -> Vec<&T> {
+        let mut chain = Vec::new();
+        let mut current = cascade.as_deref();
+        while let Some(value) = current {
+            chain.push(value);
+            current = value.parent.as_deref();
+        }
+        chain
+            .into_iter()
+            .rev()
+            .flat_map(|value| value.overrides.iter())
+            .collect()
     }
     let end = frame.nodes[owner].subtree_end;
-    let mut cascades: Vec<Option<Rc<Cascade>>> = Vec::with_capacity(end - owner);
+    let mut cascades: Vec<Inherited> = Vec::with_capacity(end - owner);
     for index in owner..end {
         let node = &frame.nodes[index];
         let inherited = node
             .parent
-            .filter(|parent| *parent >= owner && !node.text_shadow_specified)
-            .and_then(|parent| cascades[parent - owner].clone());
-        let mut selected = Vec::new();
+            .filter(|parent| *parent >= owner)
+            .map(|parent| cascades[parent - owner].clone())
+            .unwrap_or_default();
+        let inherited_shadows = if node.text_shadow_specified {
+            None
+        } else {
+            inherited.shadows
+        };
+        let inherited_colors = if node.color_specified {
+            None
+        } else {
+            inherited.colors
+        };
+        let mut selected_shadows = Vec::new();
+        let mut selected_colors = Vec::new();
         for replacement in &node.pseudo_text_shadows {
             let mut layer_ranges: HashMap<egui::LayerId, Vec<(usize, ShapeRange)>> = HashMap::new();
             for (order, descendant) in frame.nodes[index..node.subtree_end].iter().enumerate() {
@@ -1173,38 +1213,52 @@ pub(super) fn paint_owned_text_shadows(context: &Context, frame: &mut Frame, own
                 node.style.format.writing.vertical(),
             );
             if !selection.is_empty() {
-                selected.push(PseudoTextShadowOverride {
-                    selection,
-                    shadows: replacement.shadows.clone(),
-                    current_color: replacement.current_color,
-                });
+                if let Some(shadows) = &replacement.shadows {
+                    selected_shadows.push(PseudoTextShadowOverride {
+                        selection: selection.clone(),
+                        shadows: shadows.clone(),
+                    });
+                }
+                if let Some(color) = replacement.color {
+                    selected_colors.push(PseudoTextColorOverride { selection, color });
+                }
             }
         }
-        let cascade = if selected.is_empty() {
-            inherited
-        } else {
-            Some(Rc::new(Cascade {
-                parent: inherited,
-                overrides: selected,
-            }))
+        let cascade = Inherited {
+            shadows: if selected_shadows.is_empty() {
+                inherited_shadows
+            } else {
+                Some(Rc::new(Cascade {
+                    parent: inherited_shadows,
+                    overrides: selected_shadows,
+                }))
+            },
+            colors: if selected_colors.is_empty() {
+                inherited_colors
+            } else {
+                Some(Rc::new(Cascade {
+                    parent: inherited_colors,
+                    overrides: selected_colors,
+                }))
+            },
         };
         if node.shadow_owner == Some(owner)
             && node.shadow_pending
             && !node.flow_text_pending
             && let Some(range) = node.text_range
         {
-            let mut chain = Vec::new();
-            let mut current = cascade.as_deref();
-            while let Some(value) = current {
-                chain.push(value);
-                current = value.parent.as_deref();
-            }
-            let overrides = chain
-                .iter()
-                .rev()
-                .flat_map(|value| value.overrides.iter())
-                .collect::<Vec<_>>();
-            paint_text_shadows(context, frame, index, range.all, &overrides);
+            let shadows = values(&cascade.shadows);
+            let colors = values(&cascade.colors);
+            paint_text_shadows(
+                context,
+                frame,
+                index,
+                range.all,
+                PseudoTextShadowOverrides {
+                    shadows: &shadows,
+                    colors: &colors,
+                },
+            );
             frame.nodes[index].shadow_pending = false;
         }
         cascades.push(cascade);
@@ -1217,17 +1271,25 @@ fn paint_text_shadow_shape(
     clip: Rect,
     shadows: &[crate::text_shadow::Shadow],
     current_color: Color32,
-    overrides: &[&PseudoTextShadowOverride],
+    overrides: PseudoTextShadowOverrides<'_>,
     vertical: bool,
 ) {
     match shape {
         egui::Shape::Text(text) => {
-            let overrides = overrides
+            let shadow_overrides = overrides
+                .shadows
                 .iter()
                 .map(|value| crate::text_shadow::Override {
                     selection: &value.selection,
                     shadows: &value.shadows,
-                    current_color: value.current_color,
+                })
+                .collect::<Vec<_>>();
+            let colors = overrides
+                .colors
+                .iter()
+                .map(|value| crate::text_shadow::ColorOverride {
+                    selection: &value.selection,
+                    color: value.color,
                 })
                 .collect::<Vec<_>>();
             *shape = crate::text_shadow::paint_with_overrides(
@@ -1236,7 +1298,10 @@ fn paint_text_shadow_shape(
                 clip,
                 shadows,
                 current_color,
-                &overrides,
+                crate::text_shadow::Overrides {
+                    shadows: &shadow_overrides,
+                    colors: &colors,
+                },
                 vertical,
             );
         }

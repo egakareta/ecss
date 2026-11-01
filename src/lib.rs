@@ -96,6 +96,7 @@ struct RuleIndex {
     ids: HashMap<String, Vec<(u32, usize)>>,
     has_pseudo_rules: bool,
     has_pseudo_text_shadows: bool,
+    has_pseudo_color_rules: bool,
     has_element_references: bool,
     has_transitions: bool,
     has_ancestor_selectors: bool,
@@ -109,6 +110,11 @@ impl RuleIndex {
             index.has_ancestor_selectors |= !rule.target.ancestors.is_empty();
             if rule.pseudo.is_some() {
                 index.has_pseudo_rules = true;
+                index.has_pseudo_color_rules |= rule.declarations.iter().any(|declaration| {
+                    matches!(declaration, Declaration::All(_) | Declaration::Color(_))
+                        || matches!(declaration, Declaration::Layout(value) if value.name == "color")
+                        || matches!(declaration, Declaration::Deferred { name, .. } if matches!(name.as_str(), "color" | "all"))
+                });
                 index.has_pseudo_text_shadows |= rule.declarations.iter().any(|declaration| {
                     matches!(declaration, Declaration::All(_))
                         || matches!(declaration, Declaration::Layout(value) if value.name == "text-shadow")
