@@ -30,7 +30,7 @@ mod pseudo;
 mod states;
 mod text;
 
-pub(crate) use opacity::rasterize_alpha_mask;
+pub(crate) use opacity::{rasterize_alpha_mask, rasterize_inner_shadow};
 
 use background_paint::*;
 use elements::*;

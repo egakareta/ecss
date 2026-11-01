@@ -322,6 +322,98 @@ pub(crate) fn rasterize_alpha_mask(
     Some((image, output_bounds))
 }
 
+pub(crate) fn rasterize_inner_shadow(
+    context: &Context,
+    meshes: &[egui::epaint::Mesh],
+    bounds: Rect,
+    blur: f32,
+    spread: f32,
+    offset: Vec2,
+) -> Option<(egui::ColorImage, Rect)> {
+    let (base, bounds) = rasterize_alpha_mask(context, meshes, bounds, 0.0, 0.0)?;
+    let pixels_per_point = context.pixels_per_point();
+    let halo = blur * 1.5 + spread + 2.0 / pixels_per_point;
+    let source_bounds = bounds.translate(-offset).expand(halo);
+    // Hole geometry is independent of decoration opacity; the destination mask retains it.
+    let opaque = meshes
+        .iter()
+        .map(|mesh| {
+            let mut output = egui::epaint::Mesh::with_texture(mesh.texture_id);
+            for triangle in mesh.indices.as_chunks::<3>().0 {
+                let [Some(a), Some(b), Some(c)] =
+                    triangle.map(|index| mesh.vertices.get(index as usize).copied())
+                else {
+                    continue;
+                };
+                let vertices = [a, b, c];
+                let peak = vertices
+                    .iter()
+                    .map(|vertex| vertex.color.a())
+                    .max()
+                    .unwrap_or(0);
+                if peak == 0 {
+                    continue;
+                }
+                let start = output.vertices.len() as u32;
+                output.vertices.extend(vertices.map(|mut vertex| {
+                    vertex.color = Color32::from_white_alpha(
+                        (f32::from(vertex.color.a()) * 255.0 / f32::from(peak)).round() as u8,
+                    );
+                    vertex
+                }));
+                output.indices.extend([start, start + 1, start + 2]);
+            }
+            output
+        })
+        .collect::<Vec<_>>();
+    let (source, source_bounds) = rasterize_alpha_mask(context, &opaque, source_bounds, 0.0, 0.0)?;
+    let holes = source
+        .pixels
+        .iter()
+        .map(|pixel| 255.0 - f32::from(pixel.a()))
+        .collect();
+    let holes = spread_alpha(
+        holes,
+        source.size,
+        spread * pixels_per_point,
+        Vec2::ZERO,
+        source.size,
+    );
+    let sigma = blur * 0.5 * pixels_per_point;
+    let holes = blur_alpha(holes, source.size, sigma, (sigma * 3.0).ceil() as usize);
+    let origin = (bounds.min - source_bounds.min - offset) * pixels_per_point;
+    let mut pixels = Vec::with_capacity(base.pixels.len());
+    for y in 0..base.size[1] {
+        for x in 0..base.size[0] {
+            let point = origin + vec2(x as f32, y as f32);
+            let x0 = point.x.floor();
+            let y0 = point.y.floor();
+            let sample = |x: f32, y: f32| {
+                if x < 0.0 || y < 0.0 || x >= source.size[0] as f32 || y >= source.size[1] as f32 {
+                    255.0
+                } else {
+                    holes[y as usize * source.size[0] + x as usize]
+                }
+            };
+            let lerp = |a: f32, b: f32, progress: f32| a + (b - a) * progress;
+            let hole = lerp(
+                lerp(sample(x0, y0), sample(x0 + 1.0, y0), point.x - x0),
+                lerp(
+                    sample(x0, y0 + 1.0),
+                    sample(x0 + 1.0, y0 + 1.0),
+                    point.x - x0,
+                ),
+                point.y - y0,
+            );
+            let alpha = (f32::from(base.pixels[y * base.size[0] + x].a()) * hole / 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            pixels.push(Color32::from_white_alpha(alpha));
+        }
+    }
+    Some((egui::ColorImage::new(base.size, pixels), bounds))
+}
+
 fn spread_alpha(
     alpha: Vec<f32>,
     size: [usize; 2],

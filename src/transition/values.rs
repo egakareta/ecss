@@ -40,9 +40,16 @@ impl Value {
                 ))
             }
             (Self::Number(from), Self::Number(to)) => Self::Number(from + (to - from) * progress),
-            (Self::TextShadows(from), Self::TextShadows(to)) => Self::TextShadows(
-                crate::text_shadow::interpolate(from, to, progress, current_color),
-            ),
+            (Self::TextShadows(from), Self::TextShadows(to))
+                if crate::text_shadow::compatible(from, to) =>
+            {
+                Self::TextShadows(crate::text_shadow::interpolate(
+                    from,
+                    to,
+                    progress,
+                    current_color,
+                ))
+            }
             (Self::Length(from), Self::Length(to)) => Self::Length(from.interpolate(to, progress)),
             (Self::Radius(x, y), Self::Radius(to_x, to_y)) => {
                 Self::Radius(x.interpolate(to_x, progress), y.interpolate(to_y, progress))

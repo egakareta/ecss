@@ -22,6 +22,7 @@ pub(crate) struct Shadow {
     pub(crate) offset: Vec2,
     pub(crate) blur: f32,
     pub(crate) spread: f32,
+    pub(crate) inset: bool,
     color: Option<ShadowColor>,
 }
 
@@ -95,10 +96,18 @@ pub(crate) fn interpolate(
     progress: f32,
     current_color: Color32,
 ) -> Vec<Shadow> {
+    if !compatible(from, to) {
+        return if progress < 0.5 {
+            from.to_vec()
+        } else {
+            to.to_vec()
+        };
+    }
     let transparent = Shadow {
         offset: Vec2::ZERO,
         blur: 0.0,
         spread: 0.0,
+        inset: false,
         color: Some(Color32::TRANSPARENT.into()),
     };
     let lerp = |from: f32, to: f32| {
@@ -107,6 +116,13 @@ pub(crate) fn interpolate(
     };
     (0..from.len().max(to.len()))
         .map(|index| {
+            let transparent = Shadow {
+                inset: from
+                    .get(index)
+                    .or_else(|| to.get(index))
+                    .is_some_and(|shadow| shadow.inset),
+                ..transparent
+            };
             let from = from.get(index).unwrap_or(&transparent);
             let to = to.get(index).unwrap_or(&transparent);
             let color = if from.color.is_none() && to.color.is_none() {
@@ -135,10 +151,15 @@ pub(crate) fn interpolate(
                 ),
                 blur: lerp(from.blur, to.blur).max(0.0),
                 spread: lerp(from.spread, to.spread).max(0.0),
+                inset: from.inset,
                 color,
             }
         })
         .collect()
+}
+
+pub(crate) fn compatible(from: &[Shadow], to: &[Shadow]) -> bool {
+    from.iter().zip(to).all(|(from, to)| from.inset == to.inset)
 }
 
 pub(crate) fn apply_animations(
@@ -181,6 +202,8 @@ struct MaskKey {
     glyphs: u64,
     blur: u32,
     spread: u32,
+    inset: bool,
+    offset: [u32; 2],
     bounds: [u32; 4],
 }
 
@@ -201,7 +224,7 @@ struct EvictedMask {
 struct GlyphFilter<'a> {
     selection: Option<&'a [Rect]>,
     excluded: &'a [Rect],
-    include_text: bool,
+    inset: bool,
     vertical: bool,
 }
 
@@ -237,8 +260,15 @@ fn parse_shadow(value: &str, units: Units<'_>) -> Result<Shadow, &'static str> {
     let mut color_seen = false;
     let mut lengths = Vec::new();
     let mut lengths_ended = false;
+    let mut inset = false;
     for value in values {
-        if let Some(parsed) = color_value(&value) {
+        if value.eq_ignore_ascii_case("inset") {
+            if inset {
+                return Err("duplicate text shadow inset");
+            }
+            inset = true;
+            lengths_ended |= !lengths.is_empty();
+        } else if let Some(parsed) = color_value(&value) {
             if color_seen {
                 return Err("duplicate text shadow color");
             }
@@ -259,6 +289,7 @@ fn parse_shadow(value: &str, units: Units<'_>) -> Result<Shadow, &'static str> {
         offset: vec2(lengths[0], lengths[1]),
         blur: lengths.get(2).copied().unwrap_or(0.0),
         spread: lengths.get(3).copied().unwrap_or(0.0),
+        inset,
         color,
     })
 }
@@ -291,19 +322,32 @@ pub(crate) fn paint(
     shadows: &[Shadow],
     current_color: Color32,
 ) -> Shape {
-    paint_filtered(
-        context,
-        text,
-        clip,
-        shadows,
-        current_color,
-        GlyphFilter {
-            selection: None,
-            excluded: &[],
-            include_text: true,
-            vertical: false,
-        },
-    )
+    if shadows.is_empty() {
+        return Shape::Text(text.clone());
+    }
+    let mut shapes = Vec::with_capacity(shadows.len() + 1);
+    for inset in [false, true] {
+        if inset {
+            shapes.push(Shape::Text(text.clone()));
+        }
+        extend_shapes(
+            paint_filtered(
+                context,
+                text,
+                clip,
+                shadows,
+                current_color,
+                GlyphFilter {
+                    selection: None,
+                    excluded: &[],
+                    inset,
+                    vertical: false,
+                },
+            ),
+            &mut shapes,
+        );
+    }
+    Shape::Vec(shapes)
 }
 
 pub(crate) struct Override<'a> {
@@ -344,45 +388,49 @@ pub(crate) fn paint_with_overrides(
         .iter()
         .flat_map(|override_| override_.selection.iter().copied())
         .collect::<Vec<_>>();
-    extend_shapes(
-        paint_colored(
-            context,
-            text,
-            clip,
-            shadows,
-            current_color,
-            GlyphFilter {
-                selection: None,
-                excluded: &selections,
-                include_text: false,
-                vertical,
-            },
-            overrides.colors,
-        ),
-        &mut shapes,
-    );
-    let mut selection_end = 0;
-    for override_ in overrides.shadows {
-        selection_end += override_.selection.len();
+    for inset in [false, true] {
+        if inset {
+            shapes.push(Shape::Text(text.clone()));
+        }
         extend_shapes(
             paint_colored(
                 context,
                 text,
                 clip,
-                override_.shadows,
+                shadows,
                 current_color,
                 GlyphFilter {
-                    selection: Some(override_.selection),
-                    excluded: &selections[selection_end..],
-                    include_text: false,
+                    selection: None,
+                    excluded: &selections,
+                    inset,
                     vertical,
                 },
                 overrides.colors,
             ),
             &mut shapes,
         );
+        let mut selection_end = 0;
+        for override_ in overrides.shadows {
+            selection_end += override_.selection.len();
+            extend_shapes(
+                paint_colored(
+                    context,
+                    text,
+                    clip,
+                    override_.shadows,
+                    current_color,
+                    GlyphFilter {
+                        selection: Some(override_.selection),
+                        excluded: &selections[selection_end..],
+                        inset,
+                        vertical,
+                    },
+                    overrides.colors,
+                ),
+                &mut shapes,
+            );
+        }
     }
-    shapes.push(Shape::Text(text.clone()));
     Shape::Vec(shapes)
 }
 
@@ -493,29 +541,26 @@ fn paint_filtered(
     let GlyphFilter {
         selection,
         excluded,
-        include_text,
+        inset,
         vertical,
     } = filter;
-    if shadows.is_empty() {
-        return if include_text {
-            Shape::Text(text.clone())
-        } else {
-            Shape::Noop
-        };
+    if !shadows.iter().any(|shadow| shadow.inset == inset) {
+        return Shape::Noop;
     }
     let mask_bounds = mask_bounds(text, selection, excluded, vertical);
     if !mask_bounds.is_positive() {
-        return if include_text {
-            Shape::Text(text.clone())
-        } else {
-            Shape::Noop
-        };
+        return Shape::Noop;
     }
     let glyphs = glyph_key(text, selection, excluded, vertical);
     let cache = cache(context);
     let mut source_meshes = None;
     let mut shapes = Vec::with_capacity(shadows.len() + 1);
     for shadow in shadows.iter().rev() {
+        if shadow.inset != inset
+            || inset && shadow.offset == Vec2::ZERO && shadow.blur == 0.0 && shadow.spread == 0.0
+        {
+            continue;
+        }
         let color = shadow.color.map_or(current_color, ShadowColor::resolve);
         if color.a() == 0 {
             continue;
@@ -525,9 +570,13 @@ fn paint_filtered(
         } else {
             1_000_000.0
         };
-        let output_bounds = mask_bounds
-            .expand(padding)
-            .intersect(clip.translate(-(text.pos.to_vec2() + shadow.offset)));
+        let output_bounds = if inset {
+            mask_bounds.intersect(clip.translate(-text.pos.to_vec2()))
+        } else {
+            mask_bounds
+                .expand(padding)
+                .intersect(clip.translate(-(text.pos.to_vec2() + shadow.offset)))
+        };
         if !output_bounds.is_positive() {
             continue;
         }
@@ -535,6 +584,12 @@ fn paint_filtered(
             glyphs,
             blur: shadow.blur.to_bits(),
             spread: shadow.spread.to_bits(),
+            inset,
+            offset: if inset {
+                [shadow.offset.x.to_bits(), shadow.offset.y.to_bits()]
+            } else {
+                [0, 0]
+            },
             bounds: [
                 output_bounds.min.x.to_bits(),
                 output_bounds.min.y.to_bits(),
@@ -547,13 +602,24 @@ fn paint_filtered(
                 source_meshes = Some(glyph_meshes(context, text, selection, excluded, vertical));
             }
             let meshes = source_meshes.as_ref()?;
-            let (image, bounds) = crate::layout::rasterize_alpha_mask(
-                context,
-                meshes,
-                output_bounds,
-                shadow.blur,
-                shadow.spread,
-            )?;
+            let (image, bounds) = if inset {
+                crate::layout::rasterize_inner_shadow(
+                    context,
+                    meshes,
+                    output_bounds,
+                    shadow.blur,
+                    shadow.spread,
+                    shadow.offset,
+                )?
+            } else {
+                crate::layout::rasterize_alpha_mask(
+                    context,
+                    meshes,
+                    output_bounds,
+                    shadow.blur,
+                    shadow.spread,
+                )?
+            };
             let bytes = image
                 .pixels
                 .len()
@@ -578,11 +644,13 @@ fn paint_filtered(
             cached_mask(&cache, key)
         });
         if let Some(mask) = mask {
-            shapes.push(mask_shape(mask, text.pos, shadow.offset, color));
+            shapes.push(mask_shape(
+                mask,
+                text.pos,
+                if inset { Vec2::ZERO } else { shadow.offset },
+                color,
+            ));
         }
-    }
-    if include_text {
-        shapes.push(Shape::Text(text.clone()));
     }
     if shapes.is_empty() {
         Shape::Noop

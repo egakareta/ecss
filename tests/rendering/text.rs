@@ -504,6 +504,11 @@ async fn text_shadow_keyframes_interpolate_computed_lists_with_transparent_paddi
             "12px 4px 4px 8px blue",
             "3px 1px 1px 2px rgb(0 0 255 / 25%)",
         ),
+        (
+            "none",
+            "inset 12px 4px 4px 8px blue",
+            "inset 3px 1px 1px 2px rgb(0 0 255 / 25%)",
+        ),
         ("0 0 0 0 red", "0 0 0 8px blue", "0 0 0 2px rgb(191 0 64)"),
         (
             "0 0 0 .1em red; font-size:20px",
@@ -681,6 +686,11 @@ async fn text_shadow_transitions_interpolate_padded_lists_on_hover() {
             "none",
             "12px 4px 4px 8px blue",
             "3px 1px 1px 2px rgb(0 0 255 / 25%)",
+        ),
+        (
+            "none",
+            "inset 12px 4px 4px 8px blue",
+            "inset 3px 1px 1px 2px rgb(0 0 255 / 25%)",
         ),
     ] {
         for reverse in [false, true] {
@@ -938,6 +948,10 @@ async fn text_shadows_respect_all_clip_boundaries() {
         "16px 0 2px 4px",
         "0 -16px 2px 4px",
         "0 16px 2px 4px",
+        "inset -16px 0 2px 4px",
+        "inset 16px 0 2px 4px",
+        "inset 0 -16px 2px 4px",
+        "inset 0 16px 2px 4px",
     ] {
         let stylesheet = Stylesheet::parse(&format!(
             ".clip {{ width:48px; height:48px; overflow:hidden; }}\
@@ -971,30 +985,35 @@ async fn text_shadows_respect_all_clip_boundaries() {
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn pseudo_text_shadows_are_included_in_element_images() {
-    let stylesheet = Stylesheet::parse(
-        "#source { position:relative; z-index:0; width:60px; height:40px; color:transparent; font-size:32px; text-shadow:0 0 red; }\
-         #source::first-letter { text-shadow:0 0 lime; }\
-         .target { width:60px; height:40px; background:white element(#source) left top / 60px 40px no-repeat; }",
-    )
+    for (shadow, letter) in [
+        ("0 0 red", "0 0 lime"),
+        ("inset 100px 0 red", "inset 100px 0 lime"),
+    ] {
+        let stylesheet = Stylesheet::parse(&format!(
+        "#source {{ position:relative; z-index:0; width:60px; height:40px; color:transparent; font-size:32px; text-shadow:{shadow}; }}\
+         #source::first-letter {{ text-shadow:{letter}; }}\
+         .target {{ width:60px; height:40px; background:white element(#source) left top / 60px 40px no-repeat; }}",
+    ))
     .unwrap();
-    let bounds = std::sync::Arc::new(Mutex::new(None));
-    let capture = bounds.clone();
-    let pixels = render_ui_pixels(stylesheet, move |ui| {
-        let source = ui.add(egui::Label::new("MM").selector("#source")).rect;
-        let target = ui.add(empty_response.selector(".target")).rect;
-        *capture.lock().unwrap() = Some((source, target));
-    })
-    .await;
-    let (source, target) = bounds.lock().unwrap().unwrap();
-    assert!(shadow_color_count(&pixels, source, 0) > 0);
-    assert!(shadow_color_count(&pixels, source, 1) > 0);
-    for y in 0..40 {
-        for x in 0..60 {
-            assert_eq!(
-                pixel(&pixels, source.left() + x as f32, source.top() + y as f32),
-                pixel(&pixels, target.left() + x as f32, target.top() + y as f32),
-                "element image differs at {x},{y}"
-            );
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let source = ui.add(egui::Label::new("MM").selector("#source")).rect;
+            let target = ui.add(empty_response.selector(".target")).rect;
+            *capture.lock().unwrap() = Some((source, target));
+        })
+        .await;
+        let (source, target) = bounds.lock().unwrap().unwrap();
+        assert!(shadow_color_count(&pixels, source, 0) > 0);
+        assert!(shadow_color_count(&pixels, source, 1) > 0);
+        for y in 0..40 {
+            for x in 0..60 {
+                assert_eq!(
+                    pixel(&pixels, source.left() + x as f32, source.top() + y as f32),
+                    pixel(&pixels, target.left() + x as f32, target.top() + y as f32),
+                    "element image differs at {x},{y}"
+                );
+            }
         }
     }
 }
@@ -1079,62 +1098,64 @@ async fn text_shadow_changes_update_element_images_in_the_same_frame() {
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn named_flow_pseudo_shadows_follow_the_logical_first_line() {
-    for height in [24, 50] {
-        let stylesheet = Stylesheet::parse(&format!(
+    for shadow in ["0 0", "inset 100px 0"] {
+        for height in [24, 50] {
+            let stylesheet = Stylesheet::parse(&format!(
         ".row {{ display:flex; width:150px; }}\
          .region {{ display:block; width:70px; height:{height}px; flow-from:article; }}\
-         .source {{ flow-into:article content; font-size:20px; color:transparent; text-shadow:0 0 red; }}\
-         .source::first-line {{ text-shadow:0 0 lime; }}"
+          .source {{ flow-into:article content; font-size:20px; color:transparent; text-shadow:{shadow} red; }}\
+          .source::first-line {{ text-shadow:{shadow} lime; }}"
     ))
     .unwrap();
-        let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
-        let capture = bounds.clone();
-        let pixels = render_ui_pixels(stylesheet, move |ui| {
-            ui.add(
-                (|ui: &mut egui::Ui| {
-                    ui.add(
-                        egui::Label::new("one two three four five six seven eight nine ten")
-                            .selector(".source"),
-                    );
-                    ui.add(
-                        (|ui: &mut egui::Ui| {
-                            *capture.lock().unwrap() = [".region", ".region"]
-                                .map(|selector| ui.add(empty_response.selector(selector)).rect)
-                                .to_vec();
-                            ui.response()
-                        })
-                        .selector(".row"),
-                    );
-                    ui.response()
-                })
-                .selector(".container"),
+            let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+            let capture = bounds.clone();
+            let pixels = render_ui_pixels(stylesheet, move |ui| {
+                ui.add(
+                    (|ui: &mut egui::Ui| {
+                        ui.add(
+                            egui::Label::new("one two three four five six seven eight nine ten")
+                                .selector(".source"),
+                        );
+                        ui.add(
+                            (|ui: &mut egui::Ui| {
+                                *capture.lock().unwrap() = [".region", ".region"]
+                                    .map(|selector| ui.add(empty_response.selector(selector)).rect)
+                                    .to_vec();
+                                ui.response()
+                            })
+                            .selector(".row"),
+                        );
+                        ui.response()
+                    })
+                    .selector(".container"),
+                );
+            })
+            .await;
+            let bounds = bounds.lock().unwrap();
+            near(bounds[0].top(), bounds[1].top());
+            assert!(bounds[1].left() >= bounds[0].right());
+            let first = egui::Rect::from_min_max(
+                bounds[0].min,
+                egui::pos2(bounds[0].right(), bounds[0].top() + 24.0),
             );
-        })
-        .await;
-        let bounds = bounds.lock().unwrap();
-        near(bounds[0].top(), bounds[1].top());
-        assert!(bounds[1].left() >= bounds[0].right());
-        let first = egui::Rect::from_min_max(
-            bounds[0].min,
-            egui::pos2(bounds[0].right(), bounds[0].top() + 24.0),
-        );
-        let following = egui::Rect::from_min_max(
-            egui::pos2(bounds[0].left(), bounds[0].top() + 28.0),
-            bounds[0].max,
-        );
-        assert!(shadow_color_count(&pixels, first, 1) > 0);
-        assert_eq!(shadow_color_count(&pixels, first, 0), 0);
-        if height == 50 {
-            assert!(shadow_color_count(&pixels, following, 0) > 0);
+            let following = egui::Rect::from_min_max(
+                egui::pos2(bounds[0].left(), bounds[0].top() + 28.0),
+                bounds[0].max,
+            );
+            assert!(shadow_color_count(&pixels, first, 1) > 0);
+            assert_eq!(shadow_color_count(&pixels, first, 0), 0);
+            if height == 50 {
+                assert!(shadow_color_count(&pixels, following, 0) > 0);
+            }
+            assert!(
+                shadow_color_count(&pixels, bounds[1], 0) > 0,
+                "second region {:?} has {} red and {} green shadow pixels",
+                bounds[1],
+                shadow_color_count(&pixels, bounds[1], 0),
+                shadow_color_count(&pixels, bounds[1], 1),
+            );
+            assert_eq!(shadow_color_count(&pixels, bounds[1], 1), 0);
         }
-        assert!(
-            shadow_color_count(&pixels, bounds[1], 0) > 0,
-            "second region {:?} has {} red and {} green shadow pixels",
-            bounds[1],
-            shadow_color_count(&pixels, bounds[1], 0),
-            shadow_color_count(&pixels, bounds[1], 1),
-        );
-        assert_eq!(shadow_color_count(&pixels, bounds[1], 1), 0);
     }
 }
 
@@ -1145,6 +1166,9 @@ fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
         "text-shadow:none",
         "text-shadow:-1em 2px 3px currentColor, rgb(0 0 255) calc(1px + 1px) -2px 0",
         "text-shadow:1px 2px 3px 4px",
+        "text-shadow:inset 1px 2px 3px 4px blue, red 0 0",
+        "text-shadow:1px 2px 3px 4px blue inset",
+        "text-shadow:blue 1px 2px inset",
         "text-shadow:inherit",
         "text-shadow:initial",
         "text-shadow:unset",
@@ -1161,11 +1185,302 @@ fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
         "text-shadow:red blue 1px 2px",
         "text-shadow:1px red 2px",
         "text-shadow:1px 2px red 3px",
+        "text-shadow:inset inset 1px 2px",
+        "text-shadow:1px inset 2px",
         "text-shadow:none, 1px 2px",
         "text-shadow:10% 0",
     ] {
         assert!(Stylesheet::parse(&format!(".text {{ {declaration}; }}")).is_err());
         assert!(InlineStyle::parse(declaration).is_err());
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inset_text_shadows_paint_over_text_and_stay_inside_its_ink() {
+    async fn render(shadow: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ color:red; font-size:40px; width:max-content; text-shadow:{shadow}; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(egui::Label::new("M").selector(".text")).rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        (pixels, rect)
+    }
+    let (original, bounds) = render("none").await;
+    assert!(
+        original
+            .iter()
+            .filter(|pixel| **pixel == [255, 0, 0, 255])
+            .count()
+            > 20
+    );
+    for shadow in ["inset 0 0 blue", "inset 10px 0 transparent"] {
+        let (actual, rect) = render(shadow).await;
+        assert_eq!(rect, bounds);
+        assert_eq!(
+            actual, original,
+            "an empty inset shadow changed text: {shadow}"
+        );
+    }
+    for shadow in [
+        "inset 100px 0 blue",
+        "inset -100px 0 blue",
+        "inset 0 100px blue",
+        "inset 0 -100px blue",
+        "inset 0 0 0 100px blue",
+        "inset 100px 0 blue, inset 100px 0 lime",
+        "0 0 lime, inset 100px 0 blue",
+        "inset 100px 0 blue, 0 0 lime",
+    ] {
+        let (actual, rect) = render(shadow).await;
+        assert_eq!(rect, bounds);
+        for (index, source) in original.iter().enumerate() {
+            if *source == [255, 0, 0, 255] {
+                assert_eq!(
+                    actual[index],
+                    [0, 0, 255, 255],
+                    "inset shadow was not over the text: {shadow}, pixel {index}"
+                );
+            } else if *source == [255, 255, 255, 255] {
+                assert_eq!(
+                    actual[index], *source,
+                    "inset shadow escaped the glyph: {shadow}, pixel {index}"
+                );
+            }
+        }
+    }
+    let (blurred, _) = render("inset 0 0 4px blue").await;
+    assert!(
+        blurred
+            .iter()
+            .zip(&original)
+            .any(|(pixel, source)| *source != [255, 255, 255, 255]
+                && pixel[2] > source[2].saturating_add(16)),
+        "inset blur did not reach the glyph interior"
+    );
+    for (index, source) in original.iter().enumerate() {
+        if *source == [255, 255, 255, 255] {
+            assert_eq!(
+                blurred[index], *source,
+                "inset blur escaped the glyph at {index}"
+            );
+        }
+    }
+    let (right, _) = render("inset 2px 0 blue").await;
+    let (left, _) = render("inset -2px 0 blue").await;
+    let mut compared = 0;
+    let mut opposite = 0;
+    for y in 0..HEIGHT as usize {
+        for x in 2..WIDTH as usize - 2 {
+            let index = y * WIDTH as usize + x;
+            if original[index] == [255, 0, 0, 255]
+                && original[index - 2] == [255, 255, 255, 255]
+                && original[index + 2] == [255, 0, 0, 255]
+            {
+                assert_eq!(
+                    right[index],
+                    [0, 0, 255, 255],
+                    "positive inset offset lost the leading shadow at {x},{y}"
+                );
+                assert_eq!(
+                    left[index], original[index],
+                    "negative inset offset shadowed the wrong edge at {x},{y}"
+                );
+                compared += 1;
+            }
+            if original[index] == [255, 0, 0, 255]
+                && original[index + 2] == [255, 255, 255, 255]
+                && original[index - 2] == [255, 0, 0, 255]
+            {
+                assert_eq!(
+                    left[index],
+                    [0, 0, 255, 255],
+                    "negative inset offset lost the trailing shadow at {x},{y}"
+                );
+                assert_eq!(
+                    right[index], original[index],
+                    "positive inset offset shadowed the wrong edge at {x},{y}"
+                );
+                opposite += 1;
+            }
+        }
+    }
+    assert!(compared > 3, "no solid leading-edge samples were exercised");
+    assert!(
+        opposite > 3,
+        "no solid trailing-edge samples were exercised"
+    );
+    let (alpha, _) = render("inset 100px 0 rgb(0 0 255 / 25%)").await;
+    for (index, source) in original.iter().enumerate() {
+        if *source == [255, 0, 0, 255] {
+            assert_eq!(
+                alpha[index],
+                [191, 0, 64, 255],
+                "inner shadow lost its alpha at {index}"
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inset_text_shadows_keep_decoration_geometry_and_opacity_separate() {
+    async fn render(decoration: &str, shadow: &str) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(&format!(".text {{ color:transparent; font-size:40px; width:max-content; text-decoration:{decoration}; text-shadow:{shadow}; }}")).unwrap();
+        render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("M").selector(".text"));
+        })
+        .await
+    }
+    let glyphs = render("none", "inset 100px 0 blue").await;
+    let opaque = render("underline solid red 3px", "inset 100px 0 blue").await;
+    let original = render("underline solid rgb(255 0 0 / 25%) 3px", "none").await;
+    let filled = render(
+        "underline solid rgb(255 0 0 / 25%) 3px",
+        "inset 100px 0 blue",
+    )
+    .await;
+    let edge = render("underline solid rgb(255 0 0 / 25%) 3px", "inset 1px 0 blue").await;
+    let mut filled_samples = 0;
+    let mut unshadowed_samples = 0;
+    for index in 0..original.len() {
+        if glyphs[index] == [255, 255, 255, 255]
+            && opaque[index] == [0, 0, 255, 255]
+            && original[index] == [255, 191, 191, 255]
+        {
+            assert_eq!(
+                filled[index],
+                [191, 143, 207, 255],
+                "inset shadow inflated translucent decoration opacity at {index}"
+            );
+            filled_samples += 1;
+            if index % WIDTH as usize > 0
+                && original[index - 1] == original[index]
+                && glyphs[index - 1] == glyphs[index]
+            {
+                assert_eq!(
+                    edge[index], original[index],
+                    "decoration opacity was treated as a geometric hole at {index}"
+                );
+                unshadowed_samples += 1;
+            }
+        }
+    }
+    assert!(filled_samples > 20);
+    assert!(unshadowed_samples > 10);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn inset_pseudo_shadow_colors_resolve_independently_of_their_lists() {
+    for (rules, reference) in [
+        (
+            ".text::first-letter { color:red; }",
+            ".text::first-letter { text-shadow:inset 100px 0 red; }",
+        ),
+        (
+            ".text::first-line { color:red; } .text::first-letter { color:lime; }",
+            ".text::first-line { text-shadow:inset 100px 0 red; } .text::first-letter { text-shadow:inset 100px 0 lime; }",
+        ),
+        (
+            ".text::first-line { color:red; text-shadow:inset 0 0 3px currentColor; } .text::first-letter { color:lime; }",
+            ".text::first-line { text-shadow:inset 0 0 3px red; } .text::first-letter { text-shadow:inset 0 0 3px lime; }",
+        ),
+    ] {
+        let base = format!(
+            ".text {{ color:blue; font-size:28px; width:65px; text-shadow:inset 100px 0 currentColor; }} {rules}"
+        );
+        let stylesheet = Stylesheet::parse(&base).unwrap();
+        let actual = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM MM").selector(".text"));
+        })
+        .await;
+        let stylesheet = Stylesheet::parse(&format!(
+            "{base} .text {{ text-shadow:inset 100px 0 blue; }} {reference}"
+        ))
+        .unwrap();
+        let expected = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM MM").selector(".text"));
+        })
+        .await;
+        assert!(expected.iter().any(|pixel| pixel[0] != pixel[2]));
+        assert_eq!(
+            actual, expected,
+            "inset pseudo shadow lost color/list inheritance: {rules}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn incompatible_inset_lists_animate_discretely_and_do_not_start_transitions() {
+    let from = "0 0 red, inset 100px 0 blue";
+    let to = "0 0 lime, 12px 0 blue";
+    let base = ".text { color:transparent; font-size:28px; width:max-content; }";
+    for (time, expected) in [(0.25, from), (0.75, to)] {
+        let stylesheet = Stylesheet::parse(&format!("{base} @keyframes shadows {{ from {{ text-shadow:{from}; }} to {{ text-shadow:{to}; }} }} .text {{ animation:shadows 1s linear both; }}")).unwrap();
+        let actual = render_ui_pixels_at_time(stylesheet, time, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        let stylesheet =
+            Stylesheet::parse(&format!("{base} .text {{ text-shadow:{expected}; }}")).unwrap();
+        let reference = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        assert!(reference.iter().any(|pixel| pixel[0] != pixel[2]));
+        assert_eq!(
+            actual, reference,
+            "incompatible shadow lists were partly interpolated at {time}"
+        );
+    }
+    for reverse in [false, true] {
+        let stylesheet = Stylesheet::parse(&format!("{base} .text {{ text-shadow:{from}; transition:text-shadow 10s linear; }} .text:hover {{ text-shadow:{to}; }}")).unwrap();
+        let hover = egui::Event::PointerMoved(egui::pos2(10.0, 10.0));
+        let leave = egui::Event::PointerMoved(egui::pos2(200.0, 100.0));
+        let mut frames = vec![Vec::new(), vec![hover.clone()], vec![hover]];
+        if reverse {
+            frames.extend([vec![leave.clone()], vec![leave]]);
+        }
+        let hovered = std::sync::Arc::new(Mutex::new(false));
+        let capture = hovered.clone();
+        let actual = render_ui_pixels_with_events(stylesheet, frames, move |ui| {
+            let response = ui.add(
+                (|ui: &mut egui::Ui| {
+                    let text = ui.label("MM");
+                    ui.interact(
+                        text.rect,
+                        egui::Id::unique("incompatible-shadow-transition"),
+                        egui::Sense::hover(),
+                    )
+                })
+                .selector(".text"),
+            );
+            *capture.lock().unwrap() = response.hovered();
+        })
+        .await;
+        assert_eq!(*hovered.lock().unwrap(), !reverse);
+        let stylesheet = Stylesheet::parse(&format!(
+            "{base} .text {{ text-shadow:{}; }}",
+            if reverse { from } else { to }
+        ))
+        .unwrap();
+        let reference = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        assert!(reference.iter().any(|pixel| pixel[0] != pixel[2]));
+        assert_eq!(
+            actual, reference,
+            "a transition ran despite inset/outset incompatibility, reverse={reverse}"
+        );
     }
 }
 
