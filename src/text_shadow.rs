@@ -21,6 +21,7 @@ const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) struct Shadow {
     pub(crate) offset: Vec2,
     pub(crate) blur: f32,
+    pub(crate) spread: f32,
     color: Option<ShadowColor>,
 }
 
@@ -97,6 +98,7 @@ pub(crate) fn interpolate(
     let transparent = Shadow {
         offset: Vec2::ZERO,
         blur: 0.0,
+        spread: 0.0,
         color: Some(Color32::TRANSPARENT.into()),
     };
     let lerp = |from: f32, to: f32| {
@@ -132,6 +134,7 @@ pub(crate) fn interpolate(
                     lerp(from.offset.y, to.offset.y),
                 ),
                 blur: lerp(from.blur, to.blur).max(0.0),
+                spread: lerp(from.spread, to.spread).max(0.0),
                 color,
             }
         })
@@ -177,6 +180,7 @@ pub(crate) fn apply_animations(
 struct MaskKey {
     glyphs: u64,
     blur: u32,
+    spread: u32,
     bounds: [u32; 4],
 }
 
@@ -232,6 +236,7 @@ fn parse_shadow(value: &str, units: Units<'_>) -> Result<Shadow, &'static str> {
     let mut color = None;
     let mut color_seen = false;
     let mut lengths = Vec::new();
+    let mut lengths_ended = false;
     for value in values {
         if let Some(parsed) = color_value(&value) {
             if color_seen {
@@ -239,19 +244,21 @@ fn parse_shadow(value: &str, units: Units<'_>) -> Result<Shadow, &'static str> {
             }
             color_seen = true;
             color = parsed;
+            lengths_ended = !lengths.is_empty();
         } else {
-            if lengths.len() == 3 {
+            if lengths.len() == 4 || lengths_ended {
                 return Err("invalid text shadow");
             }
             lengths.push(shadow_length(&value, units, lengths.len() < 2)?);
         }
     }
-    if !(2..=3).contains(&lengths.len()) {
+    if !(2..=4).contains(&lengths.len()) {
         return Err("text shadow requires two offsets");
     }
     Ok(Shadow {
         offset: vec2(lengths[0], lengths[1]),
         blur: lengths.get(2).copied().unwrap_or(0.0),
+        spread: lengths.get(3).copied().unwrap_or(0.0),
         color,
     })
 }
@@ -513,8 +520,8 @@ fn paint_filtered(
         if color.a() == 0 {
             continue;
         }
-        let padding = if shadow.blur.is_finite() {
-            (shadow.blur * 1.5).min(1_000_000.0)
+        let padding = if shadow.blur.is_finite() && shadow.spread.is_finite() {
+            (shadow.blur * 1.5 + shadow.spread).min(1_000_000.0)
         } else {
             1_000_000.0
         };
@@ -527,6 +534,7 @@ fn paint_filtered(
         let key = MaskKey {
             glyphs,
             blur: shadow.blur.to_bits(),
+            spread: shadow.spread.to_bits(),
             bounds: [
                 output_bounds.min.x.to_bits(),
                 output_bounds.min.y.to_bits(),
@@ -539,8 +547,13 @@ fn paint_filtered(
                 source_meshes = Some(glyph_meshes(context, text, selection, excluded, vertical));
             }
             let meshes = source_meshes.as_ref()?;
-            let (image, bounds) =
-                crate::layout::rasterize_alpha_mask(context, meshes, output_bounds, shadow.blur)?;
+            let (image, bounds) = crate::layout::rasterize_alpha_mask(
+                context,
+                meshes,
+                output_bounds,
+                shadow.blur,
+                shadow.spread,
+            )?;
             let bytes = image
                 .pixels
                 .len()
@@ -596,7 +609,7 @@ fn glyph_meshes(
     glyph_text.pos = Pos2::ZERO;
     glyph_text.underline = Stroke::NONE;
     glyph_text.fallback_color = Color32::WHITE;
-    glyph_text.override_text_color = Some(Color32::WHITE);
+    glyph_text.override_text_color = None;
     let galley = Arc::make_mut(&mut glyph_text.galley);
     galley.num_vertices = 0;
     galley.num_indices = 0;

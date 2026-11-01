@@ -499,6 +499,17 @@ async fn text_shadow_keyframes_interpolate_computed_lists_with_transparent_paddi
             "12px 0 currentColor; color:blue",
             "3px 0 rgb(191 0 64); color:rgb(191 0 64)",
         ),
+        (
+            "none",
+            "12px 4px 4px 8px blue",
+            "3px 1px 1px 2px rgb(0 0 255 / 25%)",
+        ),
+        ("0 0 0 0 red", "0 0 0 8px blue", "0 0 0 2px rgb(191 0 64)"),
+        (
+            "0 0 0 .1em red; font-size:20px",
+            "0 0 0 .2em red; font-size:40px",
+            "0 0 0 3.125px red; font-size:25px",
+        ),
     ] {
         let base = ".text { color:transparent; font-size:28px; width:max-content; }";
         let from_rule = if from.is_empty() {
@@ -665,6 +676,11 @@ async fn text_shadow_transitions_interpolate_padded_lists_on_hover() {
             "0 0 red, 40px 0 blue",
             "8px 0 red",
             "2px 0 red, 30px 0 rgb(0 0 255 / 75%)",
+        ),
+        (
+            "none",
+            "12px 4px 4px 8px blue",
+            "3px 1px 1px 2px rgb(0 0 255 / 25%)",
         ),
     ] {
         for reverse in [false, true] {
@@ -913,7 +929,16 @@ async fn ancestor_pseudo_shadows_respect_explicit_descendant_values() {
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn text_shadows_respect_all_clip_boundaries() {
-    for offset in ["-16px 0", "16px 0", "0 -16px", "0 16px"] {
+    for offset in [
+        "-16px 0",
+        "16px 0",
+        "0 -16px",
+        "0 16px",
+        "-16px 0 2px 4px",
+        "16px 0 2px 4px",
+        "0 -16px 2px 4px",
+        "0 16px 2px 4px",
+    ] {
         let stylesheet = Stylesheet::parse(&format!(
             ".clip {{ width:48px; height:48px; overflow:hidden; }}\
              .text {{ color:transparent; font-size:64px; white-space:nowrap; text-shadow:{offset} red; }}"
@@ -1119,6 +1144,7 @@ fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
     for declaration in [
         "text-shadow:none",
         "text-shadow:-1em 2px 3px currentColor, rgb(0 0 255) calc(1px + 1px) -2px 0",
+        "text-shadow:1px 2px 3px 4px",
         "text-shadow:inherit",
         "text-shadow:initial",
         "text-shadow:unset",
@@ -1130,14 +1156,149 @@ fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {
     for declaration in [
         "text-shadow:1px",
         "text-shadow:1px 2px -1px",
-        "text-shadow:1px 2px 3px 4px",
+        "text-shadow:1px 2px 3px -4px",
+        "text-shadow:1px 2px 3px 4px 5px",
         "text-shadow:red blue 1px 2px",
+        "text-shadow:1px red 2px",
+        "text-shadow:1px 2px red 3px",
         "text-shadow:none, 1px 2px",
         "text-shadow:10% 0",
     ] {
         assert!(Stylesheet::parse(&format!(".text {{ {declaration}; }}")).is_err());
         assert!(InlineStyle::parse(declaration).is_err());
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_spread_outsets_glyphs_and_decorations_without_relayout() {
+    async fn render(spread: u32, decoration: &str, color: &str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".text {{ color:transparent; font-size:40px; width:max-content; text-shadow:0 70px 0 {spread}px {color}; text-decoration:{decoration}; }}"
+        )).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add_space(8.0);
+            *capture.lock().unwrap() = Some(ui.add(egui::Label::new("M").selector(".text")).rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        (pixels, rect)
+    }
+    for decoration in [false, true] {
+        let decoration = if decoration {
+            "underline solid red 3px"
+        } else {
+            "none"
+        };
+        let (base, bounds) = render(0, decoration, "blue").await;
+        let (expanded, expanded_bounds) = render(3, decoration, "blue").await;
+        assert_eq!(bounds, expanded_bounds);
+        let ink = |pixels: &[[u8; 4]]| {
+            pixels
+                .iter()
+                .enumerate()
+                .filter_map(|(index, pixel)| {
+                    let point = egui::pos2(
+                        (index % WIDTH as usize) as f32 + 0.5,
+                        (index / WIDTH as usize) as f32 + 0.5,
+                    );
+                    (point.y >= 65.0
+                        && pixel[2] > pixel[0].saturating_add(16)
+                        && pixel[2] > pixel[1].saturating_add(16))
+                    .then_some(point)
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = ink(&base);
+        let outset = ink(&expanded);
+        assert!(original.len() > 20);
+        assert!(outset.len() > original.len() * 3 / 2);
+        for point in &original {
+            assert!(outset.contains(point), "spread removed original shadow ink");
+        }
+        for point in &outset {
+            assert!(
+                original.iter().any(|source| source.distance(*point) <= 3.7),
+                "spread exceeded its rounded outset: {point:?}"
+            );
+        }
+        let expanded_extents = outset.iter().fold(egui::Rect::NOTHING, |rect, point| {
+            rect.union(egui::Rect::from_min_max(*point, *point))
+        });
+        let original_extents = original.iter().fold(egui::Rect::NOTHING, |rect, point| {
+            rect.union(egui::Rect::from_min_max(*point, *point))
+        });
+        assert!(expanded_extents.top() <= original_extents.top() - 2.0);
+        assert!(expanded_extents.right() >= original_extents.right() + 2.0);
+    }
+    for spread in [0, 3] {
+        let (glyphs, _) = render(spread, "none", "blue").await;
+        let (opaque, _) = render(spread, "underline solid red 3px", "blue").await;
+        let (actual, _) = render(spread, "underline solid rgb(255 0 0 / 25%) 3px", "blue").await;
+        let (reference, _) = render(spread, "underline solid red 3px", "rgb(0 0 255 / 25%)").await;
+        let mut compared = 0;
+        for index in 65 * WIDTH as usize..actual.len() {
+            if glyphs[index] == [255, 255, 255, 255] && opaque[index] == [0, 0, 255, 255] {
+                assert_eq!(
+                    actual[index], reference[index],
+                    "spread increased decoration opacity at pixel {index}"
+                );
+                compared += 1;
+            }
+        }
+        assert!(
+            compared > 20,
+            "no isolated full-coverage decoration shadow was exercised"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn clipped_text_spread_includes_sources_outside_the_texture_halo() {
+    async fn render(max_texture_side: usize) -> Vec<[u8; 4]> {
+        let stylesheet = Stylesheet::parse(
+            ".clip { width:16px; height:48px; overflow:hidden; } .text { width:16px; height:40px; color:transparent; font-size:40px; text-shadow:0 0 0 96px blue; }"
+        ).unwrap();
+        render_ui_pixels(stylesheet, move |ui| {
+            ui.ctx()
+                .input_mut(|input| input.max_texture_side = max_texture_side);
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(
+                        (|ui: &mut egui::Ui| {
+                            ui.painter().text(
+                                ui.min_rect().min + egui::vec2(92.0, 0.0),
+                                egui::Align2::LEFT_TOP,
+                                "M",
+                                egui::FontId::proportional(40.0),
+                                egui::Color32::TRANSPARENT,
+                            );
+                            ui.allocate_response(egui::vec2(16.0, 40.0), egui::Sense::hover())
+                        })
+                        .selector(".text"),
+                    );
+                    ui.response()
+                })
+                .selector(".clip"),
+            );
+        })
+        .await
+    }
+    let reference = render(4096).await;
+    assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 2) > 20);
+    let limited = render(128).await;
+    assert_eq!(
+        limited
+            .iter()
+            .zip(&reference)
+            .filter(|(actual, expected)| actual != expected)
+            .count(),
+        0,
+        "valid spread lost its source when the texture-side cap limited the target halo"
+    );
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]

@@ -148,8 +148,14 @@ pub(crate) fn rasterize_alpha_mask(
     meshes: &[egui::epaint::Mesh],
     bounds: Rect,
     blur: f32,
+    spread: f32,
 ) -> Option<(egui::ColorImage, Rect)> {
-    if !bounds.is_positive() || !blur.is_finite() || blur < 0.0 {
+    if !bounds.is_positive()
+        || !blur.is_finite()
+        || blur < 0.0
+        || !spread.is_finite()
+        || spread < 0.0
+    {
         return None;
     }
     let pixels_per_point = context.pixels_per_point();
@@ -193,6 +199,7 @@ pub(crate) fn rasterize_alpha_mask(
     }
 
     let sigma = (blur * 0.5 * pixels_per_point).min(max_texture_side as f32);
+    let spread = (spread * pixels_per_point).min(max_texture_side as f32);
     let requested_padding = (sigma * 3.0).ceil() as usize;
     let max_padding =
         (max_texture_side - target_size[0]).min(max_texture_side - target_size[1]) / 2;
@@ -233,25 +240,65 @@ pub(crate) fn rasterize_alpha_mask(
         egui::TextureId::default(),
         font_image.clone(),
     );
-    let mut source = vec![Color32::TRANSPARENT; source_size[0] * source_size[1]];
+    let raster_clip = if spread > 0.0 {
+        meshes
+            .iter()
+            .fold(Rect::NOTHING, |bounds, mesh| {
+                bounds.union(mesh.calc_bounds())
+            })
+            .intersect(source_clip.expand((spread + 1.0) / pixels_per_point))
+    } else {
+        source_clip
+    };
+    if !raster_clip.is_positive() {
+        return None;
+    }
+    let raster_origin = if spread <= 0.0 {
+        source_origin
+    } else {
+        [
+            pixel_edge(raster_clip.min.x, false),
+            pixel_edge(raster_clip.min.y, false),
+        ]
+    };
+    let raster_size = if spread <= 0.0 {
+        source_size
+    } else {
+        [
+            pixel_edge(raster_clip.max.x, true).checked_sub(raster_origin[0])? as usize,
+            pixel_edge(raster_clip.max.y, true).checked_sub(raster_origin[1])? as usize,
+        ]
+    };
+    if raster_size.contains(&0)
+        || raster_size.iter().any(|side| *side > max_texture_side)
+        || raster_size[0].checked_mul(raster_size[1])? > max_pixels
+    {
+        return None;
+    }
+    let mut source = vec![Color32::TRANSPARENT; raster_size[0] * raster_size[1]];
     for mesh in meshes {
         rasterize_mesh(
             mesh,
             &font_image,
-            source_clip,
+            raster_clip,
             pixels_per_point,
-            source_origin,
-            source_size,
+            raster_origin,
+            raster_size,
             &mut source,
         );
     }
-    let effective_sigma = sigma.min(padding as f32 / 3.0);
-    let alpha = blur_alpha(
+    let alpha = spread_alpha(
         source.iter().map(|pixel| f32::from(pixel.a())).collect(),
+        raster_size,
+        spread,
+        vec2(
+            (f64::from(source_origin[0]) - f64::from(raster_origin[0])) as f32,
+            (f64::from(source_origin[1]) - f64::from(raster_origin[1])) as f32,
+        ),
         source_size,
-        effective_sigma,
-        padding,
     );
+    let effective_sigma = sigma.min(padding as f32 / 3.0);
+    let alpha = blur_alpha(alpha, source_size, effective_sigma, padding);
     let mut pixels = Vec::with_capacity(target_size[0] * target_size[1]);
     for y in 0..target_size[1] {
         for x in 0..target_size[0] {
@@ -273,6 +320,84 @@ pub(crate) fn rasterize_alpha_mask(
         ),
     );
     Some((image, output_bounds))
+}
+
+fn spread_alpha(
+    alpha: Vec<f32>,
+    size: [usize; 2],
+    radius: f32,
+    offset: Vec2,
+    output_size: [usize; 2],
+) -> Vec<f32> {
+    if radius <= 0.0 {
+        return alpha;
+    }
+    let mut levels = vec![(size, alpha)];
+    while levels.last().is_some_and(|(size, _)| *size != [1, 1]) {
+        let (size, values) = levels.last().expect("alpha pyramid base");
+        let next_size = size.map(|side| side.div_ceil(2));
+        let mut next = vec![0.0_f32; next_size[0] * next_size[1]];
+        for y in 0..size[1] {
+            for x in 0..size[0] {
+                let target = &mut next[(y / 2) * next_size[0] + x / 2];
+                *target = target.max(values[y * size[0] + x]);
+            }
+        }
+        levels.push((next_size, next));
+    }
+    let mut output = vec![0.0; output_size[0] * output_size[1]];
+    for y in 0..output_size[1] {
+        for x in 0..output_size[0] {
+            let mut value = 0.0;
+            sample_spread(
+                &levels,
+                levels.len() - 1,
+                [0, 0],
+                vec2(x as f32, y as f32) + offset,
+                radius,
+                &mut value,
+            );
+            output[y * output_size[0] + x] = value;
+        }
+    }
+    output
+}
+
+fn sample_spread(
+    levels: &[([usize; 2], Vec<f32>)],
+    level: usize,
+    cell: [usize; 2],
+    point: Vec2,
+    radius: f32,
+    best: &mut f32,
+) {
+    let (size, values) = &levels[level];
+    let peak = values[cell[1] * size[0] + cell[0]];
+    if peak <= *best {
+        return;
+    }
+    let scale = 1 << level;
+    let min = vec2((cell[0] * scale) as f32, (cell[1] * scale) as f32);
+    let max = vec2(
+        (((cell[0] + 1) * scale).min(levels[0].0[0]) - 1) as f32,
+        (((cell[1] + 1) * scale).min(levels[0].0[1]) - 1) as f32,
+    );
+    let nearest = (min - point).max(point - max).max(Vec2::ZERO).length();
+    let coverage = (radius + 1.0 - nearest).clamp(0.0, 1.0);
+    if peak * coverage <= *best {
+        return;
+    }
+    // A maximum pyramid bounds circular range queries without changing local opacity.
+    if level == 0 || (min - point).abs().max((max - point).abs()).length_sq() <= radius * radius {
+        *best = (*best).max(peak * coverage);
+        return;
+    }
+    let next_size = levels[level - 1].0;
+    for y in cell[1] * 2..(cell[1] * 2 + 2).min(next_size[1]) {
+        for x in cell[0] * 2..(cell[0] * 2 + 2).min(next_size[0]) {
+            sample_spread(levels, level - 1, [x, y], point, radius, best);
+        }
+    }
 }
 
 fn blur_alpha(mut alpha: Vec<f32>, size: [usize; 2], sigma: f32, padding: usize) -> Vec<f32> {
