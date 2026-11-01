@@ -14,10 +14,16 @@ pub(super) enum Value {
     Radius(ComputedLength, ComputedLength),
     Position(crate::object::Position),
     PositionAxis(Vec<ComputedLength>),
+    TextShadows(Vec<crate::text_shadow::Shadow>),
 }
 
 impl Value {
-    pub(super) fn interpolate(&self, to: &Self, progress: f32) -> Option<Self> {
+    pub(super) fn interpolate(
+        &self,
+        to: &Self,
+        progress: f32,
+        current_color: Color32,
+    ) -> Option<Self> {
         Some(match (self, to) {
             (Self::Color(from), Self::Color(to)) => {
                 let channel = |a: u8, b: u8| {
@@ -34,6 +40,9 @@ impl Value {
                 ))
             }
             (Self::Number(from), Self::Number(to)) => Self::Number(from + (to - from) * progress),
+            (Self::TextShadows(from), Self::TextShadows(to)) => Self::TextShadows(
+                crate::text_shadow::interpolate(from, to, progress, current_color),
+            ),
             (Self::Length(from), Self::Length(to)) => Self::Length(from.interpolate(to, progress)),
             (Self::Radius(x, y), Self::Radius(to_x, to_y)) => {
                 Self::Radius(x.interpolate(to_x, progress), y.interpolate(to_y, progress))
@@ -171,6 +180,7 @@ pub(super) enum PropertyId {
     ObjectPosition,
     BackgroundPositionX,
     BackgroundPositionY,
+    TextShadows,
 }
 
 impl PropertyId {
@@ -200,11 +210,13 @@ impl PropertyId {
         }))
         .chain(Length::ALL.iter().copied().map(Self::Length))
         .chain(Number::ALL.iter().copied().map(Self::Number))
+        .chain(std::iter::once(Self::TextShadows))
     }
 
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Color => "color",
+            Self::TextShadows => "text-shadow",
             Self::Background => "background-color",
             Self::BorderColor(side) => [
                 "border-top-color",
@@ -358,6 +370,7 @@ impl PropertyId {
         !matches!(
             self,
             Self::Color
+                | Self::TextShadows
                 | Self::Background
                 | Self::BorderColor(_)
                 | Self::OutlineColor
@@ -408,6 +421,7 @@ impl PropertyId {
     ) -> Option<Value> {
         Some(match self {
             Self::Color => Value::Color(style.current_color),
+            Self::TextShadows => Value::TextShadows(style.text_shadows.clone()),
             Self::ObjectPosition => Value::Position(style.object_position.clone()),
             Self::BackgroundPositionX | Self::BackgroundPositionY => {
                 let (kind, values) = if self == Self::BackgroundPositionX {
@@ -471,6 +485,7 @@ impl PropertyId {
     pub(super) fn set(self, style: &mut BoxStyle, value: &Value, arena: &Arena) {
         match (self, value) {
             (Self::Color, Value::Color(value)) => style.current_color = *value,
+            (Self::TextShadows, Value::TextShadows(value)) => style.text_shadows.clone_from(value),
             (Self::Background, Value::Color(value)) => style.background_color = *value,
             (Self::BorderColor(side), Value::Color(value)) => {
                 style.border_colors[side] = Some(*value)

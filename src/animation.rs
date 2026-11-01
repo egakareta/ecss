@@ -1021,6 +1021,8 @@ pub(crate) fn sample(
                 matches!(
                     declaration,
                     Declaration::Layout(_)
+                        | Declaration::TextShadowInterpolation(_)
+                        | Declaration::TextShadowUnderlying
                         | Declaration::Color(_)
                         | Declaration::BorderRadius(_)
                         | Declaration::BackgroundPositionComputedX(_)
@@ -1270,12 +1272,16 @@ fn sample_keyframes(
     let mut result = Vec::new();
     for (name, mut anchors) in properties {
         anchors.sort_by(|first, second| first.0.total_cmp(&second.0));
-        let base = underlying
-            .iter()
-            .flat_map(|declaration| normalized_declarations(declaration, axes))
-            .filter(|(property, _)| *property == name)
-            .map(|(_, declaration)| declaration)
-            .next_back();
+        let base = if name == "text-shadow" {
+            Some(Declaration::TextShadowUnderlying)
+        } else {
+            underlying
+                .iter()
+                .flat_map(|declaration| normalized_declarations(declaration, axes))
+                .filter(|(property, _)| *property == name)
+                .map(|(_, declaration)| declaration)
+                .next_back()
+        };
         if let Some(base) = base {
             if anchors.first().is_some_and(|(offset, _)| *offset > 0.0) {
                 anchors.insert(0, (0.0, base.clone()));
@@ -1393,6 +1399,9 @@ fn normalized_declarations(
     let mut declarations = Vec::new();
     match declaration {
         Declaration::All(_) => {}
+        Declaration::TextShadowInterpolation(_) | Declaration::TextShadowUnderlying => {
+            declarations.push(("text-shadow".to_owned(), declaration.clone()))
+        }
         Declaration::Color(_) => declarations.push(("color".to_owned(), declaration.clone())),
         Declaration::Background(_) => {
             declarations.push(("background-color".to_owned(), declaration.clone()))
@@ -1886,6 +1895,7 @@ fn is_interpolable(declaration: &Declaration) -> bool {
             | Declaration::BackgroundRepeatInline(crate::css::BackgroundAxisValue::Values(_))
             | Declaration::BackgroundRepeatBlock(crate::css::BackgroundAxisValue::Values(_))
             | Declaration::Layout(_)
+            | Declaration::TextShadowUnderlying
             | Declaration::BorderRadius(_)
     )
 }
@@ -1896,6 +1906,20 @@ fn interpolate(
     progress: f32,
     position: PositionContext<'_>,
 ) -> Declaration {
+    let shadow_endpoint = |declaration: &Declaration| match declaration {
+        Declaration::Layout(value) if value.name == "text-shadow" => {
+            Some(crate::text_shadow::Endpoint::Specified(value.value.clone()))
+        }
+        Declaration::TextShadowUnderlying => Some(crate::text_shadow::Endpoint::Underlying),
+        _ => None,
+    };
+    if let (Some(from), Some(to)) = (shadow_endpoint(from), shadow_endpoint(to)) {
+        return Declaration::TextShadowInterpolation(crate::text_shadow::Interpolation {
+            from,
+            to,
+            progress,
+        });
+    }
     match (from, to) {
         (Declaration::Color(from), Declaration::Color(to)) => {
             Declaration::Color(interpolate_color(*from, *to, progress))

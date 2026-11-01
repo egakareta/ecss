@@ -33,13 +33,13 @@ impl Running {
         ease(&self.config.timing, elapsed / self.config.duration, false)
     }
 
-    fn value(&self, now: f64, property: PropertyId) -> Value {
+    fn value(&self, now: f64, property: PropertyId, current_color: egui::Color32) -> Value {
         if self.finished(now) {
             return self.to.clone();
         }
         property.constrain(
             self.from
-                .interpolate(&self.to, self.progress(now) as f32)
+                .interpolate(&self.to, self.progress(now) as f32, current_color)
                 .expect("transition endpoints have compatible computed types"),
         )
     }
@@ -74,6 +74,7 @@ pub(crate) struct Sample {
     pub(crate) background: bool,
     pub(crate) background_position_x: bool,
     pub(crate) background_position_y: bool,
+    pub(crate) text_shadow: bool,
     color: bool,
     radius: bool,
 }
@@ -122,13 +123,20 @@ pub(crate) fn sample(
     id: Id,
     style: &mut BoxStyle,
     units: crate::layout_style::Units<'_>,
+    resolve_text_shadows: impl FnOnce(&mut BoxStyle) -> bool,
 ) -> Sample {
     let now = context.input(|input| input.time);
     let frame = context.cumulative_frame_nr();
     let state_id = id.with("ecss.transitions");
     let absent = style.layout.display == taffy::Display::None;
-    let targets = PropertyId::all()
-        .map(|property| property.get(style, units))
+    let mut targets = PropertyId::all()
+        .map(|property| {
+            if property == PropertyId::TextShadows {
+                None
+            } else {
+                property.get(style, units)
+            }
+        })
         .collect::<Vec<_>>();
     let previous = context.data_mut(|data| data.remove_temp::<State>(state_id));
     let mut state = previous
@@ -148,11 +156,23 @@ pub(crate) fn sample(
         state.initialized_frame = frame;
     }
     let initializing = state.initialized_frame == frame;
+    let mut resolve_text_shadows = Some(resolve_text_shadows);
     for (index, property) in PropertyId::all().enumerate() {
+        let shadow_animated = if property == PropertyId::TextShadows {
+            targets[index] = property.get(style, units);
+            resolve_text_shadows
+                .take()
+                .expect("shadow transition resolves once")(style)
+        } else {
+            false
+        };
         let config = style
             .transitions
             .matching(|name| property.matches(name, style));
         let previous_running = state.running[index].take();
+        if shadow_animated {
+            continue;
+        }
         let was_running = previous_running.is_some();
         let Some(destination) = targets[index].as_ref() else {
             continue;
@@ -165,10 +185,15 @@ pub(crate) fn sample(
         if changed && !initializing {
             let from = running
                 .as_ref()
-                .map(|running| running.value(now, property))
+                .map(|running| running.value(now, property, style.current_color))
                 .or_else(|| state.targets[index].clone());
             running = from
-                .filter(|from| from != destination && from.interpolate(destination, 0.0).is_some())
+                .filter(|from| {
+                    from != destination
+                        && from
+                            .interpolate(destination, 0.0, style.current_color)
+                            .is_some()
+                })
                 .and_then(|from| {
                     let mut config = config.clone();
                     let mut reversing_start = from.clone();
@@ -203,11 +228,12 @@ pub(crate) fn sample(
                 property.affects_layout() && (was_running || running.is_some());
             let value = running.as_ref().map_or_else(
                 || destination.clone(),
-                |running| running.value(now, property),
+                |running| running.value(now, property, style.current_color),
             );
             property.set(style, &value, units.math);
             match property {
                 PropertyId::Color => sample.color = true,
+                PropertyId::TextShadows => sample.text_shadow = was_running || running.is_some(),
                 PropertyId::Background => {
                     sample.background = style.background_set || was_running || changed
                 }

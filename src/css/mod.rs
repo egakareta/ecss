@@ -216,6 +216,8 @@ pub(crate) enum Declaration {
     BackgroundRepeatBlock(BackgroundAxisValue<BackgroundRepeat>),
     BackgroundSize(Vec<BackgroundSize>),
     Layout(crate::layout_style::Declaration),
+    TextShadowInterpolation(crate::text_shadow::Interpolation),
+    TextShadowUnderlying,
     BorderRadius(u8),
     FontFamily(Vec<String>),
     FontWeight(u16),

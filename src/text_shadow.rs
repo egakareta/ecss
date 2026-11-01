@@ -21,7 +21,156 @@ const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) struct Shadow {
     pub(crate) offset: Vec2,
     pub(crate) blur: f32,
-    pub(crate) color: Option<Color32>,
+    color: Option<ShadowColor>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShadowColor([f32; 4]);
+
+impl From<Color32> for ShadowColor {
+    fn from(value: Color32) -> Self {
+        Self(value.to_srgba_unmultiplied().map(f32::from))
+    }
+}
+
+impl ShadowColor {
+    fn resolve(self) -> Color32 {
+        let [r, g, b, a] = self
+            .0
+            .map(|channel| channel.round().clamp(0.0, 255.0) as u8);
+        Color32::from_rgba_unmultiplied(r, g, b, a)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum Endpoint {
+    Specified(String),
+    Underlying,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Interpolation {
+    pub(crate) from: Endpoint,
+    pub(crate) to: Endpoint,
+    pub(crate) progress: f32,
+}
+
+impl Interpolation {
+    pub(crate) fn resolve(
+        &self,
+        inherited: &[Shadow],
+        underlying: &[Shadow],
+        units: Units<'_>,
+        current_color: Color32,
+    ) -> Vec<Shadow> {
+        let computed = |value: &Endpoint| {
+            let value = match value {
+                Endpoint::Underlying => return underlying.to_vec(),
+                Endpoint::Specified(value) => value,
+            };
+            if ["inherit", "unset", "revert"]
+                .iter()
+                .any(|keyword| value.trim().eq_ignore_ascii_case(keyword))
+            {
+                inherited.to_vec()
+            } else if value.trim().eq_ignore_ascii_case("initial") {
+                Vec::new()
+            } else {
+                parse(value, units).expect("validated animated text shadow")
+            }
+        };
+        interpolate(
+            &computed(&self.from),
+            &computed(&self.to),
+            self.progress,
+            current_color,
+        )
+    }
+}
+
+pub(crate) fn interpolate(
+    from: &[Shadow],
+    to: &[Shadow],
+    progress: f32,
+    current_color: Color32,
+) -> Vec<Shadow> {
+    let transparent = Shadow {
+        offset: Vec2::ZERO,
+        blur: 0.0,
+        color: Some(Color32::TRANSPARENT.into()),
+    };
+    let lerp = |from: f32, to: f32| {
+        (f64::from(from) + (f64::from(to) - f64::from(from)) * f64::from(progress))
+            .clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+    };
+    (0..from.len().max(to.len()))
+        .map(|index| {
+            let from = from.get(index).unwrap_or(&transparent);
+            let to = to.get(index).unwrap_or(&transparent);
+            let color = if from.color.is_none() && to.color.is_none() {
+                None
+            } else {
+                let from = from.color.unwrap_or_else(|| current_color.into()).0;
+                let to = to.color.unwrap_or_else(|| current_color.into()).0;
+                let alpha = lerp(from[3], to[3]);
+                let channel = |index: usize| {
+                    if alpha <= 0.0 {
+                        return 0.0;
+                    }
+                    (lerp(from[index] * from[3], to[index] * to[3]) / alpha).clamp(0.0, 255.0)
+                };
+                Some(ShadowColor([
+                    channel(0),
+                    channel(1),
+                    channel(2),
+                    alpha.clamp(0.0, 255.0),
+                ]))
+            };
+            Shadow {
+                offset: vec2(
+                    lerp(from.offset.x, to.offset.x),
+                    lerp(from.offset.y, to.offset.y),
+                ),
+                blur: lerp(from.blur, to.blur).max(0.0),
+                color,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn apply_animations(
+    style: &mut crate::layout_style::BoxStyle,
+    parent: &crate::layout_style::BoxStyle,
+    units: Units<'_>,
+    declarations: &[crate::css::Declaration],
+) -> bool {
+    let units = Units {
+        font: style.format.em,
+        ..units
+    };
+    let mut animated = false;
+    for declaration in declarations {
+        match declaration {
+            crate::css::Declaration::TextShadowInterpolation(value) => {
+                animated = true;
+                style.text_shadows = value.resolve(
+                    &parent.text_shadows,
+                    &style.text_shadows,
+                    units,
+                    style.current_color,
+                );
+            }
+            crate::css::Declaration::Layout(value) if value.name == "text-shadow" => {
+                animated = true;
+                value
+                    .apply_with_parent(style, parent, units)
+                    .expect("validated animated text shadow");
+            }
+            crate::css::Declaration::TextShadowUnderlying => animated = true,
+            _ => {}
+        }
+    }
+    animated
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,12 +267,13 @@ fn shadow_length(value: &str, units: Units<'_>, negative: bool) -> Result<f32, &
     Ok(value)
 }
 
-fn color_value(value: &str) -> Option<Option<Color32>> {
+fn color_value(value: &str) -> Option<Option<ShadowColor>> {
     if value.eq_ignore_ascii_case("currentcolor") {
         return Some(None);
     }
     crate::css::parse_color(&mut Parser::new(value))
         .ok()
+        .map(ShadowColor::from)
         .map(Some)
 }
 
@@ -258,7 +408,7 @@ fn paint_filtered(
     let mut source_meshes = None;
     let mut shapes = Vec::with_capacity(shadows.len() + 1);
     for shadow in shadows.iter().rev() {
-        let color = shadow.color.unwrap_or(current_color);
+        let color = shadow.color.map_or(current_color, ShadowColor::resolve);
         if color.a() == 0 {
             continue;
         }

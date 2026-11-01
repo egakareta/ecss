@@ -127,6 +127,13 @@ struct Node {
     shadow_pending: bool,
     flow_text_pending: bool,
     subtree_end: usize,
+    text_wrap: TextWrap,
+}
+
+#[derive(Clone, Copy)]
+struct TextWrap {
+    base: Option<egui::TextWrapMode>,
+    applied: Option<egui::TextWrapMode>,
 }
 
 struct PaintRecord {
@@ -1175,7 +1182,7 @@ pub(crate) fn show(
         frame.layout_animation_active |= animation.layout_active;
     }
     let animated_declarations = animation.declarations;
-    let text_shadow_specified = if track_shadow_inheritance {
+    let mut text_shadow_specified = if track_shadow_inheritance {
         text_shadow_inheritance(&animated_declarations).map_or(text_shadow_specified, |value| {
             matches!(value, ShadowInheritance::Specified)
         })
@@ -1227,6 +1234,9 @@ pub(crate) fn show(
                 style.background_current_color = false;
             }
             Declaration::Layout(declaration) => {
+                if declaration.name == "text-shadow" {
+                    continue;
+                }
                 declaration
                     .apply_with_parent(&mut style, &parent_style, units)
                     .expect("validated animated CSS declaration");
@@ -1289,10 +1299,24 @@ pub(crate) fn show(
         style.background_values.repeat_y.clone_from(values);
     }
     let transition = if stylesheet.rule_index.has_transitions {
-        crate::transition::sample(ui.ctx(), id, &mut style, units)
+        crate::transition::sample(ui.ctx(), id, &mut style, units, |style| {
+            crate::text_shadow::apply_animations(
+                style,
+                &parent_style,
+                units,
+                &animated_declarations,
+            )
+        })
     } else {
+        crate::text_shadow::apply_animations(
+            &mut style,
+            &parent_style,
+            units,
+            &animated_declarations,
+        );
         crate::transition::Sample::default()
     };
+    text_shadow_specified |= track_shadow_inheritance && transition.text_shadow;
     if style.background_current_color && !transition.background {
         style.background_color = style.current_color;
     }
@@ -1423,6 +1447,15 @@ pub(crate) fn show(
             .filter(|_| !text_shadow_specified)
             .and_then(|parent| frame.nodes[parent].shadow_owner)
             .or_else(|| (!pseudo_text_shadows.is_empty()).then_some(index));
+        let inherited_wrap = ui.style().wrap_mode;
+        let base_wrap = parent.map_or(inherited_wrap, |parent| {
+            let wrap = frame.nodes[parent].text_wrap;
+            if wrap.applied == inherited_wrap {
+                wrap.base
+            } else {
+                inherited_wrap
+            }
+        });
         frame.nodes.push(Node {
             id,
             element_id: element_id.clone(),
@@ -1453,6 +1486,10 @@ pub(crate) fn show(
             shadow_pending: false,
             flow_text_pending: false,
             subtree_end: index + 1,
+            text_wrap: TextWrap {
+                base: base_wrap,
+                applied: base_wrap,
+            },
         });
         frame.stack.push(index);
         (index, geometry, absent, shadow_owner)
@@ -1539,9 +1576,46 @@ pub(crate) fn show(
         font.family =
             crate::fonts::FontAssets::family_for_kerning(ui.ctx(), &font.family, disable_kerning);
     }
-    if matches!(style.format.white_space.as_str(), "nowrap" | "pre") {
+    let (inline_size, inline_maximum, intrinsic_inline_maximum) = if style.format.writing.vertical()
+    {
+        (
+            style.layout.size.height,
+            style.layout.max_size.height,
+            style.intrinsic_max.height,
+        )
+    } else {
+        (
+            style.layout.size.width,
+            style.layout.max_size.width,
+            style.intrinsic_max.width,
+        )
+    };
+    let unconstrained_max_content = !style.inline
+        && !style.contents
+        && inline_size == taffy::Dimension::max_content()
+        && inline_maximum.is_auto()
+        && intrinsic_inline_maximum.is_none()
+        && {
+            let frame = active.0.borrow();
+            let mut parent = frame.nodes[index].parent;
+            while let Some(ancestor) = parent {
+                if !frame.nodes[ancestor].style.contents {
+                    break;
+                }
+                parent = frame.nodes[ancestor].parent;
+            }
+            parent.is_none_or(|parent| {
+                !matches!(
+                    frame.nodes[parent].style.layout.display,
+                    Display::Flex | Display::Grid
+                )
+            })
+        };
+    content_ui.style_mut().wrap_mode = active.0.borrow().nodes[index].text_wrap.base;
+    if matches!(style.format.white_space.as_str(), "nowrap" | "pre") || unconstrained_max_content {
         content_ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     }
+    active.0.borrow_mut().nodes[index].text_wrap.applied = content_ui.style().wrap_mode;
     if style.format.font_size_set {
         for font in content_ui.style_mut().text_styles.values_mut() {
             font.size = style.format.em;

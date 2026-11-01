@@ -1146,6 +1146,8 @@ fn apply_visual_declaration(
             }
         }
         Declaration::Layout(_)
+        | Declaration::TextShadowInterpolation(_)
+        | Declaration::TextShadowUnderlying
         | Declaration::All(_)
         | Declaration::BackgroundReset(_)
         | Declaration::BackgroundTbdShorthand(_)

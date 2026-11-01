@@ -19,6 +19,483 @@ fn shadow_color_count(pixels: &[[u8; 4]], rect: egui::Rect, channel: usize) -> u
 
 #[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn max_content_wrapping_does_not_override_constrained_descendants() {
+    fn nested_text(ui: &mut egui::Ui) {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("MMMM MM").selector(".child"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    }
+    fn contents_text(ui: &mut egui::Ui) {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("MMMM MM").selector(".contents"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    }
+    let base = ".parent { width:40px; } .contents { display:contents; font-size:20px; color:red; }";
+    let reference = render_ui_pixels(Stylesheet::parse(base).unwrap(), contents_text).await;
+    let actual = render_ui_pixels(
+        Stylesheet::parse(&format!("{base} .contents {{ width:max-content; }}")).unwrap(),
+        contents_text,
+    )
+    .await;
+    assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 0) > 0);
+    assert_eq!(
+        actual
+            .iter()
+            .zip(&reference)
+            .filter(|(actual, expected)| actual != expected)
+            .count(),
+        0,
+        "width on a contents element changed anonymous text wrapping"
+    );
+    for child in ["width:40px;", "width:max-content; max-width:40px;"] {
+        let base = format!(".child {{ {child} color:red; font-size:28px; white-space:normal; }}");
+        let reference = render_ui_pixels(Stylesheet::parse(&base).unwrap(), nested_text).await;
+        let actual = render_ui_pixels(
+            Stylesheet::parse(&format!("{base} .parent {{ width:max-content; }}")).unwrap(),
+            nested_text,
+        )
+        .await;
+        assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 0) > 0);
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "max-content ancestor changed descendant wrapping: {child}"
+        );
+    }
+    for parent in [
+        "display:flex; width:60px;",
+        "display:grid; grid-template-columns:minmax(0,1fr); width:60px;",
+    ] {
+        let stylesheet = Stylesheet::parse(&format!(".parent {{ {parent} }} .middle {{ display:contents; }} .child {{ color:red; font-size:20px; width:max-content; min-width:0; }}")).unwrap();
+        let render = |stylesheet: Stylesheet, contents: bool| {
+            render_ui_pixels(stylesheet, move |ui| {
+                ui.add(
+                    (move |ui: &mut egui::Ui| {
+                        if contents {
+                            ui.add(
+                                (|ui: &mut egui::Ui| {
+                                    ui.add(egui::Label::new("MMMM MM").selector(".child"));
+                                    ui.response()
+                                })
+                                .selector(".middle"),
+                            );
+                        } else {
+                            ui.add(egui::Label::new("MMMM MM").selector(".child"));
+                        }
+                        ui.response()
+                    })
+                    .selector(".parent"),
+                );
+            })
+        };
+        let reference = render(stylesheet.clone(), false).await;
+        let actual = render(stylesheet, true).await;
+        assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 0) > 0);
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "display:contents changed the child's formatting parent: {parent}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn shadow_animations_do_not_start_transitions_or_leave_them_after_finishing() {
+    for transition in ["text-shadow .4s linear", "all .4s linear"] {
+        for frames in [3, 10] {
+            let stylesheet = Stylesheet::parse(&format!(
+                "@keyframes shadows {{ from {{ text-shadow:none; }} to {{ text-shadow:16px 0 blue; }} }}\
+                 .text {{ color:transparent; font-size:28px; width:120px; text-shadow:none; animation:shadows .8s linear; transition:{transition}; }}"
+            )).unwrap();
+            let actual = render_ui_pixels_with_events(stylesheet, vec![Vec::new(); frames], |ui| {
+                ui.add(egui::Label::new("MM").selector(".text"));
+            })
+            .await;
+            let shadow = if frames == 3 {
+                "4px 0 rgb(0 0 255 / 25%)"
+            } else {
+                "none"
+            };
+            let stylesheet = Stylesheet::parse(&format!(
+                ".text {{ color:transparent; font-size:28px; width:120px; text-shadow:{shadow}; }}"
+            ))
+            .unwrap();
+            let reference = render_ui_pixels(stylesheet, |ui| {
+                ui.add(egui::Label::new("MM").selector(".text"));
+            })
+            .await;
+            if frames == 3 {
+                assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 2) > 0);
+            }
+            assert_eq!(
+                actual
+                    .iter()
+                    .zip(&reference)
+                    .filter(|(actual, expected)| actual != expected)
+                    .count(),
+                0,
+                "animation incorrectly triggered {transition}, frames={frames}"
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn animated_shadow_currentcolor_uses_the_running_color_transition() {
+    for (from, to, target_font, expected_font, expected_offset) in [
+        ("0 0 currentColor", "16px 0 blue", 28, 28, 4.0),
+        ("1em 0 currentColor", "2em 0 blue", 56, 35, 43.75),
+    ] {
+        let stylesheet = Stylesheet::parse(&format!(
+        "@keyframes shadows {{ from {{ text-shadow:{from}; }} to {{ text-shadow:{to}; }} }}\
+         .text {{ color:red; font-size:28px; width:120px; animation:shadows .8s linear both; transition:color .4s linear, font-size .4s linear; }}\
+         .text:hover {{ color:blue; font-size:{target_font}px; }}"
+    )).unwrap();
+        let hovered = std::sync::Arc::new(Mutex::new(false));
+        let capture = hovered.clone();
+        let actual = render_ui_pixels_with_events(
+            stylesheet,
+            vec![
+                Vec::new(),
+                vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))],
+                vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))],
+            ],
+            move |ui| {
+                let response = ui.add(
+                    (|ui: &mut egui::Ui| {
+                        let text = ui.label("MM");
+                        ui.interact(
+                            text.rect,
+                            egui::Id::unique("animated-shadow-color-transition"),
+                            egui::Sense::hover(),
+                        )
+                    })
+                    .selector(".text"),
+                );
+                *capture.lock().unwrap() = response.hovered();
+            },
+        )
+        .await;
+        assert!(
+            *hovered.lock().unwrap(),
+            "the text hover surface was not exercised"
+        );
+        let reference = render_ui_pixels(Stylesheet::parse(&format!(
+        ".text {{ color:rgb(191 0 64); font-size:{expected_font}px; width:120px; text-shadow:{expected_offset}px 0 rgb(143 0 112); }}"
+    )).unwrap(), |ui| { ui.add(egui::Label::new("MM").selector(".text")); }).await;
+        assert!(
+            reference
+                .iter()
+                .any(|pixel| pixel[2] > pixel[1].saturating_add(8))
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "shadow did not use the running color/font transitions: {from} to {to}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_keyframes_interpolate_computed_lists_with_transparent_padding() {
+    for (from, to, expected) in [
+        (
+            "",
+            "12px 4px 4px rgb(0 0 255 / 80%)",
+            "3px 1px 1px rgb(0 0 255 / 20%)",
+        ),
+        (
+            "12px 4px 4px rgb(0 0 255 / 80%)",
+            "",
+            "9px 3px 3px rgb(0 0 255 / 60%)",
+        ),
+        (
+            "none",
+            "12px 4px 4px rgb(0 0 255 / 80%)",
+            "3px 1px 1px rgb(0 0 255 / 20%)",
+        ),
+        (
+            "4px 0 red",
+            "12px 0 red, 40px 0 blue",
+            "6px 0 red, 10px 0 rgb(0 0 255 / 25%)",
+        ),
+        (
+            "0 0 red, 40px 0 blue",
+            "8px 0 red",
+            "2px 0 red, 30px 0 rgb(0 0 255 / 75%)",
+        ),
+        ("1em 0 red", "56px 0 red", "35px 0 red"),
+        (
+            "1em 0 red; font-size:28px",
+            "2em 0 red; font-size:56px",
+            "43.75px 0 red; font-size:35px",
+        ),
+        (
+            "1em 0 red; font-size:28px; max-width:40px",
+            "2em 0 red; font-size:56px; max-width:40px",
+            "43.75px 0 red; font-size:35px; max-width:40px",
+        ),
+        (
+            "0 0 currentColor; color:red",
+            "12px 0 currentColor; color:blue",
+            "3px 0 rgb(191 0 64); color:rgb(191 0 64)",
+        ),
+    ] {
+        let base = ".text { color:transparent; font-size:28px; width:max-content; }";
+        let from_rule = if from.is_empty() {
+            String::new()
+        } else {
+            format!("from {{ text-shadow:{from}; }}")
+        };
+        let to_rule = if to.is_empty() {
+            String::new()
+        } else {
+            format!("to {{ text-shadow:{to}; }}")
+        };
+        let stylesheet = Stylesheet::parse(&format!(
+            "{base} @keyframes shadows {{ {from_rule} {to_rule} }}\
+             .text {{ animation:shadows 2s linear both; }}"
+        ))
+        .unwrap();
+        let actual = render_ui_pixels_at_time(stylesheet, 0.5, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        let stylesheet =
+            Stylesheet::parse(&format!("{base} .text {{ text-shadow:{expected}; }}")).unwrap();
+        let reference = render_ui_pixels_at_time(stylesheet, 0.5, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        assert!(
+            reference
+                .iter()
+                .any(|pixel| pixel[0] != pixel[1] || pixel[1] != pixel[2])
+        );
+        let differences = actual
+            .iter()
+            .zip(&reference)
+            .filter(|(actual, expected)| actual != expected)
+            .count();
+        assert_eq!(differences, 0, "interpolation from {from} to {to}");
+    }
+
+    fn nested_text(ui: &mut egui::Ui) {
+        ui.add(
+            (|ui: &mut egui::Ui| {
+                ui.add(egui::Label::new("MM").selector(".text"));
+                ui.response()
+            })
+            .selector(".parent"),
+        );
+    }
+    for from in [
+        "",
+        "from { text-shadow:inherit; }",
+        "from { text-shadow:revert; }",
+    ] {
+        let base = ".parent { font-size:16px; text-shadow:1em 0 red; } .text { color:transparent; font-size:28px; width:max-content; }";
+        let own = if from.contains("revert") {
+            ".text { text-shadow:30px 0 blue; }"
+        } else {
+            ""
+        };
+        let stylesheet = Stylesheet::parse(&format!("{base} {own} @keyframes shadows {{ {from} to {{ text-shadow:12px 0 blue; }} }} .text {{ animation:shadows 2s linear both; }}")).unwrap();
+        let actual = render_ui_pixels_at_time(stylesheet, 0.5, nested_text).await;
+        let stylesheet = Stylesheet::parse(&format!(
+            "{base} .text {{ text-shadow:15px 0 rgb(191 0 64); }}"
+        ))
+        .unwrap();
+        let reference = render_ui_pixels_at_time(stylesheet, 0.5, nested_text).await;
+        assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 0) > 0);
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "inherited computed endpoint was re-evaluated at the child's font size: {from}"
+        );
+    }
+    for important in [
+        "text-shadow:0 0 red !important;",
+        "--shadow:0 0 red; text-shadow:var(--shadow) !important;",
+    ] {
+        let base = ".text { color:transparent; font-size:28px; width:max-content; }";
+        let stylesheet = Stylesheet::parse(&format!("{base} .text {{ {important} animation:shadows 2s linear both; }} @keyframes shadows {{ from {{ text-shadow:none; }} to {{ text-shadow:12px 0 blue; }} }}")).unwrap();
+        let actual = render_ui_pixels_at_time(stylesheet, 0.5, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        let stylesheet =
+            Stylesheet::parse(&format!("{base} .text {{ text-shadow:0 0 red; }}")).unwrap();
+        let reference = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        assert!(shadow_color_count(&reference, egui::Rect::EVERYTHING, 0) > 0);
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "animation overrode {important}"
+        );
+    }
+    for (first, second, expected) in [
+        (
+            "from,to { text-shadow:4px 0 red; }",
+            "to { text-shadow:20px 0 blue; }",
+            "8px 0 rgb(191 0 64)",
+        ),
+        (
+            "from { text-shadow:none; } to { text-shadow:4px 0 red; }",
+            "from,to { text-shadow:20px 0 blue; }",
+            "20px 0 blue",
+        ),
+    ] {
+        let base =
+            ".text { color:transparent; font-size:28px; width:max-content; text-shadow:none; }";
+        let stylesheet = Stylesheet::parse(&format!("{base} @keyframes first {{ {first} }} @keyframes second {{ {second} }} .text {{ animation:first 2s linear both, second 2s linear both; }}")).unwrap();
+        let actual = render_ui_pixels_at_time(stylesheet, 0.5, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        let stylesheet =
+            Stylesheet::parse(&format!("{base} .text {{ text-shadow:{expected}; }}")).unwrap();
+        let reference = render_ui_pixels(stylesheet, |ui| {
+            ui.add(egui::Label::new("MM").selector(".text"));
+        })
+        .await;
+        assert!(reference.iter().any(|pixel| pixel[0] != pixel[2]));
+        assert_eq!(
+            actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count(),
+            0,
+            "animation list {first} then {second}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_transitions_interpolate_padded_lists_on_hover() {
+    for (from, to, expected) in [
+        (
+            "0 0 currentColor; color:red",
+            "12px 0 blue; color:red",
+            "3px 0 rgb(191 0 64); color:red",
+        ),
+        (
+            "none",
+            "12px 4px 4px rgb(0 0 255 / 80%)",
+            "3px 1px 1px rgb(0 0 255 / 20%)",
+        ),
+        (
+            "4px 0 red",
+            "12px 0 red, 40px 0 blue",
+            "6px 0 red, 10px 0 rgb(0 0 255 / 25%)",
+        ),
+        (
+            "0 0 red, 40px 0 blue",
+            "8px 0 red",
+            "2px 0 red, 30px 0 rgb(0 0 255 / 75%)",
+        ),
+    ] {
+        for reverse in [false, true] {
+            let stylesheet = Stylesheet::parse(&format!(
+        ".text {{ color:transparent; font-size:28px; width:max-content; text-shadow:{from}; transition:text-shadow .4s linear; }}\
+         .text:hover {{ text-shadow:{to}; }}"
+    )).unwrap();
+            let hovered = std::sync::Arc::new(Mutex::new(false));
+            let capture = hovered.clone();
+            let mut frames = vec![
+                Vec::new(),
+                vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))],
+                vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))],
+            ];
+            if reverse {
+                frames.extend([
+                    vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))],
+                    vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))],
+                ]);
+            }
+            let actual = render_ui_pixels_with_events(stylesheet, frames, move |ui| {
+                let response = ui.add(
+                    (|ui: &mut egui::Ui| {
+                        let text = ui.label("MM");
+                        ui.interact(
+                            text.rect,
+                            egui::Id::unique("text-shadow-transition"),
+                            egui::Sense::hover(),
+                        )
+                    })
+                    .selector(".text"),
+                );
+                *capture.lock().unwrap() = response.hovered();
+            })
+            .await;
+            assert_eq!(
+                *hovered.lock().unwrap(),
+                !reverse,
+                "the text hover surface did not reach the expected state"
+            );
+            let stylesheet = Stylesheet::parse(&format!(
+        ".text {{ color:transparent; font-size:28px; width:max-content; text-shadow:{expected}; }}"
+    )).unwrap();
+            let reference = render_ui_pixels(stylesheet, |ui| {
+                ui.add(egui::Label::new("MM").selector(".text"));
+            })
+            .await;
+            assert!(
+                reference
+                    .iter()
+                    .any(|pixel| pixel[2] > pixel[1].saturating_add(8))
+            );
+            let differences = actual
+                .iter()
+                .zip(&reference)
+                .filter(|(actual, expected)| actual != expected)
+                .count();
+            assert_eq!(
+                differences, 0,
+                "transition from {from} to {to}, reverse={reverse}"
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 async fn pseudo_shadows_replace_base_shadows_and_preserve_inherited_alpha() {
     async fn render(style: &str, text: &'static str) -> (Vec<[u8; 4]>, egui::Rect) {
         let stylesheet = Stylesheet::parse(style).unwrap();

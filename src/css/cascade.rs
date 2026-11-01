@@ -110,6 +110,9 @@ fn animated_property(declaration: &Declaration) -> Option<&str> {
         Declaration::BackgroundRepeatBlock(_) => Some("background-repeat-block"),
         Declaration::BackgroundSize(_) => Some("background-size"),
         Declaration::Layout(layout) => Some(&layout.name),
+        Declaration::TextShadowInterpolation(_) | Declaration::TextShadowUnderlying => {
+            Some("text-shadow")
+        }
         Declaration::BorderRadius(_) => Some("border-radius"),
         Declaration::FontFamily(_) => Some("font-family"),
         Declaration::FontWeight(_) => Some("font-weight"),

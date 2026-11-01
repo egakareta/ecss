@@ -389,6 +389,9 @@ pub(super) fn text_shadow_inheritance<'a>(
     let mut inheritance = None;
     for declaration in declarations {
         match declaration {
+            Declaration::TextShadowInterpolation(_) | Declaration::TextShadowUnderlying => {
+                inheritance = Some(ShadowInheritance::Specified)
+            }
             Declaration::All(crate::css::AllKeyword::Initial) => {
                 inheritance = Some(ShadowInheritance::Specified);
             }
