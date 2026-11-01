@@ -1,5 +1,405 @@
 use super::*;
 
+fn shadow_color_count(pixels: &[[u8; 4]], rect: egui::Rect, channel: usize) -> usize {
+    pixels
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let point = egui::pos2(
+                (*index % WIDTH as usize) as f32,
+                (*index / WIDTH as usize) as f32,
+            );
+            rect.contains(point)
+                && (0..3)
+                    .filter(|other| *other != channel)
+                    .all(|other| pixel[channel] > pixel[other].saturating_add(8))
+        })
+        .count()
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn pseudo_shadows_replace_base_shadows_and_preserve_inherited_alpha() {
+    async fn render(style: &str, text: &'static str) -> (Vec<[u8; 4]>, egui::Rect) {
+        let stylesheet = Stylesheet::parse(style).unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            *capture.lock().unwrap() = Some(ui.add(egui::Label::new(text).selector(".text")).rect);
+        })
+        .await;
+        (pixels, bounds.lock().unwrap().unwrap())
+    }
+
+    for keyword in ["none", "initial"] {
+        for decoration in ["none", "underline", "overline", "line-through"] {
+            for (writing, orientation) in [
+                ("horizontal-tb", "mixed"),
+                ("vertical-rl", "mixed"),
+                ("vertical-lr", "mixed"),
+                ("vertical-rl", "upright"),
+                ("sideways-rl", "mixed"),
+                ("sideways-lr", "mixed"),
+            ] {
+                let vertical = writing != "horizontal-tb";
+                let offset = if vertical { "4px 0" } else { "0 4px" };
+                let (pixels, rect) = render(
+        &format!(
+            ".text {{ color:transparent; font-size:32px; width:max-content; height:max-content; writing-mode:{writing}; text-orientation:{orientation}; text-shadow:{offset} red; text-decoration:{decoration} lime 2px; }}\
+             .text::first-letter {{ text-shadow:{keyword}; }}"
+        ),
+        "MM",
+    )
+    .await;
+                let (mut first, mut second) = if vertical {
+                    (
+                        egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(rect.right() + 8.0, rect.center().y),
+                        ),
+                        egui::Rect::from_min_max(
+                            egui::pos2(rect.left(), rect.center().y),
+                            rect.max + egui::vec2(8.0, 0.0),
+                        ),
+                    )
+                } else {
+                    (
+                        egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(rect.center().x, rect.bottom() + 8.0),
+                        ),
+                        egui::Rect::from_min_max(
+                            egui::pos2(rect.center().x, rect.top()),
+                            rect.max + egui::vec2(0.0, 8.0),
+                        ),
+                    )
+                };
+                if writing == "sideways-lr" {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                assert_eq!(
+                    shadow_color_count(&pixels, first, 0),
+                    0,
+                    "{keyword} retained {decoration} shadow in {writing}/{orientation}, rect={rect:?}"
+                );
+                assert!(shadow_color_count(&pixels, second, 0) > 0);
+            }
+        }
+    }
+
+    let (pixels, rect) = render(
+        ".text { color:transparent; font-size:32px; width:max-content; text-shadow:0 0 red; }\
+         .text::first-letter { text-shadow:0 0 lime, 0 0 blue; }",
+        "MM",
+    )
+    .await;
+    let first = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.bottom()));
+    let second = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.top()), rect.max);
+    assert!(shadow_color_count(&pixels, first, 1) > 0);
+    assert_eq!(shadow_color_count(&pixels, first, 0), 0);
+    assert_eq!(shadow_color_count(&pixels, first, 2), 0);
+    assert!(shadow_color_count(&pixels, second, 0) > 0);
+
+    for (letter, expected_blue) in [
+        ("", false),
+        (".text::first-letter { text-shadow:-10px 0 blue; }", true),
+    ] {
+        let (pixels, rect) = render(
+            &format!(
+                ".text {{ color:transparent; font-size:24px; width:64px; text-shadow:0 0 red; }}\
+                 .text::first-line {{ text-shadow:10px 0 lime; }} {letter}"
+            ),
+            "MMMMMM",
+        )
+        .await;
+        assert!(rect.height() > 40.0);
+        let first = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + 28.0));
+        let following =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 32.0), rect.max);
+        assert!(shadow_color_count(&pixels, first, 1) > 0);
+        assert_eq!(shadow_color_count(&pixels, first, 0), 0);
+        assert_eq!(shadow_color_count(&pixels, first, 2) > 0, expected_blue);
+        assert!(shadow_color_count(&pixels, following, 0) > 0);
+    }
+
+    let base = ".text { color:transparent; font-size:28px; width:max-content; text-shadow:0 0 rgb(255 0 0 / 50%); }";
+    let (expected, _) = render(base, "MM").await;
+    for declaration in [
+        "text-shadow:inherit",
+        "text-shadow:unset",
+        "text-shadow:revert",
+        "all:inherit",
+        "all:unset",
+        "all:revert",
+    ] {
+        let (actual, _) = render(
+            &format!("{base} .text::first-letter {{ {declaration}; }}"),
+            "MM",
+        )
+        .await;
+        assert_eq!(actual, expected, "{declaration} changed inherited alpha");
+    }
+
+    let stylesheet = Stylesheet::parse(
+        ".text { color:transparent; font-size:32px; width:max-content; white-space:nowrap; text-decoration:underline lime 2px; }\
+         .text::first-letter { text-shadow:0 4px red; }",
+    ).unwrap();
+    let text = "M".repeat(2048);
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        ui.set_clip_rect(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(100_000.0, 100.0),
+        ));
+        ui.add(egui::Label::new(text.clone()).selector(".text"));
+    })
+    .await;
+    assert!(shadow_color_count(&pixels, egui::Rect::EVERYTHING, 1) > 0);
+    assert!(
+        shadow_color_count(&pixels, egui::Rect::EVERYTHING, 0) > 0,
+        "a one-letter shadow was dropped for the whole decoration's mask size"
+    );
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn ancestor_pseudo_shadows_respect_explicit_descendant_values() {
+    for first_class in [".text", ".text.explicit", ".text.animated"] {
+        let stylesheet = Stylesheet::parse(
+            "@keyframes blue-shadow { from,to { text-shadow:0 0 blue; } }\
+             .block { display:block; width:100px; color:transparent; font-size:32px; text-shadow:0 0 red; }\
+             .text { display:block; }\
+             .explicit { text-shadow:0 0 blue; }\
+             .animated { animation:blue-shadow 1s linear both; }\
+             .block::first-line { text-shadow:12px 0 lime; }",
+        )
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_at_time(stylesheet, 0.5, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    *capture.lock().unwrap() = [first_class, ".text"]
+                        .map(|selector| ui.add(egui::Label::new("MM").selector(selector)).rect)
+                        .to_vec();
+                    ui.response()
+                })
+                .selector(".block"),
+            );
+        })
+        .await;
+        let bounds = bounds.lock().unwrap();
+        let expected = if first_class == ".text" { 1 } else { 2 };
+        assert!(shadow_color_count(&pixels, bounds[0], expected) > 0);
+        assert_eq!(shadow_color_count(&pixels, bounds[0], 0), 0);
+        assert_eq!(shadow_color_count(&pixels, bounds[0], 3 - expected), 0);
+        assert!(shadow_color_count(&pixels, bounds[1], 0) > 0);
+        assert_eq!(shadow_color_count(&pixels, bounds[1], 1), 0);
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadows_respect_all_clip_boundaries() {
+    for offset in ["-16px 0", "16px 0", "0 -16px", "0 16px"] {
+        let stylesheet = Stylesheet::parse(&format!(
+            ".clip {{ width:48px; height:48px; overflow:hidden; }}\
+             .text {{ color:transparent; font-size:64px; white-space:nowrap; text-shadow:{offset} red; }}"
+        ))
+        .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            let clip = ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(egui::Label::new("M").selector(".text"));
+                    ui.response()
+                })
+                .selector(".clip"),
+            );
+            *capture.lock().unwrap() = Some(clip.rect);
+        })
+        .await;
+        let rect = bounds.lock().unwrap().unwrap();
+        let inside = shadow_color_count(&pixels, rect, 0);
+        assert!(inside > 0, "no shadow inside the clip for {offset}");
+        assert_eq!(
+            shadow_color_count(&pixels, egui::Rect::EVERYTHING, 0),
+            inside,
+            "shadow escaped the clip for {offset}"
+        );
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn pseudo_text_shadows_are_included_in_element_images() {
+    let stylesheet = Stylesheet::parse(
+        "#source { position:relative; z-index:0; width:60px; height:40px; color:transparent; font-size:32px; text-shadow:0 0 red; }\
+         #source::first-letter { text-shadow:0 0 lime; }\
+         .target { width:60px; height:40px; background:white element(#source) left top / 60px 40px no-repeat; }",
+    )
+    .unwrap();
+    let bounds = std::sync::Arc::new(Mutex::new(None));
+    let capture = bounds.clone();
+    let pixels = render_ui_pixels(stylesheet, move |ui| {
+        let source = ui.add(egui::Label::new("MM").selector("#source")).rect;
+        let target = ui.add(empty_response.selector(".target")).rect;
+        *capture.lock().unwrap() = Some((source, target));
+    })
+    .await;
+    let (source, target) = bounds.lock().unwrap().unwrap();
+    assert!(shadow_color_count(&pixels, source, 0) > 0);
+    assert!(shadow_color_count(&pixels, source, 1) > 0);
+    for y in 0..40 {
+        for x in 0..60 {
+            assert_eq!(
+                pixel(&pixels, source.left() + x as f32, source.top() + y as f32),
+                pixel(&pixels, target.left() + x as f32, target.top() + y as f32),
+                "element image differs at {x},{y}"
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn text_shadow_changes_update_element_images_in_the_same_frame() {
+    for (change, target_first) in [
+        (".container:hover::first-line", false),
+        (".container:hover::first-line", true),
+        (".container:hover", true),
+        (".container", true),
+        ("#source", true),
+    ] {
+        let declaration = match change {
+            ".container" => "animation:shadow-update .4s linear both",
+            "#source" => "animation:release-source .4s linear both",
+            _ => "text-shadow:0 0 lime",
+        };
+        let stylesheet = Stylesheet::parse(&format!(
+        "@keyframes shadow-update {{ from {{ text-shadow:0 0 red; }} 50%,to {{ text-shadow:0 0 lime; }} }}\
+         @keyframes release-source {{ from {{ z-index:0; }} 50%,to {{ z-index:auto; }} }}\
+         .container {{ width:80px; height:80px; color:transparent; font-size:32px; text-shadow:0 0 red; }}\
+         {change} {{ {declaration}; }}\
+         #source {{ position:relative; z-index:0; width:60px; height:40px; }}\
+         .target {{ width:60px; height:40px; background:white element(#source) left top / 60px 40px no-repeat; }}"
+    ))
+    .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(None));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels_with_events(
+            stylesheet,
+            vec![
+                Vec::new(),
+                vec![egui::Event::PointerMoved(egui::pos2(75.0, 10.0))],
+                vec![egui::Event::PointerMoved(egui::pos2(75.0, 10.0))],
+            ],
+            move |ui| {
+                let mut rects = None;
+                let response = ui.add(
+                    (|ui: &mut egui::Ui| {
+                        let early_target =
+                            target_first.then(|| ui.add(empty_response.selector(".target")).rect);
+                        let source = ui.add(egui::Label::new("MM").selector("#source")).rect;
+                        let target = early_target
+                            .unwrap_or_else(|| ui.add(empty_response.selector(".target")).rect);
+                        rects = Some((source, target));
+                        ui.interact(
+                            egui::Rect::from_min_size(ui.min_rect().min, egui::vec2(80.0, 80.0)),
+                            egui::Id::unique("pseudo-shadow-parent-surface"),
+                            egui::Sense::hover(),
+                        )
+                    })
+                    .selector(".container"),
+                );
+                let (source, target) = rects.unwrap();
+                *capture.lock().unwrap() = Some((response.hovered(), source, target));
+            },
+        )
+        .await;
+        let (hovered, source, target) = bounds.lock().unwrap().unwrap();
+        assert!(hovered, "the ancestor hover surface was not exercised");
+        if change == "#source" {
+            assert!(shadow_color_count(&pixels, source, 0) > 0);
+            assert_eq!(
+                shadow_color_count(&pixels, target, 0),
+                0,
+                "removed source image remained visible"
+            );
+            continue;
+        }
+        assert!(shadow_color_count(&pixels, source, 1) > 0);
+        assert_eq!(shadow_color_count(&pixels, source, 0), 0);
+        assert!(
+            shadow_color_count(&pixels, target, 1) > 0,
+            "stale target for {change}, target_first={target_first}"
+        );
+        assert_eq!(shadow_color_count(&pixels, target, 0), 0);
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), pollster::test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+async fn named_flow_pseudo_shadows_follow_the_logical_first_line() {
+    for height in [24, 50] {
+        let stylesheet = Stylesheet::parse(&format!(
+        ".row {{ display:flex; width:150px; }}\
+         .region {{ display:block; width:70px; height:{height}px; flow-from:article; }}\
+         .source {{ flow-into:article content; font-size:20px; color:transparent; text-shadow:0 0 red; }}\
+         .source::first-line {{ text-shadow:0 0 lime; }}"
+    ))
+    .unwrap();
+        let bounds = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let capture = bounds.clone();
+        let pixels = render_ui_pixels(stylesheet, move |ui| {
+            ui.add(
+                (|ui: &mut egui::Ui| {
+                    ui.add(
+                        egui::Label::new("one two three four five six seven eight nine ten")
+                            .selector(".source"),
+                    );
+                    ui.add(
+                        (|ui: &mut egui::Ui| {
+                            *capture.lock().unwrap() = [".region", ".region"]
+                                .map(|selector| ui.add(empty_response.selector(selector)).rect)
+                                .to_vec();
+                            ui.response()
+                        })
+                        .selector(".row"),
+                    );
+                    ui.response()
+                })
+                .selector(".container"),
+            );
+        })
+        .await;
+        let bounds = bounds.lock().unwrap();
+        near(bounds[0].top(), bounds[1].top());
+        assert!(bounds[1].left() >= bounds[0].right());
+        let first = egui::Rect::from_min_max(
+            bounds[0].min,
+            egui::pos2(bounds[0].right(), bounds[0].top() + 24.0),
+        );
+        let following = egui::Rect::from_min_max(
+            egui::pos2(bounds[0].left(), bounds[0].top() + 28.0),
+            bounds[0].max,
+        );
+        assert!(shadow_color_count(&pixels, first, 1) > 0);
+        assert_eq!(shadow_color_count(&pixels, first, 0), 0);
+        if height == 50 {
+            assert!(shadow_color_count(&pixels, following, 0) > 0);
+        }
+        assert!(
+            shadow_color_count(&pixels, bounds[1], 0) > 0,
+            "second region {:?} has {} red and {} green shadow pixels",
+            bounds[1],
+            shadow_color_count(&pixels, bounds[1], 0),
+            shadow_color_count(&pixels, bounds[1], 1),
+        );
+        assert_eq!(shadow_color_count(&pixels, bounds[1], 1), 0);
+    }
+}
+
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn text_shadow_values_validate_lists_lengths_colors_and_css_wide_keywords() {

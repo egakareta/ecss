@@ -7,6 +7,7 @@ pub(super) enum LayoutInvalidation {
     Geometry,
     Interaction,
     PaintOrder,
+    ElementImage,
 }
 
 #[derive(Clone, Default)]
@@ -58,6 +59,7 @@ fn finish_pass(context: &Context) {
             LayoutInvalidation::Geometry => "CSS selector layout changed",
             LayoutInvalidation::Interaction => "CSS selector interaction state changed",
             LayoutInvalidation::PaintOrder => "CSS paint order changed",
+            LayoutInvalidation::ElementImage => "CSS element image changed",
         };
         context.request_discard(reason);
     }

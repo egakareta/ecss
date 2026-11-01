@@ -47,6 +47,20 @@ pub(super) fn pseudo_text_rects(
     pseudo: crate::css::PseudoElementKind,
     vertical: bool,
 ) -> Vec<Rect> {
+    pseudo_text_rects_in_ranges(
+        context,
+        &[ShapeRange { layer, start, end }],
+        pseudo,
+        vertical,
+    )
+}
+
+pub(super) fn pseudo_text_rects_in_ranges(
+    context: &Context,
+    ranges: &[ShapeRange],
+    pseudo: crate::css::PseudoElementKind,
+    vertical: bool,
+) -> Vec<Rect> {
     fn collect(shape: &egui::Shape, text: &mut Vec<(Arc<egui::Galley>, Pos2)>) {
         match shape {
             egui::Shape::Text(shape) if shape.angle == 0.0 => {
@@ -56,16 +70,25 @@ pub(super) fn pseudo_text_rects(
             _ => {}
         }
     }
-    let Some(text) = context.graphics(|layers| {
-        let list = layers.get(layer)?;
+    let text = context.graphics(|layers| {
         let mut text = Vec::new();
-        for entry in list.all_entries().skip(start.0).take(end.0 - start.0) {
-            collect(&entry.shape, &mut text);
+        for range in ranges {
+            let Some(list) = layers.get(range.layer) else {
+                continue;
+            };
+            for entry in list
+                .all_entries()
+                .skip(range.start.0)
+                .take(range.end.0.saturating_sub(range.start.0))
+            {
+                collect(&entry.shape, &mut text);
+            }
         }
-        Some(text)
-    }) else {
+        text
+    });
+    if text.is_empty() {
         return Vec::new();
-    };
+    }
     let lines = text
         .iter()
         .filter_map(|(galley, position)| {
@@ -78,11 +101,16 @@ pub(super) fn pseudo_text_rects(
                 .first()
                 .map(|glyph| position.y + row.pos.y + glyph.pos.y)
                 .unwrap_or(rect.bottom());
-            rect.is_positive()
-                .then_some((row, *position, rect, baseline))
+            rect.is_positive().then_some((
+                row,
+                *position,
+                rect,
+                baseline,
+                galley.rows.iter().skip(1).any(|row| !row.glyphs.is_empty()),
+            ))
         })
         .collect::<Vec<_>>();
-    let Some((first_row, position, first_rect, first_baseline)) = lines.first() else {
+    let Some((first_row, position, first_rect, first_baseline, _)) = lines.first() else {
         return Vec::new();
     };
     match pseudo {
@@ -93,10 +121,14 @@ pub(super) fn pseudo_text_rects(
                 *first_baseline
             };
             let mut rect = Rect::NOTHING;
-            for (_, _, line, baseline) in lines {
+            for (_, _, line, baseline, multiple_lines) in lines {
                 let coordinate = if vertical { line.left() } else { baseline };
-                if (coordinate - reference).abs() <= 1.0 {
-                    rect = rect.union(line);
+                if (coordinate - reference).abs() > 1.0 {
+                    break;
+                }
+                rect = rect.union(line);
+                if multiple_lines {
+                    break;
                 }
             }
             rect.is_positive().then_some(rect).into_iter().collect()
@@ -237,7 +269,7 @@ pub(super) fn pseudo_decoration_style(
     parent: &BoxStyle,
     units: Units,
     current: Color32,
-) -> Option<(BoxStyle, Color32, Color32)> {
+) -> Option<(BoxStyle, Color32, Color32, Option<ShadowInheritance>)> {
     let rules = matching_pseudo_rules(stylesheet, target, pseudo, state, units.viewport);
     if rules.is_empty() {
         return None;
@@ -256,13 +288,14 @@ pub(super) fn pseudo_decoration_style(
     style.custom_properties = custom_properties.clone();
     let mut fill = Color32::TRANSPARENT;
     let mut color = current;
-    let resolved = ordered
+    let resolved: Vec<_> = ordered
         .into_iter()
         .filter_map(|(state, source)| {
             crate::css::resolve_deferred(source, &style.custom_properties)
                 .map(|declaration| (state, declaration))
         })
         .collect();
+    let shadow_inheritance = text_shadow_inheritance(resolved.iter().map(|(_, value)| value));
     let (rules, all_keyword) = super::apply_all_rules(
         resolved,
         &parent.computed_declarations,
@@ -341,7 +374,78 @@ pub(super) fn pseudo_decoration_style(
         fill = style.current_color;
     }
     style.finish();
-    Some((style, fill, color))
+    Some((style, fill, color, shadow_inheritance))
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ShadowInheritance {
+    Inherit,
+    Specified,
+}
+
+pub(super) fn text_shadow_inheritance<'a>(
+    declarations: impl IntoIterator<Item = &'a Declaration>,
+) -> Option<ShadowInheritance> {
+    let mut inheritance = None;
+    for declaration in declarations {
+        match declaration {
+            Declaration::All(crate::css::AllKeyword::Initial) => {
+                inheritance = Some(ShadowInheritance::Specified);
+            }
+            Declaration::All(_) => inheritance = Some(ShadowInheritance::Inherit),
+            Declaration::Layout(value) if value.name == "text-shadow" => {
+                inheritance = Some(
+                    if ["inherit", "unset", "revert"]
+                        .iter()
+                        .any(|keyword| value.value.trim().eq_ignore_ascii_case(keyword))
+                    {
+                        ShadowInheritance::Inherit
+                    } else {
+                        ShadowInheritance::Specified
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    inheritance
+}
+
+pub(super) struct TextShadowReplacement {
+    pub(super) pseudo: crate::css::PseudoElementKind,
+    pub(super) shadows: Vec<crate::text_shadow::Shadow>,
+    pub(super) current_color: Color32,
+}
+
+pub(super) fn text_shadow_replacements(
+    stylesheet: &Stylesheet,
+    target: &crate::css::SelectorTarget,
+    state: u8,
+    parent: &BoxStyle,
+    units: Units,
+) -> Vec<TextShadowReplacement> {
+    [
+        crate::css::PseudoElementKind::FirstLine,
+        crate::css::PseudoElementKind::FirstLetter,
+    ]
+    .into_iter()
+    .filter_map(|pseudo| {
+        let (style, _, color, mode) = pseudo_decoration_style(
+            stylesheet,
+            target,
+            pseudo,
+            state,
+            parent,
+            units,
+            parent.current_color,
+        )?;
+        matches!(mode, Some(ShadowInheritance::Specified)).then_some(TextShadowReplacement {
+            pseudo,
+            shadows: style.text_shadows,
+            current_color: color,
+        })
+    })
+    .collect()
 }
 
 pub(super) fn pseudo_decoration_property_applies(

@@ -120,6 +120,13 @@ struct Node {
     paint: Option<PaintRecord>,
     color: Color32,
     text_decorations: Vec<crate::text_decoration::Decoration>,
+    text_shadow_specified: bool,
+    pseudo_text_shadows: Vec<TextShadowReplacement>,
+    shadow_owner: Option<usize>,
+    text_range: Option<TextPaintRange>,
+    shadow_pending: bool,
+    flow_text_pending: bool,
+    subtree_end: usize,
 }
 
 struct PaintRecord {
@@ -149,6 +156,20 @@ struct ShapeRange {
     end: egui::layers::ShapeIdx,
 }
 
+#[derive(Clone, Copy)]
+struct TextPaintRange {
+    all: ShapeRange,
+    first_line: ShapeRange,
+}
+
+struct PendingElementImage {
+    id: String,
+    node: usize,
+    range: ShapeRange,
+    bounds: Rect,
+    dependencies: HashSet<String>,
+}
+
 struct Frame {
     nodes: Vec<Node>,
     stack: Vec<usize>,
@@ -160,6 +181,8 @@ struct Frame {
     viewport: Rect,
     enabled: bool,
     math: Rc<crate::math::Arena>,
+    pending_element_images: Vec<PendingElementImage>,
+    pending_shadow_work: bool,
 }
 
 #[derive(Clone)]
@@ -704,6 +727,8 @@ pub(crate) fn show(
         let active = Active(
             Rc::new(RefCell::new(Frame {
                 nodes,
+                pending_element_images: Vec::new(),
+                pending_shadow_work: false,
                 stack,
                 cache,
                 layout_animation_active: false,
@@ -795,6 +820,13 @@ pub(crate) fn show(
         viewport: ui.ctx().viewport_rect().size(),
         pixels_per_point: ui.ctx().pixels_per_point(),
     };
+    let track_shadow_inheritance = stylesheet.rule_index.has_pseudo_text_shadows
+        || active
+            .0
+            .borrow()
+            .stack
+            .last()
+            .is_some_and(|parent| active.0.borrow().nodes[*parent].shadow_owner.is_some());
     let resolve_rules = |state: u8| {
         let rules: smallvec::SmallVec<[&crate::css::Rule; 8]> =
             applicable_rules(stylesheet, target, state, units.viewport).collect();
@@ -817,6 +849,11 @@ pub(crate) fn show(
             .filter(|(_, _, important)| *important)
             .map(|(_, declaration, _)| declaration.clone())
             .collect::<Vec<_>>();
+        let text_shadow_specified = track_shadow_inheritance
+            && matches!(
+                text_shadow_inheritance(resolved.iter().map(|(_, value, _)| value)),
+                Some(ShadowInheritance::Specified)
+            );
         let resolved = resolved
             .into_iter()
             .map(|(rule_state, declaration, _)| (rule_state, declaration))
@@ -831,10 +868,16 @@ pub(crate) fn show(
             resolved,
             all_keyword,
             important_declarations,
+            text_shadow_specified,
         )
     };
-    let (custom_properties, resolved_rules, all_keyword, important_declarations) =
-        resolve_rules(state);
+    let (
+        custom_properties,
+        resolved_rules,
+        all_keyword,
+        important_declarations,
+        text_shadow_specified,
+    ) = resolve_rules(state);
     style.custom_properties = custom_properties.clone();
     match all_keyword {
         Some(crate::css::AllKeyword::Inherit) => {
@@ -1132,6 +1175,13 @@ pub(crate) fn show(
         frame.layout_animation_active |= animation.layout_active;
     }
     let animated_declarations = animation.declarations;
+    let text_shadow_specified = if track_shadow_inheritance {
+        text_shadow_inheritance(&animated_declarations).map_or(text_shadow_specified, |value| {
+            matches!(value, ShadowInheritance::Specified)
+        })
+    } else {
+        false
+    };
     let mut background_urls = Vec::new();
     for declaration in resolved_rules
         .iter()
@@ -1294,12 +1344,26 @@ pub(crate) fn show(
     style.computed_declarations = std::sync::Arc::new(computed_declarations);
     crate::layout_style::resolve_flow(&mut style, &parent_style);
     style.finish();
+    let pseudo_text_shadows = if stylesheet.rule_index.has_pseudo_text_shadows {
+        text_shadow_replacements(
+            stylesheet,
+            target,
+            state,
+            &style,
+            Units {
+                font: style.format.em,
+                ..units
+            },
+        )
+    } else {
+        Vec::new()
+    };
     let style = Rc::new(style);
     let scroll = ui
         .ctx()
         .data(|d| d.get_temp::<Vec2>(id.with("scroll")))
         .unwrap_or_default();
-    let (index, geometry, absent) = {
+    let (index, geometry, absent, shadow_owner) = {
         let mut frame = active.0.borrow_mut();
         let index = frame.nodes.len();
         let parent = frame.stack.last().copied();
@@ -1355,6 +1419,10 @@ pub(crate) fn show(
         if let Some(parent) = parent {
             frame.nodes[parent].children.push(index);
         }
+        let shadow_owner = parent
+            .filter(|_| !text_shadow_specified)
+            .and_then(|parent| frame.nodes[parent].shadow_owner)
+            .or_else(|| (!pseudo_text_shadows.is_empty()).then_some(index));
         frame.nodes.push(Node {
             id,
             element_id: element_id.clone(),
@@ -1378,9 +1446,16 @@ pub(crate) fn show(
             paint: None,
             color: Color32::BLACK,
             text_decorations,
+            text_shadow_specified,
+            pseudo_text_shadows,
+            shadow_owner,
+            text_range: None,
+            shadow_pending: false,
+            flow_text_pending: false,
+            subtree_end: index + 1,
         });
         frame.stack.push(index);
-        (index, geometry, absent)
+        (index, geometry, absent, shadow_owner)
     };
     let scope = Scope {
         context: ui.ctx().clone(),
@@ -1559,7 +1634,7 @@ pub(crate) fn show(
                 style.format.flow_into_content,
             );
             if let Some(text) = &mut text
-                && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+                && let Some((pseudo_style, _, _, _)) = pseudo_decoration_style(
                     stylesheet,
                     target,
                     crate::css::PseudoElementKind::FirstLetter,
@@ -1607,7 +1682,7 @@ pub(crate) fn show(
         (!frame.nodes[index].children.is_empty()).then_some(frame.nodes[index].color)
     };
     if let Some(color) = descendant_text_color
-        && let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+        && let Some((pseudo_style, _, _, _)) = pseudo_decoration_style(
             stylesheet,
             target,
             crate::css::PseudoElementKind::FirstLetter,
@@ -1689,6 +1764,15 @@ pub(crate) fn show(
             )
         })
         .unwrap_or(measured);
+    let mut shadow_range = TextPaintRange {
+        all: ShapeRange { layer, start, end },
+        first_line: ShapeRange { layer, start, end },
+    };
+    let flow_text_pending = !style.layout.position.is_out_of_flow()
+        && !style.format.writing.vertical()
+        && active.0.borrow().nodes[index].text.is_some()
+        && (style.format.flow_into.is_some()
+            || parent_style.format.flow_into_content && parent_style.format.flow_into.is_some());
     if geometry.flow_region_content {
         ui.ctx().graphics_mut(|layers| {
             let list = layers.entry(layer);
@@ -1705,7 +1789,7 @@ pub(crate) fn show(
             .any(|fragment| fragment.range.is_some())
     {
         if let Some(text) = active.0.borrow().nodes[index].text.as_ref() {
-            replace_fragmented_text(FragmentedTextInput {
+            shadow_range = replace_fragmented_text(FragmentedTextInput {
                 context: ui.ctx(),
                 layer,
                 start,
@@ -1715,7 +1799,11 @@ pub(crate) fn show(
                 format: &style.format,
                 selection_visuals: content_ui.visuals(),
                 decorations: &active.0.borrow().nodes[index].text_decorations,
-                shadows: &style.text_shadows,
+                shadows: if shadow_owner.is_some() {
+                    &[]
+                } else {
+                    &style.text_shadows
+                },
                 current_color: style.current_color,
             });
         }
@@ -1729,12 +1817,29 @@ pub(crate) fn show(
         if text_vertical {
             rotate_text(ui.ctx(), layer, start, end, &geometry, &style.format);
         }
-        text::paint_text_shadows(
-            ui.ctx(),
-            &active.0.borrow(),
-            index,
-            ShapeRange { layer, start, end },
-        );
+        if !flow_text_pending && shadow_owner.is_none() {
+            text::paint_text_shadows(
+                ui.ctx(),
+                &active.0.borrow(),
+                index,
+                ShapeRange { layer, start, end },
+                &[],
+            );
+        }
+    }
+    if shadow_owner.is_some() || flow_text_pending || element_id.is_some() {
+        let mut frame = active.0.borrow_mut();
+        let subtree_end = frame.nodes.len();
+        let pending = (shadow_owner.is_some() || flow_text_pending)
+            && text::has_own_text(ui.ctx(), &frame, index, shadow_range.all);
+        frame.pending_shadow_work |= pending;
+        let node = &mut frame.nodes[index];
+        node.subtree_end = subtree_end;
+        if shadow_owner.is_some() || flow_text_pending {
+            node.text_range = Some(shadow_range);
+        }
+        node.shadow_pending = pending;
+        node.flow_text_pending = flow_text_pending;
     }
     if style.format.display == crate::formatting::DisplayKind::Cell
         && active.0.borrow().nodes[index].children.is_empty()
@@ -2379,7 +2484,7 @@ pub(crate) fn show(
                 crate::css::PseudoElementKind::FirstLine,
                 crate::css::PseudoElementKind::FirstLetter,
             ] {
-                let Some((pseudo_style, fill, color)) = pseudo_decoration_style(
+                let Some((pseudo_style, fill, color, _)) = pseudo_decoration_style(
                     stylesheet,
                     target,
                     pseudo,
@@ -2401,15 +2506,6 @@ pub(crate) fn show(
                 if text_rects.is_empty() {
                     continue;
                 }
-                shapes.extend(text::paint_pseudo_text_shadows(
-                    ui.ctx(),
-                    layer,
-                    start,
-                    end,
-                    &text_rects,
-                    &pseudo_style.text_shadows,
-                    color,
-                ));
                 for text_rect in text_rects {
                     shapes.extend(pseudo_decoration_shapes(PseudoDecorationInput {
                         context: ui.ctx(),
@@ -2469,28 +2565,69 @@ pub(crate) fn show(
         fragment_border_images,
         fragment_background_shapes: fragment_backgrounds,
     });
+    if shadow_owner == Some(index) {
+        text::paint_owned_text_shadows(ui.ctx(), &mut active.0.borrow_mut(), index);
+        finish_element_images(ui.ctx(), &mut active.0.borrow_mut());
+    }
     if first_element_occurrence && let Some(element_id) = element_id {
         if !element_source_is_eligible(&active.0.borrow(), index) {
-            remove_element_image(ui.ctx(), &element_id);
-        } else if let Some(image) = capture_element_image(
-            ui.ctx(),
-            layer,
-            background,
-            paint_end,
-            element_image_bounds(visual, &style),
-            element_descendant_dependencies(&active.0.borrow())
-                .remove(&element_id)
-                .unwrap_or_default(),
-        ) {
-            publish_element_image(ui.ctx(), element_id.clone(), image);
+            remove_element_image(ui.ctx(), &active.0.borrow(), &element_id);
         } else {
-            remove_element_image(ui.ctx(), &element_id);
+            let dependencies = element_descendant_dependencies(&active.0.borrow())
+                .remove(&element_id)
+                .unwrap_or_default();
+            capture_or_defer_element_image(
+                ui.ctx(),
+                &mut active.0.borrow_mut(),
+                PendingElementImage {
+                    id: element_id,
+                    node: index,
+                    range: ShapeRange {
+                        layer,
+                        start: background,
+                        end: paint_end,
+                    },
+                    bounds: element_image_bounds(visual, &style),
+                    dependencies,
+                },
+            );
         }
     }
     if root {
         if let Some(cache) = ui.ctx().data(|data| data.get_temp::<Cache>(id)) {
-            let frame = active.0.borrow();
-            paint_named_flow_texts(&frame, &cache, ui.ctx());
+            let ranges = paint_named_flow_texts(&active.0.borrow(), &cache, ui.ctx());
+            let mut frame = active.0.borrow_mut();
+            let mut owners = Vec::new();
+            for (node, range) in ranges {
+                frame.nodes[node].text_range = Some(range);
+                frame.nodes[node].shadow_pending = frame.nodes[node].shadow_owner.is_some();
+                frame.nodes[node].flow_text_pending = false;
+                if let Some(owner) = frame.nodes[node].shadow_owner
+                    && !owners.contains(&owner)
+                {
+                    owners.push(owner);
+                }
+            }
+            for node in 0..frame.nodes.len() {
+                if !frame.nodes[node].flow_text_pending {
+                    continue;
+                }
+                frame.nodes[node].flow_text_pending = false;
+                if let Some(owner) = frame.nodes[node].shadow_owner {
+                    if !owners.contains(&owner) {
+                        owners.push(owner);
+                    }
+                } else {
+                    if let Some(range) = frame.nodes[node].text_range {
+                        text::paint_text_shadows(ui.ctx(), &frame, node, range.all, &[]);
+                    }
+                    frame.nodes[node].shadow_pending = false;
+                }
+            }
+            for owner in owners {
+                text::paint_owned_text_shadows(ui.ctx(), &mut frame, owner);
+            }
+            finish_element_images(ui.ctx(), &mut frame);
         }
         let candidates = {
             let frame = active.0.borrow();

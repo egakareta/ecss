@@ -44,6 +44,14 @@ struct EvictedMask {
     bytes: usize,
 }
 
+#[derive(Clone, Copy)]
+struct GlyphFilter<'a> {
+    selection: Option<&'a [Rect]>,
+    excluded: &'a [Rect],
+    include_text: bool,
+    vertical: bool,
+}
+
 #[derive(Default)]
 struct Cache {
     masks: VecDeque<CachedMask>,
@@ -126,37 +134,110 @@ pub(crate) fn paint(
     shadows: &[Shadow],
     current_color: Color32,
 ) -> Shape {
-    paint_with_selection(context, text, clip, shadows, current_color, None, true)
-}
-
-pub(crate) fn paint_selected(
-    context: &Context,
-    text: &TextShape,
-    clip: Rect,
-    shadows: &[Shadow],
-    current_color: Color32,
-    selection: &[Rect],
-) -> Shape {
-    paint_with_selection(
+    paint_filtered(
         context,
         text,
         clip,
         shadows,
         current_color,
-        Some(selection),
-        false,
+        GlyphFilter {
+            selection: None,
+            excluded: &[],
+            include_text: true,
+            vertical: false,
+        },
     )
 }
 
-fn paint_with_selection(
+pub(crate) struct Override<'a> {
+    pub(crate) selection: &'a [Rect],
+    pub(crate) shadows: &'a [Shadow],
+    pub(crate) current_color: Color32,
+}
+
+pub(crate) fn paint_with_overrides(
     context: &Context,
     text: &TextShape,
     clip: Rect,
     shadows: &[Shadow],
     current_color: Color32,
-    selection: Option<&[Rect]>,
-    include_text: bool,
+    overrides: &[Override<'_>],
+    vertical: bool,
 ) -> Shape {
+    if overrides.is_empty() {
+        return paint(context, text, clip, shadows, current_color);
+    }
+    let mut shapes = Vec::with_capacity(overrides.len() + 2);
+    let selections = overrides
+        .iter()
+        .flat_map(|override_| override_.selection.iter().copied())
+        .collect::<Vec<_>>();
+    extend_shapes(
+        paint_filtered(
+            context,
+            text,
+            clip,
+            shadows,
+            current_color,
+            GlyphFilter {
+                selection: None,
+                excluded: &selections,
+                include_text: false,
+                vertical,
+            },
+        ),
+        &mut shapes,
+    );
+    let mut selection_end = 0;
+    for override_ in overrides {
+        selection_end += override_.selection.len();
+        extend_shapes(
+            paint_filtered(
+                context,
+                text,
+                clip,
+                override_.shadows,
+                override_.current_color,
+                GlyphFilter {
+                    selection: Some(override_.selection),
+                    excluded: &selections[selection_end..],
+                    include_text: false,
+                    vertical,
+                },
+            ),
+            &mut shapes,
+        );
+    }
+    shapes.push(Shape::Text(text.clone()));
+    Shape::Vec(shapes)
+}
+
+fn extend_shapes(shape: Shape, output: &mut Vec<Shape>) {
+    match shape {
+        Shape::Noop => {}
+        Shape::Vec(shapes) => {
+            for shape in shapes {
+                extend_shapes(shape, output);
+            }
+        }
+        shape => output.push(shape),
+    }
+}
+
+fn paint_filtered(
+    context: &Context,
+    text: &TextShape,
+    clip: Rect,
+    shadows: &[Shadow],
+    current_color: Color32,
+    filter: GlyphFilter<'_>,
+) -> Shape {
+    let GlyphFilter {
+        selection,
+        excluded,
+        include_text,
+        vertical,
+    } = filter;
     if shadows.is_empty() {
         return if include_text {
             Shape::Text(text.clone())
@@ -164,7 +245,7 @@ fn paint_with_selection(
             Shape::Noop
         };
     }
-    let mask_bounds = mask_bounds(text, selection);
+    let mask_bounds = mask_bounds(text, selection, excluded, vertical);
     if !mask_bounds.is_positive() {
         return if include_text {
             Shape::Text(text.clone())
@@ -172,10 +253,7 @@ fn paint_with_selection(
             Shape::Noop
         };
     }
-    if selection.is_some_and(<[Rect]>::is_empty) {
-        return Shape::Noop;
-    }
-    let glyphs = glyph_key(text, selection);
+    let glyphs = glyph_key(text, selection, excluded, vertical);
     let cache = cache(context);
     let mut source_meshes = None;
     let mut shapes = Vec::with_capacity(shadows.len() + 1);
@@ -207,7 +285,7 @@ fn paint_with_selection(
         };
         let mask = cached_mask(&cache, key).or_else(|| {
             if source_meshes.is_none() {
-                source_meshes = Some(glyph_meshes(context, text, selection));
+                source_meshes = Some(glyph_meshes(context, text, selection, excluded, vertical));
             }
             let meshes = source_meshes.as_ref()?;
             let (image, bounds) =
@@ -256,7 +334,13 @@ fn mask_shape(mask: CachedMask, position: Pos2, offset: Vec2, color: Color32) ->
     Shape::Mesh(mesh.into())
 }
 
-fn glyph_meshes(context: &Context, text: &TextShape, selection: Option<&[Rect]>) -> Vec<Mesh> {
+fn glyph_meshes(
+    context: &Context,
+    text: &TextShape,
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
+    vertical: bool,
+) -> Vec<Mesh> {
     let mut glyph_text = text.clone();
     glyph_text.pos = Pos2::ZERO;
     glyph_text.underline = Stroke::NONE;
@@ -270,15 +354,8 @@ fn glyph_meshes(context: &Context, text: &TextShape, selection: Option<&[Rect]>)
         let position = placed.pos;
         let row = Arc::make_mut(&mut placed.row);
         let original = &row.visuals.mesh;
-        let ranges = selection.map_or_else(
-            || {
-                vec![
-                    row.visuals.glyph_vertex_range.clone(),
-                    row.visuals.glyph_vertex_range.end..original.vertices.len(),
-                ]
-            },
-            |selection| selected_glyph_ranges(text, position, row, selection),
-        );
+        let ranges = filtered_glyph_ranges(text, position, row, selection, excluded);
+        let partition_decorations = selection.is_some() || !excluded.is_empty();
         let mut mesh = Mesh::with_texture(original.texture_id);
         let mut remap = vec![None; original.vertices.len()];
         for range in &ranges {
@@ -305,6 +382,14 @@ fn glyph_meshes(context: &Context, text: &TextShape, selection: Option<&[Rect]>)
             if included && let (Some(a), Some(b), Some(c)) = (remap[a], remap[b], remap[c]) {
                 mesh.indices.extend([a, b, c]);
             }
+        }
+        if partition_decorations {
+            let decorations =
+                filtered_decoration_mesh(text, position, row, selection, excluded, vertical);
+            let offset = mesh.vertices.len() as u32;
+            mesh.indices
+                .extend(decorations.indices.into_iter().map(|index| index + offset));
+            mesh.vertices.extend(decorations.vertices);
         }
         for glyph in &mut row.glyphs {
             glyph.first_vertex = remap
@@ -339,11 +424,218 @@ fn glyph_meshes(context: &Context, text: &TextShape, selection: Option<&[Rect]>)
         .collect()
 }
 
+fn filtered_decoration_mesh(
+    text: &TextShape,
+    position: Pos2,
+    row: &egui::epaint::text::Row,
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
+    vertical: bool,
+) -> Mesh {
+    let original = &row.visuals.mesh;
+    let start = row.visuals.glyph_vertex_range.end;
+    let mut mesh = Mesh::with_texture(original.texture_id);
+    if start >= original.vertices.len() {
+        return mesh;
+    }
+    mesh.vertices
+        .extend(original.vertices[start..].iter().map(|vertex| {
+            let mut vertex = *vertex;
+            vertex.color = Color32::from_white_alpha(vertex.color.a());
+            vertex
+        }));
+    mesh.indices.extend(
+        original
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|triangle| triangle.iter().all(|index| *index as usize >= start))
+            .flat_map(|triangle| triangle.map(|index| index - start as u32)),
+    );
+    let bounds = mesh.calc_bounds();
+    let glyph_bounds = original.vertices[row.visuals.glyph_vertex_range.clone()]
+        .iter()
+        .fold(Rect::NOTHING, |bounds, vertex| {
+            bounds.union(Rect::from_min_max(vertex.pos, vertex.pos))
+        });
+    let inverse = egui::emath::Rot2::from_angle(-text.angle);
+    let cells = decoration_cells(text, row, bounds, vertical);
+    let interval = |rect: &Rect| {
+        let local = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ]
+        .into_iter()
+        .map(|point| Pos2::ZERO + inverse * (point - text.pos) - position.to_vec2())
+        .fold(Rect::NOTHING, |bounds, point| {
+            bounds.union(Rect::from_min_max(point, point))
+        });
+        let span = if vertical {
+            (local.right().min(glyph_bounds.right()) > local.left().max(glyph_bounds.left()))
+                .then_some((local.top(), local.bottom()))
+        } else {
+            (local.bottom().min(glyph_bounds.bottom()) > local.top().max(glyph_bounds.top()))
+                .then_some((local.left(), local.right()))
+        }?;
+        cells
+            .iter()
+            .filter(|(center, _, _)| span.0 <= *center && *center <= span.1)
+            .map(|(_, start, end)| (*start, *end))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    };
+    let mut spans = selection.map_or_else(
+        || {
+            vec![if vertical {
+                (bounds.top(), bounds.bottom())
+            } else {
+                (bounds.left(), bounds.right())
+            }]
+        },
+        |rects| rects.iter().filter_map(interval).collect::<Vec<_>>(),
+    );
+    spans.retain(|(start, end)| start < end);
+    spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f32, f32)> = Vec::new();
+    for (start, end) in spans {
+        if let Some(previous) = merged.last_mut()
+            && start <= previous.1
+        {
+            previous.1 = previous.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    for (start, end) in excluded.iter().filter_map(interval) {
+        merged = merged
+            .into_iter()
+            .flat_map(|(left, right)| {
+                if end <= left || start >= right {
+                    vec![(left, right)]
+                } else {
+                    [(left, start.min(right)), (end.max(left), right)]
+                        .into_iter()
+                        .filter(|(left, right)| left < right)
+                        .collect()
+                }
+            })
+            .collect();
+    }
+    let paths = merged
+        .into_iter()
+        .map(|(start, end)| {
+            let rect = if vertical {
+                Rect::from_min_max(pos2(bounds.left(), start), pos2(bounds.right(), end))
+            } else {
+                Rect::from_min_max(pos2(start, bounds.top()), pos2(end, bounds.bottom()))
+            };
+            vec![
+                rect.left_top(),
+                rect.right_top(),
+                rect.right_bottom(),
+                rect.left_bottom(),
+            ]
+        })
+        .collect();
+    crate::box_decoration::clip_mesh_to_paths(
+        mesh,
+        &crate::box_decoration::path_clip(paths, crate::box_decoration::FillRule::Nonzero),
+    )
+}
+
+fn decoration_cells(
+    text: &TextShape,
+    row: &egui::epaint::text::Row,
+    bounds: Rect,
+    vertical: bool,
+) -> Vec<(f32, f32, f32)> {
+    let vertices = &row.visuals.mesh.vertices;
+    let mut origin = 0.0;
+    let mut direction = 1.0;
+    if vertical {
+        for glyph in &row.glyphs {
+            if glyph.uv_rect.is_nothing() {
+                continue;
+            }
+            let quad = &vertices[glyph.first_vertex as usize..glyph.first_vertex as usize + 4];
+            let bottom_left = quad.iter().find(|vertex| {
+                vertex.uv == pos2(glyph.uv_rect.min[0] as f32, glyph.uv_rect.max[1] as f32)
+            });
+            let bottom_right = quad.iter().find(|vertex| {
+                vertex.uv == pos2(glyph.uv_rect.max[0] as f32, glyph.uv_rect.max[1] as f32)
+            });
+            if let (Some(left), Some(right)) = (bottom_left, bottom_right) {
+                let edge = right.pos - left.pos;
+                let round = |value: f32| {
+                    (value * text.galley.pixels_per_point).round() / text.galley.pixels_per_point
+                };
+                // Vertical layout preserves logical glyph metrics but transforms their mesh quads.
+                // Recover the row's inline mapping from an unskewed bottom edge, including pixel snapping.
+                if edge.y.abs() > edge.x.abs() {
+                    direction = edge.y.signum();
+                    origin = left.pos.y - direction * round(glyph.pos.x + glyph.uv_rect.offset.x);
+                } else {
+                    let original_bottom =
+                        round(glyph.pos.y + glyph.uv_rect.offset.y) + glyph.uv_rect.size.y;
+                    origin =
+                        left.pos.y - (original_bottom - glyph.logical_rect().top()) - glyph.pos.x;
+                }
+                break;
+            }
+        }
+    }
+    let first = row
+        .glyphs
+        .iter()
+        .position(|glyph| !glyph.chr.is_whitespace());
+    let last = row
+        .glyphs
+        .iter()
+        .rposition(|glyph| !glyph.chr.is_whitespace());
+    row.glyphs
+        .iter()
+        .enumerate()
+        .map(|(index, glyph)| {
+            let start = origin + direction * glyph.pos.x;
+            let end = origin + direction * glyph.max_x();
+            let (mut start, mut end) = (start.min(end), start.max(end));
+            let center = if glyph.uv_rect.is_nothing() {
+                (start + end) * 0.5
+            } else {
+                let quad = &vertices[glyph.first_vertex as usize..glyph.first_vertex as usize + 4];
+                let glyph_bounds = quad.iter().fold(Rect::NOTHING, |bounds, vertex| {
+                    bounds.union(Rect::from_min_max(vertex.pos, vertex.pos))
+                });
+                if vertical {
+                    glyph_bounds.center().y
+                } else {
+                    glyph_bounds.center().x
+                }
+            };
+            let (low, high) = if vertical {
+                (bounds.top(), bounds.bottom())
+            } else {
+                (bounds.left(), bounds.right())
+            };
+            if Some(index) == if direction > 0.0 { first } else { last } {
+                start = start.min(low);
+            }
+            if Some(index) == if direction > 0.0 { last } else { first } {
+                end = end.max(high);
+            }
+            (center, start.max(low), end.min(high))
+        })
+        .collect()
+}
+
 fn selected_glyph_ranges(
     text: &TextShape,
     position: Pos2,
     row: &egui::epaint::text::Row,
-    selection: &[Rect],
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
 ) -> Vec<std::ops::Range<usize>> {
     let glyph_range = row.visuals.glyph_vertex_range.clone();
     let rotation = egui::emath::Rot2::from_angle(text.angle);
@@ -367,56 +659,88 @@ fn selected_glyph_ranges(
                 .fold(Rect::NOTHING, |bounds, point| {
                     bounds.union(Rect::from_min_max(point, point))
                 });
-            selection
-                .iter()
-                .any(|rect| rect.contains(bounds.center()))
-                .then_some(start..end)
+            let center = bounds.center();
+            (selection.is_none_or(|selection| selection.iter().any(|rect| rect.contains(center)))
+                && !excluded.iter().any(|rect| rect.contains(center)))
+            .then_some(start..end)
         })
         .collect()
 }
 
-fn mask_bounds(text: &TextShape, selection: Option<&[Rect]>) -> Rect {
-    let rotation = egui::emath::Rot2::from_angle(text.angle);
-    text.galley
-        .rows
-        .iter()
-        .flat_map(|placed| {
-            let row = &placed.row;
-            let ranges = selection.map_or_else(
-                || {
-                    vec![
-                        row.visuals.glyph_vertex_range.clone(),
-                        row.visuals.glyph_vertex_range.end..row.visuals.mesh.vertices.len(),
-                    ]
-                },
-                |selection| selected_glyph_ranges(text, placed.pos, row, selection),
-            );
-            let vertices = &row.visuals.mesh.vertices;
-            ranges.into_iter().flat_map(move |range| {
-                vertices[range]
-                    .iter()
-                    .map(move |vertex| rotation * (placed.pos.to_vec2() + vertex.pos.to_vec2()))
-            })
-        })
-        .fold(Rect::NOTHING, |bounds, point| {
-            let point = Pos2::ZERO + point;
-            bounds.union(Rect::from_min_max(point, point))
-        })
+fn filtered_glyph_ranges(
+    text: &TextShape,
+    position: Pos2,
+    row: &egui::epaint::text::Row,
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
+) -> Vec<std::ops::Range<usize>> {
+    if selection.is_none() && excluded.is_empty() {
+        return vec![
+            row.visuals.glyph_vertex_range.clone(),
+            row.visuals.glyph_vertex_range.end..row.visuals.mesh.vertices.len(),
+        ];
+    }
+    selected_glyph_ranges(text, position, row, selection, excluded)
 }
 
-fn glyph_key(text: &TextShape, selection: Option<&[Rect]>) -> u64 {
+fn mask_bounds(
+    text: &TextShape,
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
+    vertical: bool,
+) -> Rect {
+    let rotation = egui::emath::Rot2::from_angle(text.angle);
+    let mut bounds = Rect::NOTHING;
+    let mut include = |position: Pos2, vertex: &egui::epaint::Vertex| {
+        let point = Pos2::ZERO + rotation * (position.to_vec2() + vertex.pos.to_vec2());
+        bounds = bounds.union(Rect::from_min_max(point, point));
+    };
+    for placed in &text.galley.rows {
+        let row = &placed.row;
+        for range in filtered_glyph_ranges(text, placed.pos, row, selection, excluded) {
+            for vertex in &row.visuals.mesh.vertices[range] {
+                include(placed.pos, vertex);
+            }
+        }
+        if selection.is_some() || !excluded.is_empty() {
+            for vertex in
+                &filtered_decoration_mesh(text, placed.pos, row, selection, excluded, vertical)
+                    .vertices
+            {
+                include(placed.pos, vertex);
+            }
+        }
+    }
+    bounds
+}
+
+fn glyph_key(
+    text: &TextShape,
+    selection: Option<&[Rect]>,
+    excluded: &[Rect],
+    vertical: bool,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
+    vertical.hash(&mut hasher);
     text.angle.to_bits().hash(&mut hasher);
     text.opacity_factor.to_bits().hash(&mut hasher);
     text.galley.pixels_per_point.to_bits().hash(&mut hasher);
     text.galley.rows.len().hash(&mut hasher);
     if let Some(selection) = selection {
+        selection.len().hash(&mut hasher);
         for rect in selection {
             rect.min.x.to_bits().hash(&mut hasher);
             rect.min.y.to_bits().hash(&mut hasher);
             rect.max.x.to_bits().hash(&mut hasher);
             rect.max.y.to_bits().hash(&mut hasher);
         }
+    }
+    excluded.len().hash(&mut hasher);
+    for rect in excluded {
+        rect.min.x.to_bits().hash(&mut hasher);
+        rect.min.y.to_bits().hash(&mut hasher);
+        rect.max.x.to_bits().hash(&mut hasher);
+        rect.max.y.to_bits().hash(&mut hasher);
     }
     for placed in &text.galley.rows {
         placed.pos.x.to_bits().hash(&mut hasher);

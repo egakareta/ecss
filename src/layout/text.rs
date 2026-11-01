@@ -748,8 +748,13 @@ pub(super) struct FragmentedTextInput<'a> {
     pub(super) current_color: Color32,
 }
 
-pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Context) {
-    for node in &frame.nodes {
+pub(super) fn paint_named_flow_texts(
+    frame: &Frame,
+    cache: &Cache,
+    context: &Context,
+) -> Vec<(usize, TextPaintRange)> {
+    let mut ranges = Vec::new();
+    for (index, node) in frame.nodes.iter().enumerate() {
         let Some(geometry) = cache
             .boxes
             .get(&node.id)
@@ -763,7 +768,7 @@ pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Con
         let geometry =
             geometry.translated(frame.origin.to_vec2() - node.ancestor_scroll + node.sticky);
         let selection_visuals = paint.ui.visuals().clone();
-        replace_fragmented_text(FragmentedTextInput {
+        let range = replace_fragmented_text(FragmentedTextInput {
             context,
             layer: paint.ui.layer_id(),
             start: paint.start,
@@ -773,13 +778,19 @@ pub(super) fn paint_named_flow_texts(frame: &Frame, cache: &Cache, context: &Con
             format: &node.style.format,
             selection_visuals: &selection_visuals,
             decorations: &node.text_decorations,
-            shadows: &node.style.text_shadows,
+            shadows: if node.shadow_owner.is_some() {
+                &[]
+            } else {
+                &node.style.text_shadows
+            },
             current_color: node.style.current_color,
         });
+        ranges.push((index, range));
     }
+    ranges
 }
 
-pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
+pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) -> TextPaintRange {
     let FragmentedTextInput {
         context,
         layer,
@@ -793,6 +804,7 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
         shadows,
         current_color,
     } = input;
+    let output_start = shape_index(context, layer);
     let original = context.graphics(|layers| {
         layers
             .get(layer)?
@@ -808,7 +820,15 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
             })
     });
     let Some((template, clip)) = original else {
-        return;
+        let range = ShapeRange {
+            layer,
+            start: output_start,
+            end: output_start,
+        };
+        return TextPaintRange {
+            all: range,
+            first_line: range,
+        };
     };
     let selection_color = selection_visuals.selection.bg_fill;
     let selection_by_range = template.galley.job.text == job.text;
@@ -832,8 +852,28 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
     for rect in &selection_rects {
         painter.rect_filled(*rect, 0.0, selection_color);
     }
+    let first_fragment = geometry
+        .fragments
+        .iter()
+        .enumerate()
+        .find(|(_, fragment)| fragment.range.is_some());
+    let mut on_first_line = true;
+    let mut first_line_end = output_start;
     for (index, fragment) in geometry.fragments.iter().enumerate() {
         if let Some(range) = &fragment.range {
+            on_first_line &= first_fragment.is_some_and(|(first_index, first)| {
+                if geometry.flow_source {
+                    // Named-flow fragments are logical lines, even when regions share coordinates.
+                    index == first_index
+                } else {
+                    first.clip == fragment.clip
+                        && if format.writing.vertical() {
+                            (first.text_rect.left() - fragment.text_rect.left()).abs() < 0.05
+                        } else {
+                            (first.text_rect.top() - fragment.text_rect.top()).abs() < 0.05
+                        }
+                }
+            });
             let fragment_clip = fragment.clip.map_or(clip, |fragment_clip| {
                 clip.intersect(fragment_clip.translate(geometry.border.min.to_vec2()))
             });
@@ -931,7 +971,22 @@ pub(super) fn replace_fragmented_text(input: FragmentedTextInput<'_>) {
                 shadows,
                 current_color,
             ));
+            if on_first_line {
+                first_line_end = shape_index(context, layer);
+            }
         }
+    }
+    TextPaintRange {
+        all: ShapeRange {
+            layer,
+            start: output_start,
+            end: shape_index(context, layer),
+        },
+        first_line: ShapeRange {
+            layer,
+            start: output_start,
+            end: first_line_end,
+        },
     }
 }
 
@@ -975,9 +1030,10 @@ pub(super) fn paint_text_shadows(
     frame: &Frame,
     index: usize,
     range: ShapeRange,
+    overrides: &[&PseudoTextShadowOverride],
 ) {
     let node = &frame.nodes[index];
-    if node.style.text_shadows.is_empty() {
+    if node.style.text_shadows.is_empty() && overrides.is_empty() {
         return;
     }
     let mut shapes = context.graphics(|layers| {
@@ -1012,6 +1068,8 @@ pub(super) fn paint_text_shadows(
             *clip,
             &node.style.text_shadows,
             node.style.current_color,
+            overrides,
+            node.style.format.writing.vertical(),
         );
     }
     context.graphics_mut(|layers| {
@@ -1022,53 +1080,135 @@ pub(super) fn paint_text_shadows(
     });
 }
 
-pub(super) fn paint_pseudo_text_shadows(
+pub(super) fn has_own_text(
     context: &Context,
-    layer: egui::LayerId,
-    start: egui::layers::ShapeIdx,
-    end: egui::layers::ShapeIdx,
-    selection: &[Rect],
-    shadows: &[crate::text_shadow::Shadow],
-    current_color: Color32,
-) -> Vec<egui::Shape> {
-    if selection.is_empty() || shadows.is_empty() {
-        return Vec::new();
-    }
-    fn collect(shape: &egui::Shape, clip: Rect, output: &mut Vec<(egui::epaint::TextShape, Rect)>) {
+    frame: &Frame,
+    index: usize,
+    range: ShapeRange,
+) -> bool {
+    fn contains(shape: &egui::Shape) -> bool {
         match shape {
-            egui::Shape::Text(text) => output.push((text.clone(), clip)),
-            egui::Shape::Vec(shapes) => {
-                for shape in shapes {
-                    collect(shape, clip, output);
+            egui::Shape::Text(_) => true,
+            egui::Shape::Vec(shapes) => shapes.iter().any(contains),
+            _ => false,
+        }
+    }
+    context.graphics(|layers| {
+        layers.get(range.layer).is_some_and(|list| {
+            list.all_entries()
+                .enumerate()
+                .take(range.end.0)
+                .skip(range.start.0)
+                .any(|(shape, entry)| {
+                    contains(&entry.shape)
+                        && !frame.nodes[index].children.iter().any(|child| {
+                            frame.nodes[*child].paint.as_ref().is_some_and(|paint| {
+                                paint.ui.layer_id() == range.layer
+                                    && (paint.start.0..paint.end.0).contains(&shape)
+                            })
+                        })
+                })
+        })
+    })
+}
+
+pub(super) struct PseudoTextShadowOverride {
+    selection: Vec<Rect>,
+    shadows: Vec<crate::text_shadow::Shadow>,
+    current_color: Color32,
+}
+
+pub(super) fn paint_owned_text_shadows(context: &Context, frame: &mut Frame, owner: usize) {
+    struct Cascade {
+        parent: Option<Rc<Cascade>>,
+        overrides: Vec<PseudoTextShadowOverride>,
+    }
+    let end = frame.nodes[owner].subtree_end;
+    let mut cascades: Vec<Option<Rc<Cascade>>> = Vec::with_capacity(end - owner);
+    for index in owner..end {
+        let node = &frame.nodes[index];
+        let inherited = node
+            .parent
+            .filter(|parent| *parent >= owner && !node.text_shadow_specified)
+            .and_then(|parent| cascades[parent - owner].clone());
+        let mut selected = Vec::new();
+        for replacement in &node.pseudo_text_shadows {
+            let mut layer_ranges: HashMap<egui::LayerId, Vec<(usize, ShapeRange)>> = HashMap::new();
+            for (order, descendant) in frame.nodes[index..node.subtree_end].iter().enumerate() {
+                let Some(range) = descendant.text_range else {
+                    continue;
+                };
+                let range = if replacement.pseudo == crate::css::PseudoElementKind::FirstLine {
+                    range.first_line
+                } else {
+                    range.all
+                };
+                layer_ranges
+                    .entry(range.layer)
+                    .or_default()
+                    .push((order, range));
+            }
+            let mut ranges = Vec::new();
+            for layer in layer_ranges.values_mut() {
+                layer.sort_unstable_by_key(|(_, range)| {
+                    (range.start.0, std::cmp::Reverse(range.end.0))
+                });
+                let mut covered_end = None;
+                for &(order, range) in layer.iter() {
+                    if covered_end.is_none_or(|end| range.end.0 > end) {
+                        covered_end = Some(range.end.0);
+                        ranges.push((order, range));
+                    }
                 }
             }
-            _ => {}
-        }
-    }
-    let text_shapes = context.graphics(|layers| {
-        let Some(list) = layers.get(layer) else {
-            return Vec::new();
-        };
-        let mut text_shapes = Vec::new();
-        for entry in list.all_entries().skip(start.0).take(end.0 - start.0) {
-            collect(&entry.shape, entry.clip_rect, &mut text_shapes);
-        }
-        text_shapes
-    });
-    text_shapes
-        .into_iter()
-        .map(|(text, clip)| {
-            crate::text_shadow::paint_selected(
+            ranges.sort_unstable_by_key(|(order, _)| *order);
+            let ranges = ranges
+                .into_iter()
+                .map(|(_, range)| range)
+                .collect::<Vec<_>>();
+            let selection = super::pseudo::pseudo_text_rects_in_ranges(
                 context,
-                &text,
-                clip,
-                shadows,
-                current_color,
-                selection,
-            )
-        })
-        .filter(|shape| !matches!(shape, egui::Shape::Noop))
-        .collect()
+                &ranges,
+                replacement.pseudo,
+                node.style.format.writing.vertical(),
+            );
+            if !selection.is_empty() {
+                selected.push(PseudoTextShadowOverride {
+                    selection,
+                    shadows: replacement.shadows.clone(),
+                    current_color: replacement.current_color,
+                });
+            }
+        }
+        let cascade = if selected.is_empty() {
+            inherited
+        } else {
+            Some(Rc::new(Cascade {
+                parent: inherited,
+                overrides: selected,
+            }))
+        };
+        if node.shadow_owner == Some(owner)
+            && node.shadow_pending
+            && !node.flow_text_pending
+            && let Some(range) = node.text_range
+        {
+            let mut chain = Vec::new();
+            let mut current = cascade.as_deref();
+            while let Some(value) = current {
+                chain.push(value);
+                current = value.parent.as_deref();
+            }
+            let overrides = chain
+                .iter()
+                .rev()
+                .flat_map(|value| value.overrides.iter())
+                .collect::<Vec<_>>();
+            paint_text_shadows(context, frame, index, range.all, &overrides);
+            frame.nodes[index].shadow_pending = false;
+        }
+        cascades.push(cascade);
+    }
 }
 
 fn paint_text_shadow_shape(
@@ -1077,14 +1217,40 @@ fn paint_text_shadow_shape(
     clip: Rect,
     shadows: &[crate::text_shadow::Shadow],
     current_color: Color32,
+    overrides: &[&PseudoTextShadowOverride],
+    vertical: bool,
 ) {
     match shape {
         egui::Shape::Text(text) => {
-            *shape = crate::text_shadow::paint(context, text, clip, shadows, current_color);
+            let overrides = overrides
+                .iter()
+                .map(|value| crate::text_shadow::Override {
+                    selection: &value.selection,
+                    shadows: &value.shadows,
+                    current_color: value.current_color,
+                })
+                .collect::<Vec<_>>();
+            *shape = crate::text_shadow::paint_with_overrides(
+                context,
+                text,
+                clip,
+                shadows,
+                current_color,
+                &overrides,
+                vertical,
+            );
         }
         egui::Shape::Vec(shapes) => {
             for shape in shapes {
-                paint_text_shadow_shape(context, shape, clip, shadows, current_color);
+                paint_text_shadow_shape(
+                    context,
+                    shape,
+                    clip,
+                    shadows,
+                    current_color,
+                    overrides,
+                    vertical,
+                );
             }
         }
         _ => {}

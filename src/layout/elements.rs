@@ -127,7 +127,7 @@ pub(super) fn element_image_fingerprint(
     hasher.finish()
 }
 
-pub(super) fn publish_element_image(context: &Context, id: String, image: ElementImage) {
+pub(super) fn publish_element_image(context: &Context, id: String, image: ElementImage) -> bool {
     let changed = context.data_mut(|data| {
         let key = Id::unique(ELEMENT_IMAGES);
         let mut images = data
@@ -143,9 +143,61 @@ pub(super) fn publish_element_image(context: &Context, id: String, image: Elemen
     if changed {
         context.request_repaint();
     }
+    changed
 }
 
-pub(super) fn remove_element_image(context: &Context, id: &str) {
+pub(super) fn capture_or_defer_element_image(
+    context: &Context,
+    frame: &mut Frame,
+    capture: PendingElementImage,
+) {
+    if frame.pending_shadow_work
+        && frame.nodes[capture.node..frame.nodes[capture.node].subtree_end]
+            .iter()
+            .any(|node| node.shadow_pending)
+    {
+        frame.pending_element_images.push(capture);
+    } else {
+        publish_capture(context, frame, capture);
+    }
+}
+
+pub(super) fn finish_element_images(context: &Context, frame: &mut Frame) {
+    let captures = std::mem::take(&mut frame.pending_element_images);
+    for capture in captures {
+        if frame.nodes[capture.node..frame.nodes[capture.node].subtree_end]
+            .iter()
+            .any(|node| node.shadow_pending)
+        {
+            frame.pending_element_images.push(capture);
+            continue;
+        }
+        publish_capture(context, frame, capture);
+    }
+}
+
+fn publish_capture(context: &Context, frame: &Frame, capture: PendingElementImage) {
+    if let Some(image) = capture_element_image(
+        context,
+        capture.range.layer,
+        capture.range.start,
+        capture.range.end,
+        capture.bounds,
+        capture.dependencies,
+    ) {
+        let referenced = frame
+            .nodes
+            .iter()
+            .any(|node| node.element_references.contains(&capture.id));
+        if publish_element_image(context, capture.id, image) && referenced {
+            request_relayout(context, LayoutInvalidation::ElementImage);
+        }
+    } else {
+        remove_element_image(context, frame, &capture.id);
+    }
+}
+
+pub(super) fn remove_element_image(context: &Context, frame: &Frame, id: &str) {
     let removed = context.data_mut(|data| {
         let key = Id::unique(ELEMENT_IMAGES);
         let Some(mut images) = data.get_temp::<HashMap<String, Arc<ElementImage>>>(key) else {
@@ -157,6 +209,13 @@ pub(super) fn remove_element_image(context: &Context, id: &str) {
     });
     if removed {
         context.request_repaint();
+        if frame
+            .nodes
+            .iter()
+            .any(|node| node.element_references.contains(id))
+        {
+            request_relayout(context, LayoutInvalidation::ElementImage);
+        }
     }
 }
 

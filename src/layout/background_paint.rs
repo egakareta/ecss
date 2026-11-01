@@ -1177,7 +1177,7 @@ pub(super) fn resolved_element_references_from_rules(
         crate::css::PseudoElementKind::FirstLetter,
         crate::css::PseudoElementKind::FirstLine,
     ] {
-        if let Some((pseudo_style, _, _)) = pseudo_decoration_style(
+        if let Some((pseudo_style, _, _, _)) = pseudo_decoration_style(
             stylesheet,
             selector,
             pseudo,
